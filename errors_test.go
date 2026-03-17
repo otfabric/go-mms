@@ -2,6 +2,7 @@ package mms
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -23,11 +24,53 @@ func TestDecodeErrorUnwraps(t *testing.T) {
 	}
 }
 
-func TestProtocolErrorMessage(t *testing.T) {
+func TestProtocolErrorUnwraps(t *testing.T) {
 	err := &ProtocolError{Phase: "session", Message: "unexpected SPDU"}
+	if !errors.Is(err, ErrProtocol) {
+		t.Error("ProtocolError should unwrap to ErrProtocol")
+	}
 	msg := err.Error()
 	if msg == "" {
 		t.Error("ProtocolError.Error() should not be empty")
+	}
+}
+
+func TestDecodeErrorError(t *testing.T) {
+	e := &DecodeError{Offset: 10, Tag: 0x42, Message: "bad tag"}
+	s := e.Error()
+	if s == "" {
+		t.Fatal("empty error string")
+	}
+	if !strings.Contains(s, "offset 10") {
+		t.Fatal("missing offset")
+	}
+	if !strings.Contains(s, "0x42") {
+		t.Fatal("missing tag")
+	}
+	if !strings.Contains(s, "bad tag") {
+		t.Fatal("missing message")
+	}
+}
+
+func TestDataAccessErrorError(t *testing.T) {
+	e := &DataAccessError{Code: DataAccessErrorObjectUndefined}
+	s := e.Error()
+	if s == "" {
+		t.Fatal("empty error string")
+	}
+	if !errors.Is(e, ErrDataAccess) {
+		t.Fatal("should unwrap to ErrDataAccess")
+	}
+}
+
+func TestAuthenticationErrorError(t *testing.T) {
+	e := &AuthenticationError{Reason: "bad password"}
+	s := e.Error()
+	if !strings.Contains(s, "bad password") {
+		t.Fatal("missing reason")
+	}
+	if !errors.Is(e, ErrAuthenticationFailed) {
+		t.Fatal("should unwrap to ErrAuthenticationFailed")
 	}
 }
 
@@ -42,6 +85,7 @@ func TestSentinelErrors(t *testing.T) {
 		ErrDecodeFailed,
 		ErrUnsupported,
 		ErrServiceRejected,
+		ErrProtocol,
 	}
 	for _, s := range sentinels {
 		if s == nil {
