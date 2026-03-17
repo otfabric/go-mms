@@ -1,27 +1,49 @@
 package mms
 
-import "time"
+import (
+	"bytes"
+	"fmt"
+	"strings"
+	"time"
+)
 
 // Value represents an MMS typed data value.
 //
-// Use the Type method to determine the kind of value, then call the
-// corresponding accessor. Accessors return (T, bool) where the bool
-// is false if the value's type does not match the accessor — this
-// avoids panics for ordinary API misuse.
+// Create values with the typed constructors:
+//
+//	v := mms.NewInteger(42)
+//	v := mms.NewOctetString([]byte{0x01, 0x02})
+//	v := mms.NewArray([]*mms.Value{elem1, elem2})
+//
+// Use [Value.Type] to determine the kind, then call the corresponding
+// accessor. Accessors return (T, bool) where the bool is false if the
+// value's type does not match — this avoids panics for ordinary API
+// misuse:
+//
+//	i, ok := v.Int64()
+//	b, ok := v.OctetString()
+//	elems, ok := v.ArrayElements()
+//
+// Byte slices and element slices are defensively copied by both
+// constructors and accessors. Child [*Value] pointers within composite
+// values (arrays, structures) are shared; use [Value.Clone] for a full
+// deep copy. Use [Value.Get] with selectors for nested access.
 type Value struct {
 	typ ValueType
 
 	// Exactly one of these is populated based on typ.
-	boolVal      bool
-	intVal       int64
-	uintVal      uint64
-	floatVal     float64
-	bytesVal     []byte   // OctetString, BitString
-	stringVal    string   // VisibleString, MmsString
-	timeVal      time.Time
-	binaryTime   int64
-	structureVal []*Value // Structure, Array
-	accessErr    DataAccessErrorCode
+	boolVal     bool
+	intVal      int64
+	uintVal     uint64
+	floatVal    float64
+	bytesVal    []byte // OctetString, BitString
+	bitLen      int    // BitString: number of valid bits
+	stringVal   string // VisibleString, MmsString
+	timeVal     time.Time
+	binaryTime  int64
+	elementsVal []*Value // Structure, Array
+	accessErr   DataAccessErrorCode
+	oidVal      []int // ObjectIdentifier arcs
 }
 
 // Type returns the [ValueType] of this value.
@@ -98,22 +120,31 @@ func (v *Value) Float64() (val float64, ok bool) {
 	return v.floatVal, true
 }
 
-// BitString returns the bit string as a byte slice. ok is false if
-// the value is not [ValueTypeBitString].
+// BitString returns a copy of the bit string as a byte slice. ok is
+// false if the value is not [ValueTypeBitString].
 func (v *Value) BitString() (val []byte, ok bool) {
 	if v.typ != ValueTypeBitString {
 		return nil, false
 	}
-	return v.bytesVal, true
+	return copyBytes(v.bytesVal), true
 }
 
-// OctetString returns the octet string. ok is false if the value is
-// not [ValueTypeOctetString].
+// BitStringLength returns the number of valid bits in the bit string.
+// ok is false if the value is not [ValueTypeBitString].
+func (v *Value) BitStringLength() (val int, ok bool) {
+	if v.typ != ValueTypeBitString {
+		return 0, false
+	}
+	return v.bitLen, true
+}
+
+// OctetString returns a copy of the octet string. ok is false if the
+// value is not [ValueTypeOctetString].
 func (v *Value) OctetString() (val []byte, ok bool) {
 	if v.typ != ValueTypeOctetString {
 		return nil, false
 	}
-	return v.bytesVal, true
+	return copyBytes(v.bytesVal), true
 }
 
 // VisibleString returns the visible string. ok is false if the value
@@ -152,22 +183,55 @@ func (v *Value) BinaryTime() (val int64, ok bool) {
 	return v.binaryTime, true
 }
 
-// Structure returns the elements of a structure value. ok is false if
-// the value is not [ValueTypeStructure].
+// GeneralizedTime returns the generalized timestamp. ok is false if
+// the value is not [ValueTypeGeneralizedTime].
+func (v *Value) GeneralizedTime() (val time.Time, ok bool) {
+	if v.typ != ValueTypeGeneralizedTime {
+		return time.Time{}, false
+	}
+	return v.timeVal, true
+}
+
+// BCD returns the BCD-encoded integer value. ok is false if the value
+// is not [ValueTypeBCD].
+func (v *Value) BCD() (val int64, ok bool) {
+	if v.typ != ValueTypeBCD {
+		return 0, false
+	}
+	return v.intVal, true
+}
+
+// ObjectIdentifier returns a copy of the OID arcs. ok is false if the
+// value is not [ValueTypeObjectIdentifier].
+func (v *Value) ObjectIdentifier() (val []int, ok bool) {
+	if v.typ != ValueTypeObjectIdentifier {
+		return nil, false
+	}
+	c := make([]int, len(v.oidVal))
+	copy(c, v.oidVal)
+	return c, true
+}
+
+// Structure returns a shallow copy of the element slice of a structure
+// value. The returned slice is independent but the child [*Value]
+// pointers are shared; mutating a child affects the original Value.
+// ok is false if the value is not [ValueTypeStructure].
 func (v *Value) Structure() (val []*Value, ok bool) {
 	if v.typ != ValueTypeStructure {
 		return nil, false
 	}
-	return v.structureVal, true
+	return copyValues(v.elementsVal), true
 }
 
-// ArrayElements returns the elements of an array value. ok is false
-// if the value is not [ValueTypeArray].
+// ArrayElements returns a shallow copy of the element slice of an array
+// value. The returned slice is independent but the child [*Value]
+// pointers are shared; mutating a child affects the original Value.
+// ok is false if the value is not [ValueTypeArray].
 func (v *Value) ArrayElements() (val []*Value, ok bool) {
 	if v.typ != ValueTypeArray {
 		return nil, false
 	}
-	return v.structureVal, true
+	return copyValues(v.elementsVal), true
 }
 
 // DataAccessErr returns the data access error code. ok is false if
@@ -202,13 +266,21 @@ func NewFloat(f float64) *Value {
 }
 
 // NewBitString creates a [Value] of type [ValueTypeBitString].
+// All bits in the byte slice are considered valid (bitLen = len*8).
 func NewBitString(bits []byte) *Value {
-	return &Value{typ: ValueTypeBitString, bytesVal: bits}
+	return &Value{typ: ValueTypeBitString, bytesVal: copyBytes(bits), bitLen: len(bits) * 8}
+}
+
+// NewBitStringWithLength creates a [Value] of type [ValueTypeBitString]
+// with an explicit bit length. Use this when the number of valid bits
+// is not a multiple of 8.
+func NewBitStringWithLength(bits []byte, bitLen int) *Value {
+	return &Value{typ: ValueTypeBitString, bytesVal: copyBytes(bits), bitLen: bitLen}
 }
 
 // NewOctetString creates a [Value] of type [ValueTypeOctetString].
 func NewOctetString(data []byte) *Value {
-	return &Value{typ: ValueTypeOctetString, bytesVal: data}
+	return &Value{typ: ValueTypeOctetString, bytesVal: copyBytes(data)}
 }
 
 // NewVisibleString creates a [Value] of type [ValueTypeVisibleString].
@@ -232,17 +304,269 @@ func NewBinaryTime(ms int64) *Value {
 	return &Value{typ: ValueTypeBinaryTime, binaryTime: ms}
 }
 
+// NewGeneralizedTime creates a [Value] of type [ValueTypeGeneralizedTime].
+func NewGeneralizedTime(t time.Time) *Value {
+	return &Value{typ: ValueTypeGeneralizedTime, timeVal: t}
+}
+
+// NewBCD creates a [Value] of type [ValueTypeBCD].
+func NewBCD(v int64) *Value {
+	return &Value{typ: ValueTypeBCD, intVal: v}
+}
+
+// NewObjectIdentifier creates a [Value] of type [ValueTypeObjectIdentifier].
+// The OID slice is defensively copied.
+func NewObjectIdentifier(oid []int) *Value {
+	var c []int
+	if oid != nil {
+		c = make([]int, len(oid))
+		copy(c, oid)
+	}
+	return &Value{typ: ValueTypeObjectIdentifier, oidVal: c}
+}
+
 // NewArray creates a [Value] of type [ValueTypeArray].
+// The element slice is shallow-copied: the slice header is independent
+// but the child [*Value] pointers are shared with the caller. Mutating
+// a child value after construction is visible through both the original
+// slice and this Value. Use [Value.Clone] if full ownership is needed.
 func NewArray(elements []*Value) *Value {
-	return &Value{typ: ValueTypeArray, structureVal: elements}
+	return &Value{typ: ValueTypeArray, elementsVal: copyValues(elements)}
 }
 
 // NewStructure creates a [Value] of type [ValueTypeStructure].
+// The element slice is shallow-copied: the slice header is independent
+// but the child [*Value] pointers are shared with the caller. Mutating
+// a child value after construction is visible through both the original
+// slice and this Value. Use [Value.Clone] if full ownership is needed.
 func NewStructure(elements []*Value) *Value {
-	return &Value{typ: ValueTypeStructure, structureVal: elements}
+	return &Value{typ: ValueTypeStructure, elementsVal: copyValues(elements)}
 }
 
 // NewDataAccessError creates a [Value] of type [ValueTypeDataAccessError].
 func NewDataAccessError(code DataAccessErrorCode) *Value {
 	return &Value{typ: ValueTypeDataAccessError, accessErr: code}
+}
+
+// Clone returns a deep copy of the value, including all nested
+// structure and array elements.
+func (v *Value) Clone() *Value {
+	if v == nil {
+		return nil
+	}
+	c := &Value{
+		typ:        v.typ,
+		boolVal:    v.boolVal,
+		intVal:     v.intVal,
+		uintVal:    v.uintVal,
+		floatVal:   v.floatVal,
+		bitLen:     v.bitLen,
+		stringVal:  v.stringVal,
+		timeVal:    v.timeVal,
+		binaryTime: v.binaryTime,
+		accessErr:  v.accessErr,
+		bytesVal:   copyBytes(v.bytesVal),
+	}
+	if v.oidVal != nil {
+		c.oidVal = make([]int, len(v.oidVal))
+		copy(c.oidVal, v.oidVal)
+	}
+	if v.elementsVal != nil {
+		c.elementsVal = make([]*Value, len(v.elementsVal))
+		for i, e := range v.elementsVal {
+			c.elementsVal[i] = e.Clone()
+		}
+	}
+	return c
+}
+
+// Equal returns true if v and other have the same type and value,
+// including deep comparison of structures and arrays. Float values
+// are compared with exact bitwise equality (==), not approximate
+// comparison. If epsilon-based float equality is needed, callers
+// should implement that separately.
+func (v *Value) Equal(other *Value) bool {
+	if v == nil || other == nil {
+		return v == other
+	}
+	if v.typ != other.typ {
+		return false
+	}
+	switch v.typ {
+	case ValueTypeBoolean:
+		return v.boolVal == other.boolVal
+	case ValueTypeInteger:
+		return v.intVal == other.intVal
+	case ValueTypeUnsigned:
+		return v.uintVal == other.uintVal
+	case ValueTypeFloat:
+		return v.floatVal == other.floatVal
+	case ValueTypeBitString:
+		return v.bitLen == other.bitLen && bytes.Equal(v.bytesVal, other.bytesVal)
+	case ValueTypeOctetString:
+		return bytes.Equal(v.bytesVal, other.bytesVal)
+	case ValueTypeVisibleString, ValueTypeMmsString:
+		return v.stringVal == other.stringVal
+	case ValueTypeUTCTime:
+		return v.timeVal.Equal(other.timeVal)
+	case ValueTypeBinaryTime:
+		return v.binaryTime == other.binaryTime
+	case ValueTypeGeneralizedTime:
+		return v.timeVal.Equal(other.timeVal)
+	case ValueTypeBCD:
+		return v.intVal == other.intVal
+	case ValueTypeObjectIdentifier:
+		if len(v.oidVal) != len(other.oidVal) {
+			return false
+		}
+		for i := range v.oidVal {
+			if v.oidVal[i] != other.oidVal[i] {
+				return false
+			}
+		}
+		return true
+	case ValueTypeStructure, ValueTypeArray:
+		if len(v.elementsVal) != len(other.elementsVal) {
+			return false
+		}
+		for i := range v.elementsVal {
+			if !v.elementsVal[i].Equal(other.elementsVal[i]) {
+				return false
+			}
+		}
+		return true
+	case ValueTypeDataAccessError:
+		return v.accessErr == other.accessErr
+	default:
+		return false
+	}
+}
+
+// String returns a human-readable representation of the value for
+// debugging and logging.
+func (v *Value) String() string {
+	if v == nil {
+		return "<nil>"
+	}
+	switch v.typ {
+	case ValueTypeBoolean:
+		return fmt.Sprintf("%v", v.boolVal)
+	case ValueTypeInteger:
+		return fmt.Sprintf("%d", v.intVal)
+	case ValueTypeUnsigned:
+		return fmt.Sprintf("%d", v.uintVal)
+	case ValueTypeFloat:
+		return fmt.Sprintf("%g", v.floatVal)
+	case ValueTypeBitString:
+		return fmt.Sprintf("BitString(%d bits)", v.bitLen)
+	case ValueTypeOctetString:
+		return fmt.Sprintf("OctetString(%d bytes)", len(v.bytesVal))
+	case ValueTypeVisibleString:
+		return fmt.Sprintf("%q", v.stringVal)
+	case ValueTypeMmsString:
+		return fmt.Sprintf("MmsString(%q)", v.stringVal)
+	case ValueTypeUTCTime:
+		return v.timeVal.Format(time.RFC3339)
+	case ValueTypeBinaryTime:
+		return fmt.Sprintf("BinaryTime(%d ms)", v.binaryTime)
+	case ValueTypeStructure:
+		var parts []string
+		for _, e := range v.elementsVal {
+			parts = append(parts, e.String())
+		}
+		return "{" + strings.Join(parts, ", ") + "}"
+	case ValueTypeArray:
+		var parts []string
+		for _, e := range v.elementsVal {
+			parts = append(parts, e.String())
+		}
+		return "[" + strings.Join(parts, ", ") + "]"
+	case ValueTypeGeneralizedTime:
+		return v.timeVal.Format("2006-01-02T15:04:05Z")
+	case ValueTypeBCD:
+		return fmt.Sprintf("BCD(%d)", v.intVal)
+	case ValueTypeObjectIdentifier:
+		return fmt.Sprintf("OID(%v)", v.oidVal)
+	case ValueTypeDataAccessError:
+		return fmt.Sprintf("DataAccessError(%s)", v.accessErr)
+	default:
+		return fmt.Sprintf("Value(type=%d)", int(v.typ))
+	}
+}
+
+// Get traverses nested structure/array values using a chain of access
+// selectors. Returns the selected sub-value or an error if the path
+// is invalid.
+//
+// Note: Component selectors that use string names require the [TypeSpec]
+// to resolve component positions. Without a TypeSpec, use integer index
+// selectors instead (see [SelectIndex]).
+func (v *Value) Get(selectors ...AccessSelector) (*Value, error) {
+	cur := v
+	for i, sel := range selectors {
+		if cur == nil {
+			return nil, fmt.Errorf("nil value at selector [%d]", i)
+		}
+		switch {
+		case sel.Component != "":
+			elems, ok := cur.Structure()
+			if !ok {
+				return nil, fmt.Errorf("selector [%d]: component %q on non-structure type %s", i, sel.Component, cur.typ)
+			}
+			_ = elems
+			return nil, fmt.Errorf("selector [%d]: component access requires TypeSpec context; use TypeSpec.Resolve instead", i)
+		case sel.Index != nil:
+			idx := *sel.Index
+			switch cur.typ {
+			case ValueTypeStructure:
+				elems, _ := cur.Structure()
+				if idx < 0 || idx >= len(elems) {
+					return nil, fmt.Errorf("selector [%d]: index %d out of range (structure has %d elements)", i, idx, len(elems))
+				}
+				cur = elems[idx]
+			case ValueTypeArray:
+				elems, _ := cur.ArrayElements()
+				if idx < 0 || idx >= len(elems) {
+					return nil, fmt.Errorf("selector [%d]: index %d out of range (array has %d elements)", i, idx, len(elems))
+				}
+				cur = elems[idx]
+			default:
+				return nil, fmt.Errorf("selector [%d]: index on non-composite type %s", i, cur.typ)
+			}
+		case sel.IndexRange != nil:
+			elems, ok := cur.ArrayElements()
+			if !ok {
+				return nil, fmt.Errorf("selector [%d]: index range on non-array type %s", i, cur.typ)
+			}
+			start := sel.IndexRange.Start
+			count := sel.IndexRange.Count
+			if start < 0 || start+count > len(elems) {
+				return nil, fmt.Errorf("selector [%d]: range [%d..%d) out of bounds (array has %d elements)", i, start, start+count, len(elems))
+			}
+			sub := make([]*Value, count)
+			copy(sub, elems[start:start+count])
+			cur = NewArray(sub)
+		default:
+			return nil, fmt.Errorf("selector [%d]: no field set", i)
+		}
+	}
+	return cur, nil
+}
+
+func copyBytes(b []byte) []byte {
+	if b == nil {
+		return nil
+	}
+	c := make([]byte, len(b))
+	copy(c, b)
+	return c
+}
+
+func copyValues(v []*Value) []*Value {
+	if v == nil {
+		return nil
+	}
+	c := make([]*Value, len(v))
+	copy(c, v)
+	return c
 }

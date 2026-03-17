@@ -151,3 +151,47 @@ func TestValueDataAccessError(t *testing.T) {
 		t.Errorf("DataAccessErr() = (%v, %v), want (ObjectUndefined, true)", got, ok)
 	}
 }
+
+func TestValueByteSliceCopyIsolation(t *testing.T) {
+	orig := []byte{0x01, 0x02, 0x03}
+	v := NewOctetString(orig)
+
+	// Mutating the original should not affect the stored value.
+	orig[0] = 0xff
+	got, ok := v.OctetString()
+	if !ok {
+		t.Fatal("OctetString() ok=false")
+	}
+	if got[0] != 0x01 {
+		t.Error("constructor should copy input: mutation of original affected stored value")
+	}
+
+	// Mutating the returned slice should not affect the stored value.
+	got[1] = 0xff
+	got2, _ := v.OctetString()
+	if got2[1] != 0x02 {
+		t.Error("accessor should copy output: mutation of returned slice affected stored value")
+	}
+}
+
+func TestValueStructureCopyIsolation(t *testing.T) {
+	elems := []*Value{NewBoolean(true), NewInteger(42)}
+	v := NewStructure(elems)
+
+	// Mutating the original slice should not affect the stored value.
+	elems[0] = NewFloat(1.0)
+	got, ok := v.Structure()
+	if !ok {
+		t.Fatal("Structure() ok=false")
+	}
+	if got[0].Type() != ValueTypeBoolean {
+		t.Error("constructor should copy input: mutation of original affected stored value")
+	}
+
+	// Mutating the returned slice should not affect the stored value.
+	got[1] = NewFloat(2.0)
+	got2, _ := v.Structure()
+	if got2[1].Type() != ValueTypeInteger {
+		t.Error("accessor should copy output: mutation of returned slice affected stored value")
+	}
+}

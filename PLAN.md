@@ -9,7 +9,8 @@ A native Go implementation of the MMS (Manufacturing Message Specification) prot
 ### Scope
 
 - A clean, Go-native MMS protocol library.
-- Initial focus: **client-side MMS** (connect, initiate, read, write, name list, identify, status).
+- **Client-side MMS** (connect, initiate, read, write, name list, identify, status) — implemented in Phases 0–6.
+- **Server-side MMS** (accept associations, negotiate, serve confirmed services via a handler API) — planned in Phase 7.
 - Generic MMS only — usable for any MMS application, not tied to a specific domain.
 - Designed to compose with `otfabric/go-tpkt` and `otfabric/go-cotp` for transport.
 - Strong named types, structured errors, observable behavior.
@@ -18,9 +19,11 @@ A native Go implementation of the MMS (Manufacturing Message Specification) prot
 
 - **IEC 61850 domain logic.** No logical devices, logical nodes, functional constraints, report control blocks, control models, datasets-as-IEC-concepts, SCL/ICD/CID/SCD parsing, or IED naming helpers. IEC 61850 belongs in a separate higher-level package built on top of `go-mms`.
 - **GOOSE / Sampled Values / other IEC 61850 stacks.** Out of scope entirely.
-- **Server-side MMS.** Out of scope for the initial implementation and roadmap acceptance target.
 - **Public APIs for session, presentation, or ACSE.** These layers are internal protocol plumbing. They may be exposed later only if external consumers prove they need them.
-- **File services and journal services in phase 1.** These are lower-priority MMS services deferred to later phases.
+- **File services and journal services.** Planned for Phase 12 and 13 respectively, using provider-based abstractions.
+- **Unconfirmed services (InformationReport).** Planned for Phase 10, including a client reader loop.
+- **TLS/authentication.** Planned for Phase 11 — TLS in the transport/runtime layer, ACSE auth hooks in go-mms.
+- **Server-side device model framework.** No port of `mms_device_model.h` / `mms_value_cache.h` — the server uses a minimal Go-native registry.
 
 ---
 
@@ -94,19 +97,24 @@ A native Go implementation of the MMS (Manufacturing Message Specification) prot
 |---|---|
 | `iso_mms/asn1c/*` | Reference for PDU structure, field names, tag values, CHOICE layouts. Do **not** generate Go code from these. Do **not** expose their structure as public API. Model Go structs informed by these definitions, using `encoding/asn1` struct tags and `asn1.RawValue` where appropriate. |
 
-### Server-side pieces — deferred
+### Server-side pieces — planned in Phase 7
 
-| C source | Status |
+| C source | Go responsibility in Phase 7 |
 |---|---|
-| `iso_mms/server/*` | Deferred to Phase 7+ |
-| `iso_server/*` | Deferred to Phase 7+ |
-| `inc/mms_server.h` | Deferred |
+| `iso_server/*` | `internal/isostack/server.go` — server accept loop, per-connection lifecycle, session/presentation/ACSE server orchestration |
+| `iso_connection.c` style flow | `internal/serverconn/conn.go` — connection runtime and dispatch |
+| `iso_mms/server/*` | Server-side confirmed service dispatch and handlers for initiate/read/write/identify/status/getnamelist/getvaraccess |
+| `inc/mms_server.h` | Reference for public `Server` API shape and handler concepts |
 
-### Pieces to ignore in phase 1
+### Still deferred even inside server roadmap
 
-- `mms_device_model.h`, `mms_value_cache.h` — server-side device model concerns.
-- `mms_information_report.c` — unconfirmed services, deferred.
-- TLS/authentication in ACSE — deferred until core flow works.
+| C area | Status |
+|---|---|
+| `mms_device_model.h`, `mms_value_cache.h` | Still deferred — do not port a full device model |
+| `mms_information_report.c` | COMPLETE — Phase 10 |
+| TLS/authentication in ACSE | COMPLETE — Phase 11A + 11B |
+| File services | COMPLETE — Phase 12 |
+| Journal services | COMPLETE — Phase 13 |
 
 ---
 
@@ -115,6 +123,10 @@ A native Go implementation of the MMS (Manufacturing Message Specification) prot
 ```
 go-mms/
 ├── mms.go                          # Package mms — public client API
+├── server.go                       # Public Server API (Phase 7)
+├── server_options.go               # ServerOptions, ListenOptions (Phase 7)
+├── server_handlers.go              # Handler interfaces / adapters (Phase 7)
+├── server_model.go                 # Public lightweight MMS server model types (Phase 7)
 ├── value.go                        # MMS Value types, constructors, accessors
 ├── types.go                        # Named types: ObjectName, DomainID, TypeSpec, enums
 ├── errors.go                       # Sentinel errors, typed error structs
@@ -132,7 +144,7 @@ go-mms/
 │   │   ├── tags.go                # ASN.1 tag/class constants for MMS
 │   │   └── params.go             # Struct tag helpers if needed
 │   │
-│   ├── pdu/                        # MMS PDU construction and parsing
+│   ├── pdu/                        # MMS PDU construction and parsing (shared by client+server)
 │   │   ├── mmspdu.go              # Top-level MmsPdu CHOICE dispatch
 │   │   ├── initiate.go            # Initiate request/response
 │   │   ├── confirmed.go           # ConfirmedRequest/Response framing
@@ -157,10 +169,30 @@ go-mms/
 │   │
 │   ├── isostack/                   # ISO stack orchestration
 │   │   ├── client.go              # Client-side ISO stack (session+pres+acse)
+│   │   ├── server.go              # Server-side ISO stack orchestration (Phase 7)
 │   │   └── params.go              # Internal parameter encoding
 │   │
-│   └── invoke/                     # Invoke ID management and request correlation
-│       └── tracker.go
+│   ├── serverconn/                 # Per-connection server state machine (Phase 7)
+│   │   ├── conn.go                # Connection lifecycle and state
+│   │   ├── dispatch.go            # Confirmed request dispatch to handlers
+│   │   ├── association.go         # Association accept/reject
+│   │   └── services.go            # Service-specific request/response helpers
+│   │
+│   ├── servermodel/                # Internal helpers around server registry (Phase 7)
+│   │   ├── registry.go            # Domain/variable/named-var-list registry
+│   │   ├── names.go               # Name list iteration with deterministic ordering
+│   │   └── namedvarlist.go        # Named variable list storage
+│   │
+│   ├── invoke/                     # Invoke ID management and request correlation
+│   │   └── tracker.go
+│   │
+│   └── transport/                  # Transport abstraction (extended with listener/accept in Phase 7)
+│       └── transport.go
+│
+├── _examples/
+│   ├── basic/                      # Client CLI example
+│   ├── server-basic/               # Minimal server example (Phase 7)
+│   └── server-readwrite/           # Server with read/write handlers (Phase 7)
 │
 └── testdata/                       # Golden frames, reference PDUs
     └── *.bin / *.json
@@ -168,8 +200,9 @@ go-mms/
 
 ### What is public
 
-- **`mms` (root package):** `Client`, `Dial`, `DialOptions`, `ConnectParams`, `ReadResult`, `WriteResult`, `NameListResult`, `IdentifyResult`, `StatusResult`. This is the primary user-facing API.
-- **Value types:** `Value`, `TypeSpec`, `ObjectName`, `DomainID`, `DataAccessError` — strong types for MMS data.
+- **`mms` (root package) — client:** `Client`, `Dial`, `NewClient`, `DialOptions`, `ReadResult`, `WriteResult`, `NameListResult`, `IdentifyResult`, `StatusResult`, `VariableAccessAttributes`, `NamedVariableListAttributes`, `DeleteNamedVariableListResult`.
+- **`mms` (root package) — server (Phase 7):** `Server`, `NewServer`, `ServerOptions`, `ListenOptions`, handler function types (e.g., `HandleIdentify`, `HandleStatus`, `RegisterVariable`), lightweight model/registration types (`Variable`, `Domain`).
+- **Value types:** `Value`, `TypeSpec`, `ObjectName`, `DomainID`, `ItemID`, `DataAccessError` — strong types for MMS data, shared between client and server.
 - **Error types:** Sentinel errors, `ServiceError`, `ProtocolError`, `DecodeError`.
 
 Note: a public `mmstest` helper package is deferred. It is not needed up front and can be introduced later if downstream consumers require test scaffolding.
@@ -178,10 +211,12 @@ Note: a public `mmstest` helper package is deferred. It is not needed up front a
 
 - **`internal/codec`:** MMS-specific marshal/unmarshal wrappers built on `encoding/asn1`. Not part of the public contract.
 - **`internal/asn1util`:** Thin helpers for stdlib gaps (e.g., CHOICE dispatch, raw tag inspection, MMS-specific tag constants). Minimal by design — only what `encoding/asn1` cannot express.
-- **`internal/pdu`:** Wire-level PDU construction and parsing. Uses `internal/codec` and `internal/asn1util`. Users never see these.
+- **`internal/pdu`:** Wire-level PDU construction and parsing. Shared by client and server. Users never see these.
 - **`internal/acse`, `internal/session`, `internal/presentation`:** ISO upper-layer handling. Users don't know these exist.
-- **`internal/isostack`:** Orchestrates the full ISO stack for connection establishment.
+- **`internal/isostack`:** Orchestrates the full ISO stack for both client connection establishment and server accept (Phase 7).
 - **`internal/invoke`:** Invoke ID allocation and outstanding-call tracking.
+- **`internal/serverconn` (Phase 7):** Per-connection server runtime — state machine, confirmed request dispatch, association management.
+- **`internal/servermodel` (Phase 7):** Internal helpers for the server registry — domain/variable/named-variable-list storage and lookup.
 
 ### Avoiding a god package
 
@@ -702,20 +737,1004 @@ Fuzzing targets should be registered as `func FuzzXxx(f *testing.F)` with seed c
 
 ---
 
-### Phase 7 — Optional server-side roadmap
+### Phase 7 — Server-side MMS
 
-**Goals:** Define the path for MMS server support.
+**Goals:** Add a generic Go-native MMS server capable of accepting associations, negotiating initiate parameters, handling core confirmed services, and serving a minimal registry-backed MMS object model. The server reuses shared wire/PDU packages and shared value/types/errors, but keeps orchestration in new internal server packages.
+
+#### Design principles for server-side
+
+1. **No client/server API contamination.** Do not turn the existing client into a shared "god connection" abstraction. Shared code lives in `internal/pdu`, `internal/berutil`, and root-level types. Separate server orchestration lives in `internal/serverconn` and `internal/servermodel`.
+2. **Handler-driven, not callback soup.** The C server uses listener callbacks around raw buffers. In Go, the first-class abstraction is a typed handler API, not raw byte callbacks.
+3. **Minimal but composable server model.** The first server release supports Identify, Status, GetNameList, GetVariableAccessAttributes, Read, Write. No giant "virtual device framework" up front.
+4. **Explicit MMS object model.** The server needs a small Go-native registry of VMD metadata, domains, named variables (with type specs and read/write callbacks), and optionally named variable lists. This is not a port of the C device model.
+5. **Strict protocol behavior.** The server produces proper ConfirmedResponsePDU, ConfirmedErrorPDU, and RejectPDU with correct invoke ID reflection and association/conclude behavior.
+
+#### Target public API shape
+
+```go
+srv := mms.NewServer(mms.ServerOptions{
+    Logger: slog.Default(),
+    MMS: mms.ServerMMSOptions{
+        MaxPDUSize:               65000,
+        MaxOutstandingCalling:    5,
+        MaxOutstandingCalled:     5,
+        DataStructureNestingLevel: 10,
+    },
+})
+
+srv.HandleIdentify(func(ctx context.Context, req mms.IdentifyRequest) (*mms.ServerIdentity, error) {
+    return &mms.ServerIdentity{
+        Vendor: "OTfabric", Model: "go-mms", Revision: "dev",
+    }, nil
+})
+
+srv.HandleStatus(func(ctx context.Context, req mms.StatusRequest) (*mms.ServerStatus, error) {
+    return &mms.ServerStatus{
+        Logical:  mms.VMDLogicalStatusStateChangesAllowed,
+        Physical: mms.VMDPhysicalStatusOperational,
+    }, nil
+})
+
+srv.RegisterDomain("process")
+srv.RegisterVariable(mms.Variable{
+    Name: mms.ObjectName{
+        Scope: mms.ObjectScopeDomain, Domain: "process", ItemID: "temperature",
+    },
+    TypeSpec: mms.TypeSpec{Type: mms.ValueTypeFloat, FormatWidth: 32, ExponentWidth: 8},
+    Read: func(ctx context.Context) (*mms.Value, error) {
+        return mms.NewFloat(21.5), nil
+    },
+    Write: func(ctx context.Context, v *mms.Value) error {
+        return nil
+    },
+})
+
+err := srv.ListenAndServe(ctx, ":102")
+```
+
+#### First server milestone (MVP)
+
+**Must include:**
+- Server-side ISO orchestration
+- Initiate negotiation
+- Identify, Status
+- GetNameList (VMD and domain scope, continuation)
+- GetVariableAccessAttributes
+- Read, Write
+- Strict error handling
+- Client↔server integration tests
+
+**Deferred for later phases (server-side only):**
+- Named variable list services (DefineNamedVariableList, GetNamedVariableListAttributes, DeleteNamedVariableList) — these already exist on the client side; only the server implementation is deferred → **Phase 8**
+
+**Still out of scope:**
+- Unconfirmed services (InformationReport) → **Phase 9**
+- Transport integration (Dial with go-tpkt/go-cotp, ListenAndServe) → **Phase 10**
+- TLS/authentication in ACSE
+- File services, journal services
+- IEC 61850 object models or naming helpers
+- `mms_device_model.h` / `mms_value_cache.h` style device-model caching frameworks
+- Advanced server-side data-set/report/subscription abstractions
+
+---
+
+#### Phase 7A — Server API and architecture scoping
+
+**Goals:** Define the public server API and internal boundaries before coding.
 
 **Deliverables:**
-- Design document for server API.
-- `mms.Server` type with handler registration.
-- ISO stack server-side orchestration in `internal/isostack`.
-- Server-side initiate, read, write, name list, identify, status handlers.
-- InformationReport (unconfirmed) support.
+- Public `Server` API proposal with stable type signatures.
+- Internal package split finalized (`serverconn`, `servermodel`, `isostack/server.go`).
+- Explicit client/server code-sharing rules (what is shared, what is not).
+- Decision on listener abstraction: `ListenAndServe` only, or also `Serve(listener)`.
+- Decision on whether `go-cotp` listener support is a prerequisite.
+- Decision on per-connection context management.
+- Decision on handler registration style: monolithic handler vs per-service hooks.
+- Explicit "not in first server pass" list.
 
-This phase is not planned in detail yet. It will be scoped after the client path is proven.
+**Done criteria:**
+- Stable proposed API signatures reviewed and accepted.
+- Stable server package structure documented.
+- No ambiguity about what ships in first server milestone.
 
-**Done criteria:** Defined at scoping time.
+---
+
+#### Phase 7B — Server-side ISO stack orchestration
+
+**Goals:** Implement server-side equivalents of the current client ISO stack flow. This is where the deferred `iso_server/*` and `iso_connection.c` style logic comes into play.
+
+**Deliverables:**
+- `internal/isostack/server.go` — server-side ISO stack orchestration.
+- Connection accept flow.
+- COTP connection indication / response path via Go transport stack.
+- Session CONNECT / ACCEPT handling.
+- Presentation CP / CPA handling.
+- ACSE AARQ parse / AARE encode.
+- Release / abort handling.
+- Per-connection lifecycle state machine.
+
+**Must support:**
+- Accept association.
+- Reject malformed association cleanly.
+- Pass MMS initiate request payload upward.
+- Send initiate response back through ACSE/presentation/session stack.
+- Handle DATA, FINISH, ABORT.
+
+**Explicitly deferred:** TLS, ACSE authentication policy beyond minimal accept/reject hooks.
+
+**Done criteria:**
+- End-to-end association works against a mock MMS server client.
+- Existing `mms.Client` can connect to the new server.
+- Conclude/release works cleanly.
+
+---
+
+#### Phase 7C — Per-connection server runtime
+
+**Goals:** Add a dedicated connection object for one MMS association.
+
+**Deliverables:**
+- `internal/serverconn/conn.go` — connection state: open → associated → stopped → terminated.
+- One request-at-a-time dispatch model initially (serialized confirmed request handling per connection).
+- Request decode → handler call → response encode pipeline.
+
+**Design note:** Start with serialized confirmed request handling per connection. Do not start with multi-request concurrent server dispatch unless the protocol/state requirements demand it. This keeps it simple and aligns with the current client's practical behavior.
+
+**Done criteria:**
+- One active client connection can perform multiple sequential requests.
+- Close/abort paths are deterministic.
+- Malformed request does not crash connection manager.
+
+---
+
+#### Phase 7D — Initiate negotiation on server side
+
+**Goals:** Handle MMS Initiate Request and produce Initiate Response.
+
+**Deliverables:**
+- Parse initiate request from ACSE payload.
+- Negotiate: max PDU size, outstanding calls, nesting level, services supported.
+- Server-side configuration type: `ServerMMSOptions`.
+
+**Done criteria:**
+- Client handshake succeeds with negotiated parameters.
+- Negotiation failures produce correct association/protocol errors.
+
+---
+
+#### Phase 7E — Core confirmed service dispatch framework
+
+**Goals:** Build generic dispatch for confirmed requests.
+
+**Deliverables:**
+- Top-level confirmed request decode.
+- Service tag classification.
+- Invoke ID reflection.
+- Response/error/reject helpers: confirmed response, confirmed error, reject.
+
+**Design rule:** The handler layer operates on typed service requests, not raw BER blobs.
+
+**Done criteria:**
+- Server can decode service kind and route to the proper handler.
+- Unknown/unsupported services return consistent typed protocol/service errors.
+
+---
+
+#### Phase 7F — Server support for Identify and Status
+
+**Goals:** Implement the easiest server-side services first.
+
+**Deliverables:**
+- Identify handler support.
+- Status handler support.
+- Default behavior if handlers are absent (configurable server identity and fixed status).
+
+**Done criteria:**
+- Existing client `Identify` works against server.
+- Existing client `Status` works against server.
+
+---
+
+#### Phase 7G — Server support for GetNameList
+
+**Goals:** Implement browsing.
+
+**Deliverables:**
+- VMD scope browsing (domains).
+- Domain scope browsing (named variables in a domain).
+- Association scope browsing if supported by registry.
+- Continuation handling with deterministic ordering.
+
+**Dependency:** The registry/model must provide stable ordering for deterministic pagination.
+
+**Done criteria:**
+- Client `GetNameList` and `GetNameListAll` interoperate against server.
+- Continuation token behavior is deterministic.
+
+---
+
+#### Phase 7H — Server support for GetVariableAccessAttributes
+
+**Goals:** Return server-side TypeSpec metadata.
+
+**Deliverables:**
+- Variable lookup by `ObjectName`.
+- Response encoding for: deletable flag, type specification.
+- Support for arrays, structures, named type references as far as the public model can represent them.
+
+**Dependency:** The public/internal TypeSpec model must be sufficiently expressive.
+
+**Done criteria:**
+- Client `GetVariableAccessAttributes` interoperates against server.
+- Nested arrays/structures are correctly encoded.
+
+---
+
+#### Phase 7I — Server support for Read
+
+**Goals:** Implement actual value serving.
+
+**Deliverables:**
+- Variable lookup.
+- Read callback/provider model.
+- Conversion: `Value` → `DataValue` → PDU.
+- Support multiple variables in one request.
+- Support per-variable access errors.
+- Policy for: undefined variable, unsupported access, handler failure, type mismatch between model and value.
+
+**Done criteria:**
+- Existing client `Read` and `ReadMultiple` work against server.
+- Mixed success/error result lists work correctly.
+
+---
+
+#### Phase 7J — Server support for Write
+
+**Goals:** Implement writing.
+
+**Deliverables:**
+- Request decode to `Value`.
+- Write callback/provider.
+- Per-variable result encoding.
+- Typed write errors.
+- Clear mapping of handler outcomes to `DataAccessError`, `ServiceError`, and protocol reject.
+
+**Done criteria:**
+- Client `Write` interoperates against server.
+- Write failures map to correct MMS outcomes.
+
+---
+
+#### Phase 7K — Named variable lists (optional second milestone)
+
+**Goals:** Implement DefineNamedVariableList, GetNamedVariableListAttributes, DeleteNamedVariableList.
+
+**Scoping decision:** Include only after Read/Write/GetNameList/GetVarAccess are solid. This is the recommended second milestone.
+
+**Deliverables:**
+- Named variable list storage (per-association or global, depending on scope rules).
+- Lifecycle interop with current client.
+
+**Model questions to resolve:**
+- Are lists global or per-association?
+- How do scope rules map for VMD/domain/association named lists?
+
+**Design preference:** Implement only what the spec requires for current client interop. Keep storage simple. Avoid mirroring all C server behaviors.
+
+**Done criteria:**
+- Client named variable list lifecycle interoperates against server.
+
+---
+
+#### Phase 7L — Error mapping and protocol hardening
+
+**Goals:** Make server failures precise and stable.
+
+**Deliverables:**
+- Internal error mapping table: model not found, handler unavailable, invalid request shape, unsupported service, write denied.
+- Helpers for producing: ConfirmedErrorPDU, RejectPDU.
+- Malformed request handling tests.
+- Wrong-state tests.
+- Release/abort robustness.
+
+**Done criteria:**
+- Malformed client traffic never panics server.
+- Protocol violations lead to deterministic error outcomes.
+
+---
+
+#### Phase 7M — Server test harness and interop suite
+
+**Goals:** Prove the server against the client and vice versa.
+
+**Deliverables:**
+- Loopback client↔server integration tests.
+- Interop matrix: current Go client ↔ Go server (future: C client ↔ Go server if available).
+- Malformed request corpus.
+- Concurrency tests.
+- Shutdown behavior tests.
+
+**Specific scenarios:**
+- Connect, identify, status, close.
+- Get domain list, get variable list.
+- Get variable access attributes.
+- Read, write.
+- Define/get/delete named variable list (if 7K is included).
+- Close during active request.
+- Malformed request.
+- Duplicate invoke ID from client.
+- Unexpected PDU type.
+
+**Done criteria:**
+- End-to-end suite passes reliably.
+- `go test -race ./...` passes for server integration tests.
+
+---
+
+#### Phase 7N — Server documentation and examples
+
+**Goals:** Make the server usable.
+
+**Deliverables:**
+- GoDoc for all new public types.
+- `_examples/server-basic` — minimal server.
+- `_examples/server-readwrite` — server with read/write handlers.
+- Design notes explaining: generic MMS scope, no IEC 61850 logic, deferred features.
+
+**Done criteria:**
+- At least one runnable server example.
+- Client example can talk to server example.
+
+---
+
+#### Recommended implementation order
+
+1. **7A** — Architecture/API scoping (design doc, not code)
+2. **7B** — ISO server orchestration
+3. **7C** — Connection runtime
+4. **7D** — Initiate negotiation
+5. **7E** — Confirmed service dispatch framework
+6. **7F** — Identify/Status
+7. **7G** — GetNameList
+8. **7H** — GetVariableAccessAttributes
+9. **7I** — Read
+10. **7J** — Write
+11. **7L** — Error mapping/hardening
+12. **7M** — Integration test suite
+13. **7K** — Named variable lists (if still desired in first server line)
+14. **7N** — Documentation/examples
+
+---
+
+## 11b. Phase 8 — Server Named Variable Lists
+
+Named variable list services on the server side. Client-side support already
+exists (Phase 5). This phase adds the server-side counterpart so that
+the existing client `DefineNamedVariableList`, `GetNamedVariableListAttributes`,
+and `DeleteNamedVariableList` calls interoperate against the Go server.
+
+### Goals
+
+- Implement server-side support for all three named variable list services.
+- Named variable lists are stored per-domain or per-VMD scope in the registry.
+- Fully interoperable with the existing client.
+
+### Deliverables
+
+- **Registry support:** `internal/servermodel/registry.go` extended with named
+  variable list storage, lookup, define, and delete operations.
+- **PDU support:** `internal/pdu/server_helpers.go` extended with unmarshalers
+  for DefineNamedVariableList request, GetNamedVariableListAttributes request,
+  and DeleteNamedVariableList request. Response marshalers added.
+- **Server handlers:** `server.go` gains `handleDefineNVL`, `handleGetNVLAttrs`,
+  and `handleDeleteNVL` dispatched from the confirmed service router.
+- **GetNameList update:** `handleGetNameList` supports
+  `ObjectClassNamedVariableList` at VMD and domain scope.
+- **Integration tests:** Client↔server round-trip tests covering define, get
+  attributes, list, read from NVL, and delete lifecycle. Negative tests for
+  deleting non-existent lists and double-define.
+
+### Done criteria
+
+- Existing client NVL lifecycle (define → getAttrs → delete) works against server.
+- `GetNameList` with `ObjectClassNamedVariableList` returns defined lists.
+- `go test -race ./...` passes.
+
+---
+
+## 11c. Phase 9 — Transport Integration and Real Connectivity
+
+### Goals
+
+Make the library usable against real endpoints without external glue.
+Implement a real connection/runtime layer that owns TCP dial/listen,
+TPKT + COTP wiring, and handing an established `mms.Transport` to go-mms.
+
+### Architectural decisions
+
+**TLS placement (settled):**
+TLS belongs in the connection/runtime layer, not in MMS core protocol logic.
+
+Target layering: TCP → TLS → TPKT → COTP → Session → Presentation → ACSE → MMS.
+
+Therefore:
+- `go-tpkt`: stays TLS-agnostic
+- `go-cotp`: stays TLS-agnostic
+- `go-mms` core: stays transport-agnostic
+- TLS lives in a thin transport/runtime integration layer (e.g.
+  `go-mms/transport/iso` or a separate `go-iso` package)
+
+**Authentication split (settled):**
+- TLS transport security (handshake, certs, verification) → runtime layer
+- ACSE / application authentication (accept/reject policy, peer identity
+  mapping) → go-mms association layer
+
+### Deliverables
+
+- **`Dial(ctx, addr, opts)`:** Real client dial over plaintext TCP + TPKT + COTP.
+  Convenience wrapper that creates a Transport and calls `NewClient`.
+- **Server listener/accept:** Server-side `ListenAndServe` or equivalent
+  that accepts TCP connections, wraps each as a Transport via TPKT + COTP,
+  and calls `Server.Serve` per connection.
+- **Production transport adapter:** Concrete `Transport` implementation backed
+  by `go-tpkt` + `go-cotp`.
+- **Configuration:** COTP parameters (TSAPs), remote/local selectors
+  configurable via existing option structs.
+- **Loopback TCP integration tests:** End-to-end over real TCP localhost.
+- **Runnable real-network examples.**
+
+### Suggested package placement
+
+Use a thin runtime package:
+- `go-mms/transport/iso` or a separate `go-iso`
+
+This package owns:
+- `DialTCP` / `ListenTCP`
+- Later: `DialTLS` / `ListenTLS`
+- Peer identity extraction
+
+### Design rules
+
+- Keep `NewClient(ctx, conn, opts)` as the low-level injected path.
+- Make `Dial` a convenience wrapper, not a second semantic codepath.
+- Do not put TLS logic into `internal/pdu`, `internal/acse`,
+  `internal/session`, or MMS service code.
+- Do not put TLS policy into `go-tpkt` or `go-cotp`.
+
+### Dependencies
+
+- `otfabric/go-tpkt` and `otfabric/go-cotp` must be available.
+
+### Done criteria
+
+- Real client connects to real server over TCP/COTP.
+- Real server accepts real client over TCP/COTP.
+- Existing Identify/Status/Read/Write/GetNameList/NVL flows work
+  end-to-end over the real transport path.
+- Existing in-process loopback tests remain unchanged.
+
+### C source reference
+
+| File | Purpose |
+|------|---------|
+| `sources/mms/iso_server/iso_server.c` | TCP listen, accept, connection lifecycle |
+| `sources/mms/iso_server/iso_connection.c` | Per-connection I/O, TLS socket setup |
+| `sources/mms/iso_client/iso_client_connection.c` | TCP connect, COTP/ACSE handshake states |
+| `sources/mms/iso_cotp/cotp.c` | COTP TP0 over TCP (RFC 1006) |
+| `sources/mms/inc/iso_connection_parameters.h` | TCP port, TLS config, selectors |
+
+---
+
+## 11d. Phase 10 — InformationReport and Asynchronous Inbound Handling
+
+### Goals
+
+Add the first unconfirmed/server-initiated MMS feature. This is the natural
+point to introduce runtime changes needed for unsolicited inbound traffic.
+
+### Required runtime change
+
+**Introduce a background reader loop.**
+
+The client currently uses synchronous request/response reads, which works
+for confirmed services but not for unconfirmed inbound traffic. Phase 10
+adds:
+- One connection reader goroutine.
+- Confirmed response dispatch by invoke ID.
+- Unconfirmed dispatch to callback/channel.
+- Clean shutdown and race-safe coordination.
+
+### Deliverables
+
+- **PDU support:** `internal/pdu/informationreport.go` — marshal (server)
+  and unmarshal (client) for InformationReport.
+- **Client reader loop:** Background goroutine reads from transport,
+  classifies PDUs, dispatches confirmed responses to waiting callers via
+  invoke ID, and dispatches unconfirmed PDUs to registered handlers.
+- **Client callback API:** `Client.OnInformationReport(handler)` for
+  registering a callback to receive incoming reports.
+- **Server send API:** `ServerAssociation.SendInformationReport(ctx, vars, values)`
+  or equivalent for pushing data to a specific connected client.
+- **Integration tests:** Server sends InformationReport; client receives it.
+  Tests for idle and concurrent confirmed + unconfirmed traffic. Tests for
+  clean shutdown with pending inbound.
+
+### C source reference
+
+| File | Purpose |
+|------|---------|
+| `sources/mms/iso_mms/server/mms_information_report.c` | Server: encode and send InformationReport (tag `0xa3`, variable specs, access results) |
+| `sources/mms/iso_mms/client/mms_client_connection.c` | Client: parse `MmsPdu_PR_unconfirmedPDU`, dispatch InformationReport to `reportHandler` |
+| `sources/mms/iso_mms/asn1c/InformationReport.h` | ASN.1 type: `variableAccessSpecification` + `listOfAccessResult` |
+| `sources/mms/iso_mms/asn1c/UnconfirmedPDU.h` | UnconfirmedPDU wrapper for unconfirmedService CHOICE |
+
+### Design notes
+
+The C reference uses `reportHandler` callbacks per connection. The Go API
+should use a similar pattern — a registered handler function called for
+each incoming report. The handler receives the variable list name (or
+individual variable names) and the corresponding values.
+
+Three InformationReport styles exist in the C code:
+1. Single VMD-specific variable
+2. List of variable specifications + values
+3. Named variable list reference (VMD-specific)
+
+The Go implementation should support all three.
+
+### Done criteria
+
+- Client receives InformationReport without breaking confirmed request handling.
+- Server emits valid reports on demand.
+- No races, deadlocks, or lost confirmed responses.
+- `go test -race ./...` passes.
+
+---
+
+## 11e. Phase 11 — Security: TLS Transport and ACSE Auth Hooks
+
+Split into two subphases to respect the architectural boundary.
+
+### Phase 11A — TLS Transport Support
+
+**Goal:** Add secure transport in the runtime/transport integration layer.
+
+**Deliverables:**
+- Client secure dial options (`tls.Config` plumbing).
+- Server secure listener options.
+- Certificate verification and peer certificate extraction.
+- Typed TLS/verification errors.
+- Port 3782 (MMS over TLS) support alongside port 102 (plaintext).
+
+**Design rules:**
+- TLS handshake and cert handling stays outside MMS protocol packages.
+- Plaintext and TLS paths coexist cleanly.
+- High-level config exposed through `DialOptions` / `ServerOptions`, but
+  TLS implementation lives in the runtime layer.
+
+**C source reference:**
+
+| File | Purpose |
+|------|---------|
+| `sources/mms/iso_server/iso_connection.c` | `TLSSocket` creation from accepted socket |
+| `sources/mms/iso_client/iso_client_connection.c` | TLS handshake after TCP connect |
+| `sources/mms/iso_cotp/cotp.c` | `TLSSocket_write` / `TLSSocket_read` when TLS enabled |
+| `sources/mms/inc/iso_connection_parameters.h` | `IsoConnectionParameters_setTlsConfiguration` |
+| `sources/mms/inc/mms_client_connection.h` | `MmsConnection_createSecure(TLSConfiguration)` |
+
+**Done criteria:**
+- Secure client/server connect successfully.
+- Verification failures return typed errors.
+
+### Phase 11B — ACSE / Application Authentication Hooks
+
+**Goal:** Surface peer identity and add association-level auth policy.
+
+**Deliverables:**
+- Peer identity surfaced upward from the transport layer.
+- Server-side association auth policy hooks (accept/reject decisions
+  during association based on peer identity).
+- Optional mapping from peer certificate identity to MMS authorization.
+- `AcseAuthenticator`-equivalent callback on `ServerOptions`.
+
+**C source reference:**
+
+| File | Purpose |
+|------|---------|
+| `sources/mms/iso_acse/acse.c` | ACSE auth: password, certificate, TLS cert; `checkAuthentication()` |
+| `sources/mms/inc/iso_connection_parameters.h` | `AcseAuthenticationMechanism`, `AcseAuthenticator` callback |
+| `sources/mms/inc/mms_server.h` | `MmsServerConnection_getSecurityToken()` |
+| `sources/mms/inc_private/acse.h` | `AcseConnection` with `TLSSocket`, `authenticator` |
+
+**Done criteria:**
+- Peer identity is available to upper layers.
+- Server can make association accept/reject decisions based on peer identity.
+- Both password-based and certificate-based auth mechanisms are supported.
+
+---
+
+## 11f. Phase 12 — File Services
+
+### Goals
+
+Add a minimal coherent MMS file-service implementation using a
+provider-based design (not direct filesystem coupling).
+
+### Suggested first subset
+
+- FileDirectory (list/directory)
+- FileOpen
+- FileRead
+- FileClose
+- FileDelete (optional)
+
+### Required architecture
+
+**Server-side file provider abstraction.** Core server logic depends on
+an interface, not the local filesystem. Example:
+
+```go
+type FileProvider interface {
+    List(ctx context.Context, path string) ([]FileEntry, error)
+    Open(ctx context.Context, path string) (FileHandle, error)
+    Read(ctx context.Context, handle FileHandle, maxBytes int) ([]byte, bool, error)
+    Close(ctx context.Context, handle FileHandle) error
+    Delete(ctx context.Context, path string) error // optional
+}
+```
+
+The server maintains a File Read State Machine (FRSM) per open file
+handle, per connection (matching the C reference pattern in
+`mms_file_service.c`).
+
+### Deliverables
+
+- **PDU support:** `internal/pdu/file.go` — encode/decode for FileDirectory,
+  FileOpen, FileRead, FileClose, FileDelete request/response.
+- **Client API:** `Client.FileDirectory`, `Client.FileOpen`, `Client.FileRead`,
+  `Client.FileClose`, `Client.FileDelete`.
+- **Server file provider interface:** `FileProvider` registered on `Server`.
+- **In-memory provider:** For tests.
+- **Optional filesystem-backed example provider.**
+- **Service tags:** `0x48` (file-open), `0x49` (file-read), `0x4a` (file-close),
+  `0x4c` (file-delete), `0x4d` (file-directory).
+
+### C source reference
+
+| File | Purpose |
+|------|---------|
+| `sources/mms/iso_mms/server/mms_file_service.c` | FRSM management, file attribute encoding, all file service handlers |
+| `sources/mms/iso_mms/client/mms_client_files.c` | Client-side file request/response handling |
+| `sources/mms/iso_mms/server/mms_server_connection.c` | Routes file service tags: `0x48`–`0x4d` |
+
+### Done criteria
+
+- Client can list and read files from server.
+- Server serves file content via provider abstraction.
+- Chunking, handle lifecycle, and error paths are well tested.
+- `go test -race ./...` passes.
+
+---
+
+## 11g. Phase 13 — Journal Services
+
+### Goals
+
+Add journal object support after the async/runtime and provider patterns
+are proven.
+
+### Suggested first subset
+
+- Discover journal names (GetNameList with ObjectClassJournal).
+- ReadJournal (time range and start-after queries).
+- Journal entry parsing with continuation/paging.
+
+### Required architecture
+
+**Server-side journal provider abstraction:**
+
+```go
+type JournalProvider interface {
+    ListJournals(ctx context.Context, domain string) ([]string, error)
+    ReadTimeRange(ctx context.Context, domain, journal string,
+        start, stop time.Time, maxEntries int) (*JournalResult, error)
+    ReadStartAfter(ctx context.Context, domain, journal string,
+        afterID []byte, afterTime time.Time, maxEntries int) (*JournalResult, error)
+}
+```
+
+### Deliverables
+
+- **PDU support:** `internal/pdu/journal.go` — encode/decode for
+  ReadJournal request/response, journal entry structure.
+- **Client API:** `Client.ReadJournalTimeRange`, `Client.ReadJournalStartAfter`.
+- **Server journal provider interface:** `JournalProvider` registered per domain.
+- **GetNameList update:** Support `ObjectClassJournal` at domain scope.
+- **In-memory provider for tests.**
+- **Continuation semantics:** `moreFollows` flag with deterministic paging.
+
+### C source reference
+
+| File | Purpose |
+|------|---------|
+| `sources/mms/iso_mms/server/mms_journal_service.c` | `mmsServer_handleReadJournalRequest()`, `entryCallback`, `entryDataCallback`, `LogStorage_getEntries` |
+| `sources/mms/iso_mms/server/mms_journal.c` | `MmsJournal_create()`, journal model |
+| `sources/mms/iso_mms/client/mms_client_journals.c` | `mmsClient_parseReadJournalResponse()`, `mmsClient_createReadJournalRequestWithTimeRange/StartAfter` |
+| `sources/mms/inc/mms_client_connection.h` | `MmsJournalEntry`, `MmsJournalVariable` types |
+| `sources/mms/inc_private/mms_device_model.h` | `struct sMmsJournal`, domain-level journal list |
+
+### Design notes
+
+The C reference uses `LogStorage` as the backing abstraction with callback-
+based entry iteration. The Go version should use a simpler slice-based
+return pattern. The `entryID` is an opaque `[]byte` for continuation.
+
+### Done criteria
+
+- Client can discover and read journal entries from server.
+- Server serves journal data from provider abstraction.
+- Continuation semantics are tested strictly.
+- `go test -race ./...` passes.
+
+---
+
+## 11h. Phase 14 — Alternate Access and Component/Array Operations
+
+### Goals
+
+Close the biggest functional gap versus libiec61850: sub-variable
+addressing. Introduce a Go-native alternate-access model for reading
+and writing structure components, array elements, and array ranges.
+
+### Public API design
+
+```go
+type AlternateAccess struct {
+    Component string   // structure component name
+    Index     *int     // array element index (0-based)
+    IndexRange *IndexRange // array range
+}
+
+type IndexRange struct {
+    Start int
+    Count int
+}
+```
+
+The `AlternateAccess` is attached to `ObjectName` in read/write
+requests. Multiple selectors can be chained for nested paths
+(e.g., component within an array element).
+
+```go
+type VariableSpec struct {
+    Name           ObjectName
+    AlternateAccess []AlternateAccess // optional selector chain
+}
+```
+
+### Client methods
+
+- `ReadVariables(ctx, []VariableSpec) ([]AccessResult, error)` —
+  general-purpose multi-variable read supporting alternate access.
+- `WriteVariables(ctx, []VariableSpec, []*Value) ([]WriteResultItem, error)` —
+  general-purpose multi-variable write supporting alternate access.
+
+Convenience methods that wrap these:
+- `ReadComponent(ctx, name ObjectName, component string) (*ReadResult, error)`
+- `WriteComponent(ctx, name ObjectName, component string, value *Value) error`
+- `ReadArrayElement(ctx, name ObjectName, index int) (*ReadResult, error)`
+- `WriteArrayElement(ctx, name ObjectName, index int, value *Value) error`
+- `ReadArrayRange(ctx, name ObjectName, start, count int) (*ReadResult, error)`
+
+### PDU layer
+
+- Extend `encodeListOfVariable` to accept optional alternate access
+  per variable.
+- Implement `encodeAlternateAccess([]AlternateAccess)` in
+  `internal/pdu/read.go` or a new `internal/pdu/altaccess.go`.
+- Server-side `UnmarshalReadRequest` extended to parse alternate access.
+
+### BER wire format
+
+- AlternateAccess is tag `[5]` (0xa5) inside each `ListOfVariableSeq`.
+- Each `AlternateAccessSelection` supports:
+  - `component` (Identifier)
+  - `index` (Unsigned32)
+  - `indexRange` (SEQUENCE { lowIndex, numberOfElements })
+  - `allElements` (NULL)
+
+### Server support
+
+- Extend `handleRead`/`handleWrite` to pass alternate access through
+  to the read/write callbacks.
+- Variable providers receive the selector chain and return the
+  appropriate sub-value.
+
+### C source reference
+
+| File | Purpose |
+|------|---------|
+| `sources/mms/iso_mms/client/mms_client_read.c` | `createAlternateAccessComponent()` |
+| `sources/mms/iso_mms/client/mms_client_common.c` | `mmsClient_createAlternateAccess*()` |
+| `sources/mms/iso_mms/asn1c/AlternateAccess.h` | ASN.1 type structure |
+| `sources/mms/iso_mms/server/mms_server_common.c` | Server alternate access parsing |
+
+### Done criteria
+
+- Client can read/write individual structure components by name.
+- Client can read/write individual array elements by index.
+- Client can read array ranges (start + count).
+- Server-side read/write handlers receive alternate access selectors.
+- Client↔server round-trip tests for all alternate access variants.
+- `go test -race ./...` passes.
+
+---
+
+## 11i. Phase 15 — NVL Value Operations and Generic Object Addressing
+
+### Goals
+
+Complete Named Variable List support by adding value-plane operations
+(read/write NVL values), and add generic object-scoped convenience
+methods for single-variable read/write.
+
+### NVL value operations
+
+```go
+func (c *Client) ReadNamedVariableList(ctx context.Context, listName ObjectName) ([]AccessResult, error)
+func (c *Client) WriteNamedVariableList(ctx context.Context, listName ObjectName, values []*Value) error
+```
+
+These use the `variableListName` CHOICE (tag `[1]` = 0xa1) in the
+VariableAccessSpecification instead of `listOfVariable` (tag `[0]`).
+
+### Generic object addressing
+
+```go
+func (c *Client) ReadObject(ctx context.Context, name ObjectName) (*ReadResult, error)
+func (c *Client) WriteObject(ctx context.Context, name ObjectName, value *Value) (*WriteResult, error)
+```
+
+These support all three scopes (VMD, domain, association) through
+`ObjectName.Scope`.
+
+### PDU layer
+
+- Add `MarshalReadRequestByListName(invokeID, ObjectNameWire)` for the
+  variableListName read variant.
+- Add `MarshalWriteRequestByListName(invokeID, ObjectNameWire, []*DataValue)`
+  for the variableListName write variant.
+- Server-side: extend `handleRead`/`handleWrite` to recognize and
+  dispatch `variableListName` requests.
+
+### Server support
+
+- When a read/write uses `variableListName`, the server resolves the
+  NVL definition from the registry, reads/writes all member variables,
+  and returns the aggregated results.
+
+### C source reference
+
+| File | Purpose |
+|------|---------|
+| `sources/mms/iso_mms/client/mms_client_read.c` | `mmsClient_createReadNamedVariableListRequest()` |
+| `sources/mms/iso_mms/client/mms_client_write.c` | `mmsClient_createWriteRequestNamedVariableList()` |
+
+### Done criteria
+
+- Client can read all values from a named variable list in one PDU.
+- Client can write all values to a named variable list in one PDU.
+- `ReadObject`/`WriteObject` work for all scopes.
+- Server handles NVL reads/writes by resolving list members.
+- Integration tests for NVL value round-trips.
+- `go test -race ./...` passes.
+
+---
+
+## 11j. Phase 16 — File Parity (Rename + ObtainFile)
+
+### Goals
+
+Complete file service parity with libiec61850 by adding FileRename
+and ObtainFile.
+
+### FileRename
+
+Simple request/response service.
+
+```go
+func (c *Client) FileRename(ctx context.Context, currentName, newName string) error
+```
+
+BER wire format:
+- Request tag: `0xbf 0x4b` (extended tag 75)
+- `currentFileName [0]`, `newFileName [1]`
+- Response: null response with extended tag `0x4b`
+
+Server `FileProvider` extension:
+```go
+Rename(ctx context.Context, currentName, newName string) error
+```
+
+### ObtainFile
+
+Two-party file transfer: client requests server to fetch a file.
+
+```go
+func (c *Client) ObtainFile(ctx context.Context, sourceFile, destinationFile string) error
+```
+
+BER wire format:
+- Request tag: `0xbf 0x2e` (extended tag 46)
+- `sourceFileName [1]`, `destinationFileName [2]`
+- Response: null response with extended tag `0x2e`
+
+Server-side involves a file-upload task where the server opens,
+reads, and closes the source file via callbacks to the client. This
+is a complex two-party flow.
+
+### Implementation order
+
+1. FileRename (straightforward request/response)
+2. ObtainFile client request + server handler
+
+### C source reference
+
+| File | Purpose |
+|------|---------|
+| `sources/mms/iso_mms/client/mms_client_files.c` | `mmsClient_createFileRenameRequest()`, `mmsClient_createObtainFileRequest()` |
+| `sources/mms/iso_mms/server/mms_file_service.c` | `mmsServer_handleFileRenameRequest()`, `mmsServer_handleObtainFileRequest()` |
+
+### Done criteria
+
+- Client can rename files on server.
+- Client can request server to obtain (copy) files.
+- Server FileProvider handles rename.
+- Integration tests for both services.
+- `go test -race ./...` passes.
+
+---
+
+## 11k. Phase 17 — Public Utility Pass
+
+### Goals
+
+Add essential utility methods to `Value` and `TypeSpec` that improve
+ergonomics without bloating the API.
+
+### Value utilities
+
+```go
+func (v *Value) Clone() *Value
+func (v *Value) Equal(other *Value) bool
+func (v *Value) String() string
+```
+
+- `Clone`: deep copy of the value including nested structures/arrays.
+- `Equal`: structural equality comparison.
+- `String`: human-readable representation for debugging/logging.
+
+### TypeSpec utilities
+
+```go
+func (ts *TypeSpec) ChildByName(name string) (*TypeSpec, bool)
+func (ts *TypeSpec) ChildByIndex(index int) (*TypeSpec, bool)
+func (ts *TypeSpec) Compatible(v *Value) bool
+func (ts *TypeSpec) DefaultValue() *Value
+```
+
+- `ChildByName`: look up a structure element's type by name.
+- `ChildByIndex`: look up a structure element or array element type
+  by index.
+- `Compatible`: check whether a value's type matches this spec.
+- `DefaultValue`: create a zero-valued `*Value` matching this spec.
+
+### Done criteria
+
+- All utility methods have comprehensive unit tests.
+- Edge cases tested: nil values, empty structures, nested arrays,
+  type mismatches.
+- `go test -race ./...` passes.
 
 ---
 
@@ -757,18 +1776,40 @@ These files define client behavior and ISO stack internals needed for implementa
 | `sources/mms/iso_client/iso_client_connection.c` | ISO stack orchestration — TCP → COTP → session → presentation → ACSE flow |
 | `sources/mms/inc_private/mms_client_internal.h` | Internal client state: outstanding calls, invoke IDs, callbacks |
 
-### P2 — Defer until later
+### P2 — Read for server-side (Phase 7) and transport (Phase 9)
 
 | Path | Why |
 |---|---|
-| `sources/mms/iso_mms/client/mms_client_get_var_access.c` | Phase 5 |
-| `sources/mms/iso_mms/client/mms_client_named_variable_list.c` | Phase 5 |
-| `sources/mms/iso_mms/client/mms_client_files.c` | Deferred file services |
-| `sources/mms/iso_mms/client/mms_client_journals.c` | Deferred journal services |
-| `sources/mms/iso_mms/server/*` | Server-side — Phase 7 |
-| `sources/mms/iso_server/*` | Server-side — Phase 7 |
+| `sources/mms/iso_mms/client/mms_client_get_var_access.c` | Phase 5 (done) |
+| `sources/mms/iso_mms/client/mms_client_named_variable_list.c` | Phase 5 (done) |
+| `sources/mms/iso_mms/server/*` | Server-side — Phase 7 (done; behavioral reference for service dispatch and response encoding) |
+| `sources/mms/iso_server/*` | Phase 7 (done) and Phase 9 (reference for accept loop, connection lifecycle) |
+| `sources/mms/inc/mms_server.h` | Phase 7 (done; reference for public Server API shape and handler concepts) |
 | `sources/mms/iso_mms/asn1c/*` | Reference only — consult for tag values and PDU structure when implementing codecs |
-| `sources/mms/iso_cotp/cotp.c` | Likely replaced by `otfabric/go-cotp` |
+| `sources/mms/iso_cotp/cotp.c` | Phase 9 — reference for COTP wiring (replaced by `otfabric/go-cotp`) |
+| `sources/mms/iso_client/iso_client_connection.c` | Phase 9 — TCP connect states and ISO stack orchestration |
+
+### P3 — Read for InformationReport (Phase 10) and security (Phase 11)
+
+| Path | Why |
+|---|---|
+| `sources/mms/iso_mms/server/mms_information_report.c` | Phase 10 — server-side InformationReport encoding (tag `0xa3`) |
+| `sources/mms/iso_mms/client/mms_client_connection.c` | Phase 10 — client InformationReport parsing and `reportHandler` dispatch |
+| `sources/mms/iso_mms/asn1c/InformationReport.h` | Phase 10 — ASN.1 type structure |
+| `sources/mms/iso_mms/asn1c/UnconfirmedPDU.h` | Phase 10 — UnconfirmedPDU wrapper |
+| `sources/mms/iso_acse/acse.c` | Phase 11B — ACSE auth mechanisms and `checkAuthentication()` |
+| `sources/mms/inc/iso_connection_parameters.h` | Phase 11 — `AcseAuthenticationMechanism`, `AcseAuthenticator`, TLS config |
+
+### P4 — Read for file services (Phase 12) and journal services (Phase 13)
+
+| Path | Why |
+|---|---|
+| `sources/mms/iso_mms/server/mms_file_service.c` | Phase 12 — FRSM management, file attribute encoding, all file service handlers |
+| `sources/mms/iso_mms/client/mms_client_files.c` | Phase 12 — client-side file request/response handling |
+| `sources/mms/iso_mms/server/mms_journal_service.c` | Phase 13 — `mmsServer_handleReadJournalRequest()`, `LogStorage` callbacks |
+| `sources/mms/iso_mms/server/mms_journal.c` | Phase 13 — journal model: `MmsJournal_create()` |
+| `sources/mms/iso_mms/client/mms_client_journals.c` | Phase 13 — `mmsClient_parseReadJournalResponse()`, time range / start-after requests |
+| `sources/mms/inc_private/mms_device_model.h` | Phase 13 — `struct sMmsJournal`, domain journal list |
 
 ---
 
@@ -793,8 +1834,43 @@ These files define client behavior and ISO stack internals needed for implementa
 | `mms.Client` — GetNameList, variable lists | 5 | Browsing and metadata |
 | Fuzz targets | 6 | All PDU decode paths and custom helpers fuzzed |
 | Interop tests | 6 | Against C reference |
-| `_examples/` | 6 | Example programs |
+| `_examples/basic` | 6 | Client CLI example program |
 | GoDoc | 6 | Complete public API documentation |
+| Server API design doc | 7A | Public Server API proposal, package split, sharing rules |
+| `internal/isostack/server.go` | 7B | Server-side ISO stack orchestration |
+| `internal/serverconn/*` | 7C | Per-connection server runtime |
+| Server initiate negotiation | 7D | MMS Initiate Request/Response server-side handling |
+| Confirmed service dispatch | 7E | Generic confirmed request dispatch framework |
+| `server.go` — Identify, Status | 7F | First server services |
+| `server.go` — GetNameList | 7G | Server-side browsing with continuation |
+| `server.go` — GetVarAccess | 7H | Server-side type spec metadata |
+| `server.go` — Read | 7I | Server-side value serving |
+| `server.go` — Write | 7J | Server-side value writing |
+| Named variable lists (server) | 7K | Optional second milestone |
+| Server error mapping/hardening | 7L | Strict error handling, malformed request resilience |
+| Server integration test suite | 7M | Client↔server loopback tests, concurrency, shutdown |
+| `_examples/server-basic`, `_examples/server-readwrite` | 7N | Server example programs |
+| Server GoDoc | 7N | Documentation for all new public server types |
+| Server NVL handlers | 8 | DefineNVL, GetNVLAttrs, DeleteNVL server-side |
+| Registry NVL support | 8 | NVL storage, lookup, define, delete in registry |
+| NVL integration tests | 8 | Full lifecycle and negative tests |
+| `Dial(ctx, addr, opts)` | 9 | Real TCP + TPKT + COTP client dial |
+| `Server.ListenAndServe` | 9 | Real TCP accept with TPKT + COTP wiring |
+| Production `Transport` adapter | 9 | Concrete transport backed by go-tpkt + go-cotp |
+| TCP loopback integration tests | 9 | End-to-end over real TCP localhost |
+| `internal/pdu/informationreport.go` | 10 | InformationReport marshal/unmarshal |
+| Client reader loop | 10 | Background goroutine for inbound PDU dispatch |
+| `Client.OnInformationReport` | 10 | Callback registration for unconfirmed reports |
+| `ServerAssociation.SendInformationReport` | 10 | Server-side report push API |
+| TLS dial/listen options | 11A | `tls.Config` plumbing in runtime layer |
+| Peer certificate extraction | 11A | Transport-level identity surfacing |
+| ACSE auth hooks | 11B | Server association accept/reject policy |
+| `FileProvider` interface | 12 | Provider abstraction for server file services |
+| Client file API | 12 | FileDirectory, FileOpen, FileRead, FileClose |
+| File PDU codecs | 12 | Encode/decode for file service tags `0x48`–`0x4d` |
+| `JournalProvider` interface | 13 | Provider abstraction for server journal services |
+| Client journal API | 13 | ReadJournalTimeRange, ReadJournalStartAfter |
+| Journal PDU codecs | 13 | Encode/decode for ReadJournal request/response |
 | Test/fuzz backlog | Ongoing | Tracked in issues |
 
 ---
@@ -828,3 +1904,56 @@ These patterns are **banned** in `go-mms`:
 12. **Global state.** No package-level variables that affect behavior. No `init()` side effects.
 
 13. **Ignoring context.** Every blocking operation respects `context.Context`. No operations that can hang indefinitely.
+
+14. **Porting IsoServer / IsoConnection 1:1 from C.** Use them as behavioral reference only. The C code is thread-model + buffer-management heavy. In Go, the right split is: listener/accept → per-connection runtime → typed service dispatch → handler/model layer.
+
+15. **Exposing raw byte-buffer application callbacks.** The C server hands MMS bytes upward and expects response bytes back. The public Go server API operates on typed requests and responses, not raw buffers.
+
+16. **Tying the server to IEC 61850-style data models.** Server variables remain generic MMS named objects. No logical devices, no data-sets-as-IEC-concepts.
+
+17. **Starting with unconfirmed services on the server.** Keep `mms_information_report.c` out of the first server pass. Confirmed request/response services first.
+
+18. **Overengineering subscriptions, caches, or device models.** The first server is request/response oriented. No polling cache, no historical store, no subscription engine, no report engine, no device model class hierarchy.
+
+---
+
+## 15. Phase sequencing summary
+
+| Phase | Title | Status |
+|-------|-------|--------|
+| 0 | Skeleton, errors, logging | COMPLETE |
+| 1 | ASN.1/BER codecs | COMPLETE |
+| 2 | ISO stack (session/presentation/ACSE) | COMPLETE |
+| 3 | Client Initiate, Identify, Status | COMPLETE |
+| 4 | Client Read, Write, Value model | COMPLETE |
+| 5 | GetNameList, GetVarAccess, Named Variable Lists | COMPLETE |
+| 6 | Fuzz, interop, examples, docs | COMPLETE |
+| 7 | Server-side MMS (confirmed services) | COMPLETE |
+| 8 | Server Named Variable Lists | COMPLETE |
+| 9 | Transport integration (Dial / ListenAndServe) | COMPLETE |
+| 10 | InformationReport + async reader loop | COMPLETE |
+| 11A | TLS transport support | COMPLETE |
+| 11B | ACSE / application authentication hooks | COMPLETE |
+| 12 | File services (provider-based) | COMPLETE |
+| 13 | Journal services (provider-based) | COMPLETE |
+| 14 | Alternate access + component/array operations | COMPLETE |
+| 15 | NVL value operations + generic object addressing | COMPLETE |
+| 16 | File parity (rename + obtain-file) | COMPLETE |
+| 17 | Public utility pass (Value + TypeSpec helpers) | COMPLETE |
+
+Execution order for completed phases:
+1. Phase 9 — transport integration / real Dial / listener
+2. Phase 10 — InformationReport + reader loop + invoke correlation
+3. Phase 11 — TLS transport support (11A), then ACSE/application auth hooks (11B)
+4. Phase 12 — file services via provider abstraction
+5. Phase 13 — journal services via provider abstraction
+
+Execution order for parity phases (all complete):
+6. Phase 14 — alternate access model + component/array read/write
+7. Phase 15 — NVL value read/write + ReadObject/WriteObject convenience
+8. Phase 16 — file rename + obtain-file
+9. Phase 17 — Value.Clone/Equal/String + TypeSpec traversal helpers
+
+Key architectural decisions:
+- **TLS in connection runtime, ACSE auth in MMS association layer.**
+- **Background reader loop introduced in Phase 10 with InformationReport.**
