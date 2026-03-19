@@ -2409,3 +2409,259 @@ func TestServerConnDeleteAllAssocNVLs(t *testing.T) {
 		t.Fatalf("listAssocNVLs after deleteAll = %v, want empty", result.Names)
 	}
 }
+
+func TestServerConnAssocVarLifecycle(t *testing.T) {
+	sc := &ServerConn{}
+
+	v := Variable{
+		Name:     ObjectName{Scope: ObjectScopeAssociation, ItemID: "aaTemp"},
+		TypeSpec: TypeSpec{Type: ValueTypeFloat, FormatWidth: 32, ExponentWidth: 8},
+		Read: func(_ context.Context) (*Value, error) {
+			return NewFloat(21.5), nil
+		},
+	}
+	if err := sc.RegisterVariable(v); err != nil {
+		t.Fatalf("RegisterVariable: %v", err)
+	}
+
+	// Duplicate should fail.
+	if err := sc.RegisterVariable(v); err == nil {
+		t.Fatal("expected error for duplicate association variable")
+	}
+
+	// Lookup should succeed.
+	entry, ok := sc.lookupAssocVar("aaTemp")
+	if !ok || entry.ItemID != "aaTemp" {
+		t.Fatalf("lookupAssocVar = (%v, %v), want aaTemp", entry, ok)
+	}
+
+	// List should return the entry.
+	result := sc.listAssocVars("", 0)
+	if len(result.Names) != 1 || result.Names[0] != "aaTemp" {
+		t.Fatalf("listAssocVars = %v, want [aaTemp]", result.Names)
+	}
+}
+
+func TestServerConnAssocVarEmptyItemID(t *testing.T) {
+	sc := &ServerConn{}
+	err := sc.RegisterVariable(Variable{
+		Name:     ObjectName{Scope: ObjectScopeAssociation, ItemID: ""},
+		TypeSpec: TypeSpec{Type: ValueTypeBoolean},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty ItemID")
+	}
+}
+
+func TestServerRegisterVariableRejectsAssociationScope(t *testing.T) {
+	srv := testServer(t)
+	err := srv.RegisterVariable(Variable{
+		Name:     ObjectName{Scope: ObjectScopeAssociation, ItemID: "aaVar"},
+		TypeSpec: TypeSpec{Type: ValueTypeBoolean},
+	})
+	if err == nil {
+		t.Fatal("expected error for association-scope variable on Server")
+	}
+}
+
+func TestServerAssocVarReadWriteEndToEnd(t *testing.T) {
+	srv := testServer(t)
+
+	clientConn, serverConn := loopbackPair()
+	ctx := context.Background()
+
+	go func() {
+		_ = srv.Serve(ctx, serverConn)
+	}()
+
+	client, err := NewClient(ctx, clientConn, DialOptions{
+		Logger: slog.New(slog.NewTextHandler(newTestWriter(t), &slog.HandlerOptions{Level: slog.LevelDebug})),
+		MMS: MMSOptions{
+			MaxPDUSize:                65000,
+			MaxOutstandingCalling:     5,
+			MaxOutstandingCalled:      5,
+			DataStructureNestingLevel: 10,
+		},
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	defer client.Close(context.Background()) //nolint:errcheck
+
+	waitForConnections(t, srv, 1, 2*time.Second)
+	conns := srv.Connections()
+	if len(conns) != 1 {
+		t.Fatalf("expected 1 connection, got %d", len(conns))
+	}
+	sc := conns[0]
+
+	var temperature float64 = 21.5
+	var mu sync.Mutex
+
+	err = sc.RegisterVariable(Variable{
+		Name:     ObjectName{Scope: ObjectScopeAssociation, ItemID: "aaTemp"},
+		TypeSpec: TypeSpec{Type: ValueTypeFloat, FormatWidth: 32, ExponentWidth: 8},
+		Read: func(_ context.Context) (*Value, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			return NewFloat(temperature), nil
+		},
+		Write: func(_ context.Context, v *Value) error {
+			f, ok := v.Float64()
+			if !ok {
+				return errors.New("expected float")
+			}
+			mu.Lock()
+			temperature = f
+			mu.Unlock()
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RegisterVariable on ServerConn: %v", err)
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	aaName := ObjectName{Scope: ObjectScopeAssociation, ItemID: "aaTemp"}
+
+	// Read the association-scope variable.
+	readResult, err := client.ReadObject(reqCtx, aaName)
+	if err != nil {
+		t.Fatalf("ReadObject aaTemp: %v", err)
+	}
+	got, ok := readResult.Value.Float64()
+	if !ok || got != 21.5 {
+		t.Fatalf("Read value = %v, want 21.5", got)
+	}
+
+	// Write to the association-scope variable.
+	_, err = client.WriteObject(reqCtx, aaName, NewFloat(42.0))
+	if err != nil {
+		t.Fatalf("WriteObject aaTemp: %v", err)
+	}
+
+	// Read back.
+	readResult, err = client.ReadObject(reqCtx, aaName)
+	if err != nil {
+		t.Fatalf("ReadObject aaTemp after write: %v", err)
+	}
+	got, ok = readResult.Value.Float64()
+	if !ok || got != 42.0 {
+		t.Fatalf("Read after write = %v, want 42.0", got)
+	}
+}
+
+func TestServerAssocVarGetNameListEndToEnd(t *testing.T) {
+	srv := testServer(t)
+
+	clientConn, serverConn := loopbackPair()
+	ctx := context.Background()
+
+	go func() {
+		_ = srv.Serve(ctx, serverConn)
+	}()
+
+	client, err := NewClient(ctx, clientConn, DialOptions{
+		Logger: slog.New(slog.NewTextHandler(newTestWriter(t), &slog.HandlerOptions{Level: slog.LevelDebug})),
+		MMS: MMSOptions{
+			MaxPDUSize:                65000,
+			MaxOutstandingCalling:     5,
+			MaxOutstandingCalled:      5,
+			DataStructureNestingLevel: 10,
+		},
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	defer client.Close(context.Background()) //nolint:errcheck
+
+	waitForConnections(t, srv, 1, 2*time.Second)
+	conns := srv.Connections()
+	sc := conns[0]
+
+	// Register two association-scope variables.
+	for _, name := range []string{"beta", "alpha"} {
+		err := sc.RegisterVariable(Variable{
+			Name:     ObjectName{Scope: ObjectScopeAssociation, ItemID: ItemID(name)},
+			TypeSpec: TypeSpec{Type: ValueTypeBoolean},
+			Read: func(_ context.Context) (*Value, error) {
+				return NewBoolean(true), nil
+			},
+		})
+		if err != nil {
+			t.Fatalf("RegisterVariable %s: %v", name, err)
+		}
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	// List association-scope named variables.
+	nl, err := client.GetNameList(reqCtx, NameListRequest{
+		ObjectClass: ObjectClassNamedVariable,
+		Scope:       ObjectScopeAssociation,
+	})
+	if err != nil {
+		t.Fatalf("GetNameList: %v", err)
+	}
+	if len(nl.Names) != 2 {
+		t.Fatalf("Names = %v, want 2 entries", nl.Names)
+	}
+	// Should be sorted alphabetically.
+	if nl.Names[0] != "alpha" || nl.Names[1] != "beta" {
+		t.Errorf("Names = %v, want [alpha beta]", nl.Names)
+	}
+}
+
+func TestServerAssocVarGetVarAccessEndToEnd(t *testing.T) {
+	srv := testServer(t)
+
+	clientConn, serverConn := loopbackPair()
+	ctx := context.Background()
+
+	go func() {
+		_ = srv.Serve(ctx, serverConn)
+	}()
+
+	client, err := NewClient(ctx, clientConn, DialOptions{
+		Logger: slog.New(slog.NewTextHandler(newTestWriter(t), &slog.HandlerOptions{Level: slog.LevelDebug})),
+		MMS: MMSOptions{
+			MaxPDUSize:                65000,
+			MaxOutstandingCalling:     5,
+			MaxOutstandingCalled:      5,
+			DataStructureNestingLevel: 10,
+		},
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	defer client.Close(context.Background()) //nolint:errcheck
+
+	waitForConnections(t, srv, 1, 2*time.Second)
+	conns := srv.Connections()
+	sc := conns[0]
+
+	err = sc.RegisterVariable(Variable{
+		Name:     ObjectName{Scope: ObjectScopeAssociation, ItemID: "aaCounter"},
+		TypeSpec: TypeSpec{Type: ValueTypeInteger, Size: 32},
+		Read: func(_ context.Context) (*Value, error) {
+			return NewInteger(7), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RegisterVariable: %v", err)
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	attrs, err := client.GetVariableAccessAttributes(reqCtx, ObjectName{Scope: ObjectScopeAssociation, ItemID: "aaCounter"})
+	if err != nil {
+		t.Fatalf("GetVariableAccessAttributes: %v", err)
+	}
+	if attrs.TypeSpec.Type != ValueTypeInteger || attrs.TypeSpec.Size != 32 {
+		t.Errorf("TypeSpec = %+v, want Integer/32", attrs.TypeSpec)
+	}
+}

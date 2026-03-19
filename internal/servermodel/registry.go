@@ -108,9 +108,9 @@ func varKey(scope int, domain, itemID string) string {
 }
 
 // RegisterVariable adds a named variable. The variable's domain (if
-// domain-scoped) must already be registered. Association-scope variables
-// (Scope=2) are stored but not included in GetNameList responses; full
-// association-scope lifecycle management is not yet implemented.
+// domain-scoped) must already be registered. Association-scope
+// variables (Scope=2) should be registered on the per-connection
+// ServerConn, not here.
 func (r *Registry) RegisterVariable(entry *VarEntry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
