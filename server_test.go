@@ -15,6 +15,7 @@ import (
 
 	"github.com/otfabric/go-mms/internal/acse"
 	"github.com/otfabric/go-mms/internal/codec"
+	"github.com/otfabric/go-mms/internal/servermodel"
 )
 
 // loopbackPair creates a pair of connected transports for in-process testing.
@@ -2285,5 +2286,126 @@ func TestDiscardHandler(t *testing.T) {
 	h3 := h.WithGroup("test")
 	if h3 == nil {
 		t.Fatal("WithGroup returned nil")
+	}
+}
+
+func TestServerConnAbort(t *testing.T) {
+	srv := testServer(t)
+	client := connectClientServer(t, srv)
+	defer client.Close(context.Background()) //nolint:errcheck
+
+	waitForConnections(t, srv, 1, 2*time.Second)
+	conns := srv.Connections()
+	if len(conns) != 1 {
+		t.Fatalf("expected 1 connection, got %d", len(conns))
+	}
+
+	ctx := context.Background()
+	err := conns[0].Abort(ctx)
+	if err != nil {
+		t.Fatalf("Abort() error: %v", err)
+	}
+}
+
+func TestServerConnAbortClosed(t *testing.T) {
+	sc := &ServerConn{closed: true}
+	err := sc.Abort(context.Background())
+	if !errors.Is(err, ErrServerConnClosed) {
+		t.Fatalf("Abort() on closed conn = %v, want ErrServerConnClosed", err)
+	}
+}
+
+func TestServerConnSendUnsolicitedStatus(t *testing.T) {
+	srv := testServer(t)
+	client := connectClientServer(t, srv)
+	defer client.Close(context.Background()) //nolint:errcheck
+
+	waitForConnections(t, srv, 1, 2*time.Second)
+	conns := srv.Connections()
+	if len(conns) != 1 {
+		t.Fatalf("expected 1 connection, got %d", len(conns))
+	}
+
+	ctx := context.Background()
+	err := conns[0].SendUnsolicitedStatus(ctx, ServerStatus{
+		Logical:  VMDLogicalStatusStateChangesAllowed,
+		Physical: VMDPhysicalStatusOperational,
+	})
+	if err != nil {
+		t.Fatalf("SendUnsolicitedStatus() error: %v", err)
+	}
+}
+
+func TestServerConnSendUnsolicitedStatusClosed(t *testing.T) {
+	sc := &ServerConn{closed: true}
+	err := sc.SendUnsolicitedStatus(context.Background(), ServerStatus{})
+	if !errors.Is(err, ErrServerConnClosed) {
+		t.Fatalf("SendUnsolicitedStatus() on closed conn = %v, want ErrServerConnClosed", err)
+	}
+}
+
+func TestServerConnAssocNVLLifecycle(t *testing.T) {
+	sc := &ServerConn{}
+
+	entry := &servermodel.NVLEntry{
+		ItemID:    "testNVL",
+		Scope:     2,
+		Deletable: true,
+		Variables: []servermodel.NVLVariable{
+			{Scope: 0, ItemID: "v1"},
+		},
+	}
+	if err := sc.defineAssocNVL(entry); err != nil {
+		t.Fatalf("defineAssocNVL: %v", err)
+	}
+
+	// Duplicate should fail.
+	if err := sc.defineAssocNVL(entry); err == nil {
+		t.Fatal("expected error for duplicate NVL")
+	}
+
+	// Lookup should succeed.
+	got, ok := sc.lookupAssocNVL("testNVL")
+	if !ok || got.ItemID != "testNVL" {
+		t.Fatalf("lookupAssocNVL = (%v, %v), want testNVL", got, ok)
+	}
+
+	// List should return the entry.
+	result := sc.listAssocNVLs("", 0)
+	if len(result.Names) != 1 || result.Names[0] != "testNVL" {
+		t.Fatalf("listAssocNVLs = %v, want [testNVL]", result.Names)
+	}
+
+	// Delete should succeed.
+	if !sc.deleteAssocNVL("testNVL") {
+		t.Fatal("deleteAssocNVL returned false")
+	}
+
+	// Lookup should now fail.
+	_, ok = sc.lookupAssocNVL("testNVL")
+	if ok {
+		t.Fatal("lookupAssocNVL after delete should return false")
+	}
+}
+
+func TestServerConnDeleteAllAssocNVLs(t *testing.T) {
+	sc := &ServerConn{}
+
+	for _, name := range []string{"a", "b", "c"} {
+		_ = sc.defineAssocNVL(&servermodel.NVLEntry{
+			ItemID:    name,
+			Scope:     2,
+			Deletable: true,
+		})
+	}
+
+	matched, deleted := sc.deleteAllAssocNVLs()
+	if matched != 3 || deleted != 3 {
+		t.Fatalf("deleteAllAssocNVLs = (%d, %d), want (3, 3)", matched, deleted)
+	}
+
+	result := sc.listAssocNVLs("", 0)
+	if len(result.Names) != 0 {
+		t.Fatalf("listAssocNVLs after deleteAll = %v, want empty", result.Names)
 	}
 }

@@ -66,3 +66,29 @@ func MarshalRejectPDU(invokeID InvokeID, rejectType, rejectReason int) []byte {
 func MarshalConcludeResponse() []byte {
 	return asn1util.WrapPrimitive(12, nil)
 }
+
+// MarshalCancelError builds a CancelErrorPDU (context 8, constructed).
+//
+//	CancelErrorPDU ::= SEQUENCE {
+//	    originalInvokeID   [0] IMPLICIT Unsigned32,
+//	    serviceError       [2] IMPLICIT ServiceError
+//	}
+func MarshalCancelError(originalInvokeID InvokeID, errorClass, errorCode int) []byte {
+	invokeIDTLV := berutil.EncodeTLV(0x80, berutil.EncodeUint32(uint32(originalInvokeID)))
+
+	errorCodeTLV := berutil.EncodeTLV(byte(0x80+errorClass), berutil.EncodeInt(errorCode))
+	errorClassTLV := berutil.EncodeTLV(0xa0, errorCodeTLV)
+	serviceErrorTLV := berutil.EncodeTLV(0xa2, errorClassTLV)
+
+	content := make([]byte, 0, len(invokeIDTLV)+len(serviceErrorTLV))
+	content = append(content, invokeIDTLV...)
+	content = append(content, serviceErrorTLV...)
+
+	return asn1util.WrapConstructed(8, content)
+}
+
+// MarshalCancelResponse builds a CancelResponsePDU (context 7, primitive).
+// The content is the original invoke ID being cancelled.
+func MarshalCancelResponse(originalInvokeID InvokeID) []byte {
+	return asn1util.WrapPrimitive(7, berutil.EncodeUint32(uint32(originalInvokeID)))
+}

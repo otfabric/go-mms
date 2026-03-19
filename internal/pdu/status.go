@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/otfabric/go-mms/internal/asn1util"
+	"github.com/otfabric/go-mms/internal/berutil"
 	"github.com/otfabric/go-mms/internal/codec"
 )
 
@@ -42,4 +43,24 @@ func UnmarshalStatusResponse(serviceData asn1.RawValue) (*StatusResponse, error)
 		VMDLogicalStatus:  resp.VMDLogicalStatus,
 		VMDPhysicalStatus: resp.VMDPhysicalStatus,
 	}, nil
+}
+
+// MarshalUnsolicitedStatus builds a complete UnconfirmedPDU (0xa3)
+// containing an UnsolicitedStatus service ([1] in UnconfirmedService
+// CHOICE).
+//
+// BER layout:
+//
+//	0xa3 (UnconfirmedPDU) {
+//	  0xa1 (UnsolicitedStatus [1] in UnconfirmedService CHOICE) {
+//	    [0] IMPLICIT INTEGER — vmdLogicalStatus
+//	    [1] IMPLICIT INTEGER — vmdPhysicalStatus
+//	  }
+//	}
+func MarshalUnsolicitedStatus(logical, physical int) ([]byte, error) {
+	content := berutil.EncodeTLV(0x80, berutil.EncodeInt(logical))
+	content = append(content, berutil.EncodeTLV(0x81, berutil.EncodeInt(physical))...)
+
+	unsolicited := berutil.EncodeTLV(0xa1, content) // [1] UnsolicitedStatus
+	return berutil.EncodeTLV(asn1util.TagUnconfirmed, unsolicited), nil
 }

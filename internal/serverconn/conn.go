@@ -13,6 +13,7 @@ import (
 
 	"github.com/otfabric/go-mms/internal/acse"
 	"github.com/otfabric/go-mms/internal/asn1util"
+	"github.com/otfabric/go-mms/internal/berutil"
 	"github.com/otfabric/go-mms/internal/codec"
 	"github.com/otfabric/go-mms/internal/isostack"
 	"github.com/otfabric/go-mms/internal/pdu"
@@ -217,6 +218,10 @@ func (c *Conn) Serve(ctx context.Context) error {
 			if err := c.handleConfirmedRequest(ctx, content); err != nil {
 				return err
 			}
+		case pdu.PduCancelRequest:
+			if err := c.handleCancelRequest(ctx, content); err != nil {
+				return err
+			}
 		default:
 			c.logger.Warn("serverconn: unexpected PDU kind", "kind", kind)
 		}
@@ -286,4 +291,27 @@ func (c *Conn) handleRelease(ctx context.Context) error {
 	}
 	c.logger.Info("serverconn: released")
 	return nil
+}
+
+// SendAbort sends a protocol-level Abort PDU (Session ABORT / ACSE
+// ABRT) to the peer. This is a best-effort send — errors are returned
+// but the caller should close the transport regardless.
+func (c *Conn) SendAbort(ctx context.Context) error {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	data := isostack.EncodeAbort()
+	return c.transport.Send(ctx, data)
+}
+
+// handleCancelRequest handles CancelRequestPDU. Since requests are
+// processed synchronously, there is never an in-flight request to
+// cancel — respond with CancelError (invokeID-unknown).
+func (c *Conn) handleCancelRequest(ctx context.Context, content []byte) error {
+	invokeID, err := berutil.DecodeUnsigned(content)
+	if err != nil {
+		c.logger.Warn("serverconn: malformed cancel request", "error", err)
+		return nil
+	}
+	cancelErr := codec.MarshalCancelError(codec.InvokeID(invokeID), 10, 1) // cancel: invoke-id-unknown
+	return c.sendData(ctx, cancelErr)
 }

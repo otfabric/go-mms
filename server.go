@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 
 	"github.com/otfabric/go-mms/internal/acse"
@@ -96,6 +97,9 @@ type ServerConn struct {
 	conn      *serverconn.Conn
 	authToken any
 	frsmTable *frsmTable
+
+	assocNVLs     map[string]*servermodel.NVLEntry
+	assocNVLOrder []string
 }
 
 // NewServer creates a new MMS server with the given options.
@@ -360,6 +364,118 @@ func (s *Server) Connections() []*ServerConn {
 // or session context associated with the authenticated peer.
 func (sc *ServerConn) AuthToken() any {
 	return sc.authToken
+}
+
+func (sc *ServerConn) defineAssocNVL(entry *servermodel.NVLEntry) error {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	if sc.assocNVLs == nil {
+		sc.assocNVLs = make(map[string]*servermodel.NVLEntry)
+	}
+	if _, exists := sc.assocNVLs[entry.ItemID]; exists {
+		return fmt.Errorf("mms: association NVL %q already defined", entry.ItemID)
+	}
+	sc.assocNVLs[entry.ItemID] = entry
+	sc.assocNVLOrder = append(sc.assocNVLOrder, entry.ItemID)
+	sort.Strings(sc.assocNVLOrder)
+	return nil
+}
+
+func (sc *ServerConn) lookupAssocNVL(itemID string) (*servermodel.NVLEntry, bool) {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	e, ok := sc.assocNVLs[itemID]
+	return e, ok
+}
+
+func (sc *ServerConn) deleteAssocNVL(itemID string) bool {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	entry, ok := sc.assocNVLs[itemID]
+	if !ok || !entry.Deletable {
+		return false
+	}
+	delete(sc.assocNVLs, itemID)
+	for i, n := range sc.assocNVLOrder {
+		if n == itemID {
+			sc.assocNVLOrder = append(sc.assocNVLOrder[:i], sc.assocNVLOrder[i+1:]...)
+			break
+		}
+	}
+	return true
+}
+
+func (sc *ServerConn) listAssocNVLs(continueAfter string, maxNames int) servermodel.NameListResult {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	if maxNames <= 0 {
+		maxNames = 100
+	}
+	sorted := sc.assocNVLOrder
+	start := 0
+	if continueAfter != "" {
+		for i, name := range sorted {
+			if name == continueAfter {
+				start = i + 1
+				break
+			}
+		}
+	}
+	remaining := sorted[start:]
+	if len(remaining) > maxNames {
+		return servermodel.NameListResult{Names: remaining[:maxNames], MoreFollows: true}
+	}
+	return servermodel.NameListResult{Names: remaining, MoreFollows: false}
+}
+
+func (sc *ServerConn) deleteAllAssocNVLs() (matched, deleted int) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	for _, entry := range sc.assocNVLs {
+		matched++
+		if entry.Deletable {
+			deleted++
+		}
+	}
+	if deleted > 0 {
+		sc.assocNVLs = make(map[string]*servermodel.NVLEntry)
+		sc.assocNVLOrder = nil
+	}
+	return matched, deleted
+}
+
+// Abort sends a protocol-level MMS Abort PDU (ACSE ABRT wrapped in a
+// Session ABORT SPDU) to the connected client. This is a best-effort
+// send — the caller should close the transport regardless of the error.
+// Returns [ErrServerConnClosed] if the connection was already closed.
+func (sc *ServerConn) Abort(ctx context.Context) error {
+	sc.mu.RLock()
+	if sc.closed {
+		sc.mu.RUnlock()
+		return ErrServerConnClosed
+	}
+	sc.mu.RUnlock()
+
+	return sc.conn.SendAbort(ctx)
+}
+
+// SendUnsolicitedStatus sends an UnsolicitedStatus unconfirmed PDU to
+// the connected client. This provides the client with VMD status
+// without a preceding Status request.
+// Returns [ErrServerConnClosed] if the connection has been closed.
+func (sc *ServerConn) SendUnsolicitedStatus(ctx context.Context, status ServerStatus) error {
+	sc.mu.RLock()
+	if sc.closed {
+		sc.mu.RUnlock()
+		return ErrServerConnClosed
+	}
+	sc.mu.RUnlock()
+
+	mmsPdu, err := pdu.MarshalUnsolicitedStatus(int(status.Logical), int(status.Physical))
+	if err != nil {
+		return fmt.Errorf("mms: marshal unsolicited status: %w", err)
+	}
+	return sc.conn.SendUnconfirmed(ctx, mmsPdu)
 }
 
 // SendInformationReport sends an InformationReport to a specific
@@ -655,10 +771,13 @@ func (s *Server) handleGetNameList(ctx context.Context, body []byte) (int, bool,
 		result = s.registry.ListDomainNVLs(req.DomainID, req.ContinueAfter, 0)
 	case req.ObjectClass == int(ObjectClassNamedVariableList) && req.Scope == pdu.ScopeVMD:
 		result = s.registry.ListVMDNVLs(req.ContinueAfter, 0)
+	case req.ObjectClass == int(ObjectClassNamedVariableList) && req.Scope == pdu.ScopeAssociation:
+		sc, _ := ctx.Value(serverConnCtxKey{}).(*ServerConn)
+		if sc == nil {
+			return 0, false, nil, errUnsupportedFeature
+		}
+		result = sc.listAssocNVLs(req.ContinueAfter, 0)
 	default:
-		// Association-scope listing and other combinations are not
-		// currently supported. The registry stores association-scope
-		// objects but the listing/lifecycle is intentionally deferred.
 		return 0, false, nil, errUnsupportedFeature
 	}
 
@@ -739,7 +858,7 @@ func (s *Server) handleRead(ctx context.Context, body []byte) (int, bool, []byte
 
 	var specs []pdu.VariableSpecWire
 	if req.ListName != nil {
-		resolved, err := s.resolveNVLMembers(req.ListName)
+		resolved, err := s.resolveNVLMembers(ctx, req.ListName)
 		if err != nil {
 			return 0, false, nil, err
 		}
@@ -808,7 +927,7 @@ func (s *Server) handleWrite(ctx context.Context, body []byte) (int, bool, []byt
 
 	var specs []pdu.VariableSpecWire
 	if req.ListName != nil {
-		resolved, err := s.resolveNVLMembers(req.ListName)
+		resolved, err := s.resolveNVLMembers(ctx, req.ListName)
 		if err != nil {
 			return 0, false, nil, err
 		}
@@ -891,8 +1010,16 @@ func extractTypeSpec(ts any) *TypeSpec {
 }
 
 // resolveNVLMembers resolves a variableListName to the member variables.
-func (s *Server) resolveNVLMembers(listName *pdu.ObjectNameWire) ([]pdu.VariableSpecWire, error) {
-	entry, ok := s.registry.LookupNVL(listName.Scope, listName.DomainID, listName.ItemID)
+func (s *Server) resolveNVLMembers(ctx context.Context, listName *pdu.ObjectNameWire) ([]pdu.VariableSpecWire, error) {
+	var entry *servermodel.NVLEntry
+	var ok bool
+	if listName.Scope == pdu.ScopeAssociation {
+		if sc, _ := ctx.Value(serverConnCtxKey{}).(*ServerConn); sc != nil {
+			entry, ok = sc.lookupAssocNVL(listName.ItemID)
+		}
+	} else {
+		entry, ok = s.registry.LookupNVL(listName.Scope, listName.DomainID, listName.ItemID)
+	}
 	if !ok {
 		return nil, errObjectNonExistent
 	}
@@ -927,7 +1054,7 @@ func (s *Server) resolveNVLMembers(listName *pdu.ObjectNameWire) ([]pdu.Variable
 // --- DefineNamedVariableList ---
 
 //nolint:unparam // result []byte is always nil; signature matches the handler contract
-func (s *Server) handleDefineNVL(_ context.Context, body []byte) (int, bool, []byte, error) {
+func (s *Server) handleDefineNVL(ctx context.Context, body []byte) (int, bool, []byte, error) {
 	req, err := pdu.UnmarshalDefineNVLRequest(body)
 	if err != nil {
 		return 0, false, nil, errInvalidRequest
@@ -964,8 +1091,19 @@ func (s *Server) handleDefineNVL(_ context.Context, body []byte) (int, bool, []b
 		Deletable: true,
 		Variables: vars,
 	}
-	if err := s.registry.DefineNVL(entry); err != nil {
-		return 0, false, nil, errObjectNonExistent
+
+	if req.ListName.Scope == pdu.ScopeAssociation {
+		sc, _ := ctx.Value(serverConnCtxKey{}).(*ServerConn)
+		if sc == nil {
+			return 0, false, nil, errUnsupportedFeature
+		}
+		if err := sc.defineAssocNVL(entry); err != nil {
+			return 0, false, nil, errObjectNonExistent
+		}
+	} else {
+		if err := s.registry.DefineNVL(entry); err != nil {
+			return 0, false, nil, errObjectNonExistent
+		}
 	}
 
 	return asn1util.TagNumDefineNamedVariableList, true, nil, nil
@@ -973,13 +1111,21 @@ func (s *Server) handleDefineNVL(_ context.Context, body []byte) (int, bool, []b
 
 // --- GetNamedVariableListAttributes ---
 
-func (s *Server) handleGetNVLAttrs(_ context.Context, body []byte) (int, bool, []byte, error) {
+func (s *Server) handleGetNVLAttrs(ctx context.Context, body []byte) (int, bool, []byte, error) {
 	req, err := pdu.UnmarshalGetNVLAttrsRequest(body)
 	if err != nil {
 		return 0, false, nil, errInvalidRequest
 	}
 
-	entry, ok := s.registry.LookupNVL(req.ListName.Scope, req.ListName.DomainID, req.ListName.ItemID)
+	var entry *servermodel.NVLEntry
+	var ok bool
+	if req.ListName.Scope == pdu.ScopeAssociation {
+		if sc, _ := ctx.Value(serverConnCtxKey{}).(*ServerConn); sc != nil {
+			entry, ok = sc.lookupAssocNVL(req.ListName.ItemID)
+		}
+	} else {
+		entry, ok = s.registry.LookupNVL(req.ListName.Scope, req.ListName.DomainID, req.ListName.ItemID)
+	}
 	if !ok {
 		return 0, false, nil, errObjectNonExistent
 	}
@@ -1019,25 +1165,46 @@ func (s *Server) handleGetNVLAttrs(_ context.Context, body []byte) (int, bool, [
 
 // --- DeleteNamedVariableList ---
 
-func (s *Server) handleDeleteNVL(_ context.Context, body []byte) (int, bool, []byte, error) {
+func (s *Server) handleDeleteNVL(ctx context.Context, body []byte) (int, bool, []byte, error) {
 	req, err := pdu.UnmarshalDeleteNVLRequest(body)
 	if err != nil {
 		return 0, false, nil, errInvalidRequest
 	}
 
-	if req.ScopeOfDelete != 0 {
-		return 0, false, nil, errUnsupportedFeature
-	}
+	var matched, deleted int
 
-	matched := 0
-	deleted := 0
-	for _, n := range req.ListNames {
-		if _, ok := s.registry.LookupNVL(n.Scope, n.DomainID, n.ItemID); ok {
-			matched++
-			if s.registry.DeleteNVL(n.Scope, n.DomainID, n.ItemID) {
-				deleted++
+	switch req.ScopeOfDelete {
+	case 0: // specific list names
+		for _, n := range req.ListNames {
+			if n.Scope == pdu.ScopeAssociation {
+				sc, _ := ctx.Value(serverConnCtxKey{}).(*ServerConn)
+				if sc == nil {
+					continue
+				}
+				if _, ok := sc.lookupAssocNVL(n.ItemID); ok {
+					matched++
+					if sc.deleteAssocNVL(n.ItemID) {
+						deleted++
+					}
+				}
+			} else {
+				if _, ok := s.registry.LookupNVL(n.Scope, n.DomainID, n.ItemID); ok {
+					matched++
+					if s.registry.DeleteNVL(n.Scope, n.DomainID, n.ItemID) {
+						deleted++
+					}
+				}
 			}
 		}
+	case 1: // aa-specific: delete all association-scope NVLs for this connection
+		sc, _ := ctx.Value(serverConnCtxKey{}).(*ServerConn)
+		if sc == nil {
+			return 0, false, nil, errUnsupportedFeature
+		}
+		matched, deleted = sc.deleteAllAssocNVLs()
+	default:
+		// domain (2) and vmd (3) bulk scope not implemented (matches C reference)
+		return 0, false, nil, errUnsupportedFeature
 	}
 
 	respBytes, err := pdu.MarshalDeleteNVLResponse(matched, deleted)

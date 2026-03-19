@@ -22,6 +22,9 @@ const (
 	PduConcludeRequest
 	PduConcludeResponse
 	PduConcludeError
+	PduCancelRequest
+	PduCancelResponse
+	PduCancelError
 )
 
 var pduKindNames = [...]string{
@@ -36,6 +39,9 @@ var pduKindNames = [...]string{
 	"ConcludeRequest",
 	"ConcludeResponse",
 	"ConcludeError",
+	"CancelRequest",
+	"CancelResponse",
+	"CancelError",
 }
 
 func (k PduKind) String() string {
@@ -79,6 +85,12 @@ func classifyTag(tag byte) (PduKind, error) {
 		return PduConcludeResponse, nil
 	case asn1util.TagConcludeError:
 		return PduConcludeError, nil
+	case asn1util.TagCancelRequest:
+		return PduCancelRequest, nil
+	case asn1util.TagCancelResponse:
+		return PduCancelResponse, nil
+	case asn1util.TagCancelError:
+		return PduCancelError, nil
 	default:
 		return 0, fmt.Errorf("pdu: unknown MMS PDU tag 0x%02x", tag)
 	}

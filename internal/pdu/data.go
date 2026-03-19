@@ -13,24 +13,24 @@ const maxDataNestingDepth = 64
 
 // MMS Data CHOICE tags (context-specific implicit), per ISO 9506-2.
 const (
-	TagDataAccessError   byte = 0x80 // [0] IMPLICIT INTEGER
-	TagDataArray         byte = 0xa1 // [1] IMPLICIT SEQUENCE OF Data
-	TagDataStructure     byte = 0xa2 // [2] IMPLICIT SEQUENCE OF Data
-	TagDataBoolean       byte = 0x83 // [3] IMPLICIT BOOLEAN
-	TagDataBitString     byte = 0x84 // [4] IMPLICIT BIT STRING
-	TagDataInteger       byte = 0x85 // [5] IMPLICIT INTEGER
-	TagDataUnsigned      byte = 0x86 // [6] IMPLICIT unsigned INTEGER
-	TagDataFloat         byte = 0x87 // [7] IMPLICIT FloatingPoint
-	TagDataReal          byte = 0x88 // [8] IMPLICIT REAL (ASN.1 REAL encoding)
-	TagDataOctetString   byte = 0x89 // [9] IMPLICIT OCTET STRING
-	TagDataVisibleStr    byte = 0x8a // [10] IMPLICIT VisibleString
-	TagDataGenTime       byte = 0x8b // [11] IMPLICIT GeneralizedTime
-	TagDataBinaryTime    byte = 0x8c // [12] IMPLICIT TimeOfDay (4 or 6 bytes)
-	TagDataBCD           byte = 0x8d // [13] IMPLICIT INTEGER (BCD encoded)
-	TagDataBooleanArray  byte = 0x8e // [14] IMPLICIT BIT STRING (packed boolean array)
-	TagDataObjId         byte = 0x8f // [15] IMPLICIT OBJECT IDENTIFIER
-	TagDataMmsString     byte = 0x90 // [16] IMPLICIT MMSString (UTF-8)
-	TagDataUTCTime       byte = 0x91 // [17] IMPLICIT UtcTime (8 bytes)
+	TagDataAccessError  byte = 0x80 // [0] IMPLICIT INTEGER
+	TagDataArray        byte = 0xa1 // [1] IMPLICIT SEQUENCE OF Data
+	TagDataStructure    byte = 0xa2 // [2] IMPLICIT SEQUENCE OF Data
+	TagDataBoolean      byte = 0x83 // [3] IMPLICIT BOOLEAN
+	TagDataBitString    byte = 0x84 // [4] IMPLICIT BIT STRING
+	TagDataInteger      byte = 0x85 // [5] IMPLICIT INTEGER
+	TagDataUnsigned     byte = 0x86 // [6] IMPLICIT unsigned INTEGER
+	TagDataFloat        byte = 0x87 // [7] IMPLICIT FloatingPoint
+	TagDataReal         byte = 0x88 // [8] IMPLICIT REAL (ASN.1 REAL encoding)
+	TagDataOctetString  byte = 0x89 // [9] IMPLICIT OCTET STRING
+	TagDataVisibleStr   byte = 0x8a // [10] IMPLICIT VisibleString
+	TagDataGenTime      byte = 0x8b // [11] IMPLICIT GeneralizedTime
+	TagDataBinaryTime   byte = 0x8c // [12] IMPLICIT TimeOfDay (4 or 6 bytes)
+	TagDataBCD          byte = 0x8d // [13] IMPLICIT INTEGER (BCD encoded)
+	TagDataBooleanArray byte = 0x8e // [14] IMPLICIT BIT STRING (packed boolean array)
+	TagDataObjId        byte = 0x8f // [15] IMPLICIT OBJECT IDENTIFIER
+	TagDataMmsString    byte = 0x90 // [16] IMPLICIT MMSString (UTF-8)
+	TagDataUTCTime      byte = 0x91 // [17] IMPLICIT UtcTime (8 bytes)
 )
 
 // Defensive limit for access results decoders.
