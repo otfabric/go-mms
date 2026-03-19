@@ -20,7 +20,7 @@
 | Write | ✅ | ✅ | `Client.Write`, `WriteObject`, `WriteVariables`, `WriteComponent`, `WriteArrayElement`, `WriteNamedVariableList` | ✅ | ✅ | ✅ | ✅ | ✅ | Single/multi-variable; alternate access; NVL write by listName; partial-success semantics |
 | DefineNamedVariableList | ✅ | ✅ | `Client.DefineNamedVariableList`, `Server.RegisterNamedVariableList` | ✅ | ✅ | ✅ | ✅ | ❌ | All scopes; alternate access in member specs; server-side dynamic define via client request |
 | GetNamedVariableListAttributes | ✅ | ✅ | `Client.GetNamedVariableListAttributes` | ✅ | ✅ | ✅ | ✅ | ❌ | Returns deletable flag + member list with alternate access |
-| DeleteNamedVariableList | ✅ | ✅ | `Client.DeleteNamedVariableList` | ✅ | ✅ | ✅ | ✅ | ❌ | Returns `NumberMatched`/`NumberDeleted`; `scopeOfDelete=0` (specific) and `scopeOfDelete=1` (aa-specific) supported |
+| DeleteNamedVariableList | ✅ | ✅ | `Client.DeleteNamedVariableList`, `DeleteAllDomainNVLs`, `DeleteAllVMDNVLs` | ✅ | ✅ | ✅ | ✅ | ❌ | Returns `NumberMatched`/`NumberDeleted`; all four `scopeOfDelete` values supported: 0 (specific), 1 (aa-specific), 2 (domain bulk), 3 (VMD bulk) |
 | InformationReport | ✅ | ✅ | `Client.OnInformationReport`, `ServerConn.SendInformationReport`, `Server.Broadcast` | ✅ | ✅ | ✅ | ❌ | ❌ | Both list-of-variable and named-variable-list forms; concurrent with confirmed services; handler panic recovery |
 | FileOpen | ✅ | ✅ | `Client.FileOpen` | ✅ | ✅ | ✅ | ❌ | ❌ | FRSM state machine; returns frsmId, size, lastModified |
 | FileRead | ✅ | ✅ | `Client.FileRead`, `FileReadAll` | ✅ | ✅ | ✅ | ❌ | ❌ | Chunked read with `MoreFollows`; `FileReadAll` convenience |
@@ -88,7 +88,7 @@
 1. ~~No golden-file corpus~~ — **Resolved.** 33 golden hex fixtures in `testdata/golden/` covering all PDU services and codec envelopes.
 2. ~~Abort PDU (server→client)~~ — **Resolved.** `ServerConn.Abort()` sends ACSE ABRT before transport close.
 3. ~~Association-scope object listing~~ — **Resolved.** `GetNameList` for association-scope NVLs is now implemented with per-connection storage.
-4. ~~DeleteNamedVariableList scope~~ — **Resolved.** `scopeOfDelete=1` (aa-specific, delete all association NVLs) is now supported. Domain/VMD bulk scope intentionally unsupported (matches C reference).
+4. ~~DeleteNamedVariableList scope~~ — **Resolved.** All four `scopeOfDelete` values (0=specific, 1=aa-specific, 2=domain, 3=VMD) fully supported on both client and server. Goes beyond C reference which only supports `scopeOfDelete=0`.
 5. ~~No fuzz coverage for file/journal PDUs~~ — **Resolved.** 38 fuzz targets across all service categories.
 6. ~~Unsolicited Status~~ — **Resolved.** `ServerConn.SendUnsolicitedStatus()` sends UnconfirmedPDU with VMD status.
 7. ~~Cancel service~~ — **Resolved.** Server handles CancelRequestPDU and responds with CancelError (invoke-id-unknown, since requests are processed synchronously).
@@ -100,4 +100,3 @@
 | 1 | No live-wire interop testing | Medium-high | Quality | N/A | Interop tests use inline byte patterns. No automated harness connecting to a real MMS server or C reference. Requires Docker/CI infrastructure, not code porting. |
 | 2 | Semaphore, Event, Program Invocation services | Low | Completeness | Not in C either | ISO 9506-2 service groups with complex state machines. Zero implementations in the C reference (libIEC61850). Legacy MMS features rarely used in IEC 61850 deployments. Effort: very high (thousands of lines from standard alone). |
 | 3 | Segmented file transfer (ObtainFile) | Medium | Feature | **Fully in C** | C implements a multi-step state machine (~400 lines) with role reversal (server sends confirmed requests to client). Go currently delegates ObtainFile to FileProvider as a single synchronous operation. Requires new server→client confirmed request plumbing. Effort: ~500-800 lines. |
-| 4 | DeleteNVL bulk scope (domain/VMD) | Low | Completeness | Not in C either | `scopeOfDelete=2` (domain) and `scopeOfDelete=3` (VMD) return unsupported. C reference also returns unsupported for these scopes. Rarely used in practice. |

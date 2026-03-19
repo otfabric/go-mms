@@ -1299,8 +1299,14 @@ func (s *Server) handleDeleteNVL(ctx context.Context, body []byte) (int, bool, [
 			return 0, false, nil, errUnsupportedFeature
 		}
 		matched, deleted = sc.deleteAllAssocNVLs()
+	case 2: // domain-scope: delete all deletable NVLs in the specified domain
+		if req.DomainName == "" {
+			return 0, false, nil, errInvalidRequest
+		}
+		matched, deleted = s.registry.DeleteAllDomainNVLs(req.DomainName)
+	case 3: // VMD-scope: delete all deletable VMD-scoped NVLs
+		matched, deleted = s.registry.DeleteAllVMDNVLs()
 	default:
-		// domain (2) and vmd (3) bulk scope not implemented (matches C reference)
 		return 0, false, nil, errUnsupportedFeature
 	}
 
