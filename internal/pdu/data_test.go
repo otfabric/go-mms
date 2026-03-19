@@ -214,6 +214,61 @@ func TestDataUTCTimeRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDataUTCTimeQualityRoundTrip(t *testing.T) {
+	now := time.Date(2024, 6, 15, 12, 30, 45, 500000000, time.UTC)
+	quality := uint8(0x8a) // leap seconds known + 10-bit accuracy
+
+	dv := &DataValue{Tag: TagDataUTCTime, Time: now, TimeQuality: quality}
+	b, err := MarshalData(dv)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	got, _, err := UnmarshalDataElement(b, 0)
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.TimeQuality != quality {
+		t.Errorf("quality = 0x%02x, want 0x%02x", got.TimeQuality, quality)
+	}
+}
+
+func TestDataUTCTimeQualityAllFlags(t *testing.T) {
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name    string
+		quality uint8
+	}{
+		{"zero", 0x00},
+		{"leap_seconds_known", 0x80},
+		{"clock_failure", 0x40},
+		{"clock_not_synchronized", 0x20},
+		{"accuracy_10bit", 0x0a},
+		{"accuracy_unspecified", 0x1f},
+		{"all_flags_max_accuracy", 0xff},
+		{"c_default", 0x0a},
+		{"leap_and_accuracy", 0x8a},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dv := &DataValue{Tag: TagDataUTCTime, Time: now, TimeQuality: tt.quality}
+			b, err := MarshalData(dv)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			got, _, err := UnmarshalDataElement(b, 0)
+			if err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if got.TimeQuality != tt.quality {
+				t.Errorf("quality = 0x%02x, want 0x%02x", got.TimeQuality, tt.quality)
+			}
+		})
+	}
+}
+
 func TestDataBinaryTime6ByteRoundTrip(t *testing.T) {
 	now := time.Date(2024, 6, 15, 12, 30, 45, 0, time.UTC)
 	msEpoch := now.UnixMilli()

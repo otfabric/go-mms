@@ -66,7 +66,7 @@
 | BooleanArray     | ✅ | ✅ | ✅ | ✅ | `0x8e` [14] | Packed booleans using BIT STRING encoding |
 | ObjectIdentifier | ✅ | ✅ | ✅ | ✅ | `0x8f` [15] | ASN.1 OBJECT IDENTIFIER |
 | MmsString        | ✅ | ✅ | ✅ | ✅ | `0x90` [16] | MMSString |
-| UTCTime          | ✅ | ✅ | ✅ | ✅ | `0x91` [17] | MMS UTC time wire format |
+| UTCTime          | ✅ | ✅ | ✅ | ✅ | `0x91` [17] | MMS UTC time wire format; IEC 61850-8-1 TimeQuality byte fully exposed (`NewUTCTimeWithQuality`, `UTCTimeQuality()`, bit-mask constants); default quality `0x0a` matching C reference |
 
 ## Test Infrastructure
 
