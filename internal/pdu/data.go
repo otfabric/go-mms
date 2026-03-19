@@ -39,21 +39,21 @@ const maxAccessResults = 65536
 // DataValue is the internal representation of an MMS Data element.
 // Each field is populated based on the Tag value.
 type DataValue struct {
-	Tag       byte
-	Bool      bool
-	Int       int64
-	Uint      uint64
-	Float     float64
-	FloatWide bool         // true = float64 (9 bytes), false = float32 (5 bytes)
-	Bytes     []byte       // OctetString, BitString data
-	BitLen    int          // BitString: number of valid bits
-	Str       string       // VisibleString, MmsString
-	Time        time.Time // UTCTime
-	TimeQuality uint8     // UTCTime quality byte (IEC 61850-8-1 TimeQuality)
-	BinTimeMs   int64     // BinaryTime: ms since Unix epoch (6-byte) or ms since midnight (4-byte)
-	OID       []int        // ObjectIdentifier arcs
-	Elements  []*DataValue // Array, Structure children
-	ErrCode   int          // DataAccessError code
+	Tag         byte
+	Bool        bool
+	Int         int64
+	Uint        uint64
+	Float       float64
+	FloatWide   bool         // true = float64 (9 bytes), false = float32 (5 bytes)
+	Bytes       []byte       // OctetString, BitString data
+	BitLen      int          // BitString: number of valid bits
+	Str         string       // VisibleString, MmsString
+	Time        time.Time    // UTCTime
+	TimeQuality uint8        // UTCTime quality byte (IEC 61850-8-1 TimeQuality)
+	BinTimeMs   int64        // BinaryTime: ms since Unix epoch (6-byte) or ms since midnight (4-byte)
+	OID         []int        // ObjectIdentifier arcs
+	Elements    []*DataValue // Array, Structure children
+	ErrCode     int          // DataAccessError code
 }
 
 // MarshalData encodes a DataValue into BER wire format.
