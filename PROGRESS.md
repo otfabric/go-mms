@@ -4854,3 +4854,78 @@ Implemented full client and server support for `scopeOfDelete=2` (domain) and `s
 | `mms.go` | Added `Client.DeleteAllDomainNVLs`, `Client.DeleteAllVMDNVLs` |
 | `server_test.go` | Added 4 end-to-end integration tests |
 | `COMPLIANCE.md` | Updated DeleteNVL row; moved bulk scope from remaining to resolved gaps |
+
+---
+
+## UTCTime Quality Byte Support
+
+### Summary
+
+Implemented full IEC 61850-8-1 UTCTime quality byte support across all layers. The quality byte (byte 7 of the 8-byte UTCTime wire format) is now preserved end-to-end instead of being hardcoded to `0x00` on encode and silently discarded on decode.
+
+The C reference (libIEC61850) defaults to quality `0x0a` (10-bit sub-second accuracy). The Go implementation now matches this default.
+
+BinaryTime decoding for report timestamps was confirmed to already be fully implemented — no changes needed.
+
+### Quality Byte Bit Layout (IEC 61850-8-1)
+
+| Bit(s) | Mask   | Constant | Meaning |
+|--------|--------|----------|---------|
+| 7      | `0x80` | `UTCTimeQualityLeapSecondsKnown` | Leap second information available |
+| 6      | `0x40` | `UTCTimeQualityClockFailure` | Time source failure |
+| 5      | `0x20` | `UTCTimeQualityClockNotSynchronized` | Not synchronized to external reference |
+| 0-4    | `0x1F` | `UTCTimeQualityAccuracyMask` | Sub-second accuracy (bits, 0-24; 31 = unspecified) |
+
+### Changes by Layer
+
+**Layer 1: PDU internal (`internal/pdu/data.go`)**
+- Added `TimeQuality uint8` field to `DataValue` struct
+- `encodeUTCTime(t, quality)` now writes the quality byte to `buf[7]`
+- `decodeUTCTime(data)` now returns `(time.Time, uint8, error)`, extracting `data[7]` as quality
+- Callers in `MarshalData` and `decodeDataContentWithDepth` updated to thread quality through
+
+**Layer 2: Public Value type (`value.go`)**
+- Added `timeQuality uint8` field to `Value` struct
+- Added `UTCTimeQuality() uint8` accessor (returns 0 for non-UTCTime values)
+- `NewUTCTime(t)` now defaults to quality `0x0a` (matching C reference)
+- Added `NewUTCTimeWithQuality(t, quality)` constructor for explicit quality
+- `Clone()` copies `timeQuality`
+- `Equal()` compares `timeQuality`
+- `String()` includes `(q=0x0a)` suffix
+
+**Layer 3: Wire-to-public conversion (`mms.go`)**
+- `valueToDataValue`: copies `v.timeQuality` to `DataValue.TimeQuality`
+- `dataValueToValue`: copies `dv.TimeQuality` to `Value.timeQuality`
+
+**Layer 4: Public constants (`value.go`)**
+- `UTCTimeQualityLeapSecondsKnown` (`0x80`)
+- `UTCTimeQualityClockFailure` (`0x40`)
+- `UTCTimeQualityClockNotSynchronized` (`0x20`)
+- `UTCTimeQualityAccuracyMask` (`0x1F`)
+- `UTCTimeQualityAccuracyUnspecified` (`0x1F`)
+
+### Tests Added
+
+**PDU layer (`internal/pdu/data_test.go`):**
+- `TestDataUTCTimeQualityRoundTrip` — encode with quality `0x8a`, decode, verify preserved
+- `TestDataUTCTimeQualityAllFlags` — 9 subtests covering zero, individual flags, combined flags, C default, and all-flags-set
+
+**Value layer (`value_test.go`):**
+- `TestValueUTCTimeDefaultQuality` — `NewUTCTime` defaults to `0x0a`
+- `TestValueUTCTimeWithQuality` — explicit quality via `NewUTCTimeWithQuality`
+- `TestValueUTCTimeQualityWrongType` — `UTCTimeQuality()` returns 0 for non-UTCTime
+- `TestValueUTCTimeQualityClone` — quality preserved through `Clone()`
+- `TestValueUTCTimeEqualDifferentQuality` — `Equal()` returns false for different quality
+- `TestValueUTCTimeString` — `String()` includes quality hex
+- `TestValueUTCTimeQualityConstants` — constant values match IEC 61850-8-1
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `internal/pdu/data.go` | Added `TimeQuality` to `DataValue`; updated `encodeUTCTime`/`decodeUTCTime` signatures |
+| `internal/pdu/data_test.go` | Added 2 test functions (10 subtests total) |
+| `value.go` | Added quality field, accessor, constants, `NewUTCTimeWithQuality`; updated `NewUTCTime` default, `Clone`, `Equal`, `String` |
+| `value_test.go` | Added 7 test functions |
+| `mms.go` | Updated `valueToDataValue` and `dataValueToValue` to thread quality |
+| `COMPLIANCE.md` | Updated UTCTime row to document quality support |

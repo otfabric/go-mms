@@ -48,8 +48,9 @@ type DataValue struct {
 	Bytes     []byte       // OctetString, BitString data
 	BitLen    int          // BitString: number of valid bits
 	Str       string       // VisibleString, MmsString
-	Time      time.Time    // UTCTime
-	BinTimeMs int64        // BinaryTime: ms since Unix epoch (6-byte) or ms since midnight (4-byte)
+	Time        time.Time // UTCTime
+	TimeQuality uint8     // UTCTime quality byte (IEC 61850-8-1 TimeQuality)
+	BinTimeMs   int64     // BinaryTime: ms since Unix epoch (6-byte) or ms since midnight (4-byte)
 	OID       []int        // ObjectIdentifier arcs
 	Elements  []*DataValue // Array, Structure children
 	ErrCode   int          // DataAccessError code
@@ -87,7 +88,7 @@ func MarshalData(v *DataValue) ([]byte, error) {
 		return berutil.EncodeTLV(TagDataMmsString, []byte(v.Str)), nil
 
 	case TagDataUTCTime:
-		return berutil.EncodeTLV(TagDataUTCTime, encodeUTCTime(v.Time)), nil
+		return berutil.EncodeTLV(TagDataUTCTime, encodeUTCTime(v.Time, v.TimeQuality)), nil
 
 	case TagDataBinaryTime:
 		return berutil.EncodeTLV(TagDataBinaryTime, encodeBinaryTime(v.BinTimeMs)), nil
@@ -249,11 +250,11 @@ func decodeDataContentWithDepth(tag byte, content []byte, depth int) (*DataValue
 		return &DataValue{Tag: tag, Str: string(content)}, nil
 
 	case TagDataUTCTime:
-		t, err := decodeUTCTime(content)
+		t, quality, err := decodeUTCTime(content)
 		if err != nil {
 			return nil, fmt.Errorf("pdu: utc time: %w", err)
 		}
-		return &DataValue{Tag: tag, Time: t}, nil
+		return &DataValue{Tag: tag, Time: t, TimeQuality: quality}, nil
 
 	case TagDataBinaryTime:
 		ms, err := decodeBinaryTime(content)
@@ -459,7 +460,7 @@ func decodeBitString(data []byte) ([]byte, int, error) {
 
 // UTCTime encoding: 4 bytes seconds + 3 bytes fraction + 1 byte quality
 
-func encodeUTCTime(t time.Time) []byte {
+func encodeUTCTime(t time.Time, quality uint8) []byte {
 	buf := make([]byte, 8)
 	secs := uint32(t.Unix())
 	binary.BigEndian.PutUint32(buf[0:4], secs)
@@ -468,18 +469,18 @@ func encodeUTCTime(t time.Time) []byte {
 	buf[4] = byte(frac >> 16)
 	buf[5] = byte(frac >> 8)
 	buf[6] = byte(frac)
-	buf[7] = 0x00 // quality: no flags
+	buf[7] = quality
 	return buf
 }
 
-func decodeUTCTime(data []byte) (time.Time, error) {
+func decodeUTCTime(data []byte) (time.Time, uint8, error) {
 	if len(data) != 8 {
-		return time.Time{}, fmt.Errorf("UTC time must be 8 bytes, got %d", len(data))
+		return time.Time{}, 0, fmt.Errorf("UTC time must be 8 bytes, got %d", len(data))
 	}
 	secs := binary.BigEndian.Uint32(data[0:4])
 	frac := uint32(data[4])<<16 | uint32(data[5])<<8 | uint32(data[6])
 	nanos := int64(float64(frac) / float64(1<<24) * 1e9)
-	return time.Unix(int64(secs), nanos).UTC(), nil
+	return time.Unix(int64(secs), nanos).UTC(), data[7], nil
 }
 
 // BinaryTime encoding:

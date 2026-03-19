@@ -2,6 +2,7 @@ package mms
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -122,6 +123,87 @@ func TestValueUTCTime(t *testing.T) {
 	got, ok := v.UTCTime()
 	if !ok || !got.Equal(now) {
 		t.Errorf("UTCTime() = (%v, %v), want (%v, true)", got, ok, now)
+	}
+}
+
+func TestValueUTCTimeDefaultQuality(t *testing.T) {
+	v := NewUTCTime(time.Now())
+	if q := v.UTCTimeQuality(); q != 0x0a {
+		t.Errorf("UTCTimeQuality() = 0x%02x, want 0x0a (C reference default)", q)
+	}
+}
+
+func TestValueUTCTimeWithQuality(t *testing.T) {
+	now := time.Now().UTC()
+	quality := UTCTimeQualityLeapSecondsKnown | 0x0a
+	v := NewUTCTimeWithQuality(now, quality)
+
+	got, ok := v.UTCTime()
+	if !ok || !got.Equal(now) {
+		t.Errorf("UTCTime() = (%v, %v), want (%v, true)", got, ok, now)
+	}
+	if q := v.UTCTimeQuality(); q != quality {
+		t.Errorf("UTCTimeQuality() = 0x%02x, want 0x%02x", q, quality)
+	}
+}
+
+func TestValueUTCTimeQualityWrongType(t *testing.T) {
+	v := NewInteger(42)
+	if q := v.UTCTimeQuality(); q != 0 {
+		t.Errorf("UTCTimeQuality() on Integer = 0x%02x, want 0", q)
+	}
+}
+
+func TestValueUTCTimeQualityClone(t *testing.T) {
+	now := time.Now().UTC()
+	quality := UTCTimeQualityClockFailure | UTCTimeQualityClockNotSynchronized | 0x05
+	v := NewUTCTimeWithQuality(now, quality)
+	c := v.Clone()
+
+	if q := c.UTCTimeQuality(); q != quality {
+		t.Errorf("cloned quality = 0x%02x, want 0x%02x", q, quality)
+	}
+	if !c.Equal(v) {
+		t.Error("cloned value should equal original")
+	}
+}
+
+func TestValueUTCTimeEqualDifferentQuality(t *testing.T) {
+	now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	v1 := NewUTCTimeWithQuality(now, 0x0a)
+	v2 := NewUTCTimeWithQuality(now, 0x8a)
+	if v1.Equal(v2) {
+		t.Error("Equal should be false when quality differs")
+	}
+}
+
+func TestValueUTCTimeString(t *testing.T) {
+	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	v := NewUTCTimeWithQuality(now, 0x8a)
+	s := v.String()
+	if s == "" {
+		t.Error("String() should not be empty")
+	}
+	if !strings.Contains(s, "q=0x8a") {
+		t.Errorf("String() = %q, should contain quality", s)
+	}
+}
+
+func TestValueUTCTimeQualityConstants(t *testing.T) {
+	if UTCTimeQualityLeapSecondsKnown != 0x80 {
+		t.Error("LeapSecondsKnown should be 0x80")
+	}
+	if UTCTimeQualityClockFailure != 0x40 {
+		t.Error("ClockFailure should be 0x40")
+	}
+	if UTCTimeQualityClockNotSynchronized != 0x20 {
+		t.Error("ClockNotSynchronized should be 0x20")
+	}
+	if UTCTimeQualityAccuracyMask != 0x1F {
+		t.Error("AccuracyMask should be 0x1F")
+	}
+	if UTCTimeQualityAccuracyUnspecified != 0x1F {
+		t.Error("AccuracyUnspecified should be 0x1F")
 	}
 }
 

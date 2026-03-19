@@ -7,6 +7,30 @@ import (
 	"time"
 )
 
+// UTCTime quality byte bit masks (IEC 61850-8-1 TimeQuality).
+const (
+	// UTCTimeQualityLeapSecondsKnown indicates leap second information
+	// is available from the time source.
+	UTCTimeQualityLeapSecondsKnown uint8 = 0x80
+
+	// UTCTimeQualityClockFailure indicates the time source has
+	// experienced a failure.
+	UTCTimeQualityClockFailure uint8 = 0x40
+
+	// UTCTimeQualityClockNotSynchronized indicates the time source is
+	// not synchronized to an external reference.
+	UTCTimeQualityClockNotSynchronized uint8 = 0x20
+
+	// UTCTimeQualityAccuracyMask selects the 5-bit sub-second time
+	// accuracy field (bits 0-4). The value represents the number of
+	// significant bits of sub-second time (0-24; 31 = unspecified).
+	UTCTimeQualityAccuracyMask uint8 = 0x1F
+
+	// UTCTimeQualityAccuracyUnspecified is the accuracy value meaning
+	// the sub-second accuracy is not specified.
+	UTCTimeQualityAccuracyUnspecified uint8 = 0x1F
+)
+
 // Value represents an MMS typed data value.
 //
 // Create values with the typed constructors:
@@ -40,6 +64,7 @@ type Value struct {
 	bitLen      int    // BitString: number of valid bits
 	stringVal   string // VisibleString, MmsString
 	timeVal     time.Time
+	timeQuality uint8 // UTCTime quality byte (IEC 61850-8-1 TimeQuality)
 	binaryTime  int64
 	elementsVal []*Value // Structure, Array
 	accessErr   DataAccessErrorCode
@@ -172,6 +197,21 @@ func (v *Value) UTCTime() (val time.Time, ok bool) {
 		return time.Time{}, false
 	}
 	return v.timeVal, true
+}
+
+// UTCTimeQuality returns the IEC 61850-8-1 TimeQuality byte for a
+// [ValueTypeUTCTime] value. Returns 0 for non-UTCTime values.
+//
+// Bit layout:
+//   - Bit 7 (0x80): Leap Seconds Known
+//   - Bit 6 (0x40): Clock Failure
+//   - Bit 5 (0x20): Clock Not Synchronized
+//   - Bits 0-4 (0x1F): Sub-second time accuracy (significant bits; 31 = unspecified)
+func (v *Value) UTCTimeQuality() uint8 {
+	if v.typ != ValueTypeUTCTime {
+		return 0
+	}
+	return v.timeQuality
 }
 
 // BinaryTime returns the binary time as milliseconds. ok is false if
@@ -312,9 +352,19 @@ func NewMmsString(s string) *Value {
 	return &Value{typ: ValueTypeMmsString, stringVal: s}
 }
 
-// NewUTCTime creates a [Value] of type [ValueTypeUTCTime].
+// NewUTCTime creates a [Value] of type [ValueTypeUTCTime] with a
+// default quality of 0x0a (10-bit sub-second accuracy), matching the
+// libIEC61850 C reference default.
 func NewUTCTime(t time.Time) *Value {
-	return &Value{typ: ValueTypeUTCTime, timeVal: t}
+	return &Value{typ: ValueTypeUTCTime, timeVal: t, timeQuality: 0x0a}
+}
+
+// NewUTCTimeWithQuality creates a [Value] of type [ValueTypeUTCTime]
+// with an explicit IEC 61850-8-1 TimeQuality byte. See
+// [UTCTimeQualityLeapSecondsKnown] and related constants for bit
+// definitions.
+func NewUTCTimeWithQuality(t time.Time, quality uint8) *Value {
+	return &Value{typ: ValueTypeUTCTime, timeVal: t, timeQuality: quality}
 }
 
 // NewBinaryTime creates a [Value] of type [ValueTypeBinaryTime].
@@ -388,17 +438,18 @@ func (v *Value) Clone() *Value {
 		return nil
 	}
 	c := &Value{
-		typ:        v.typ,
-		boolVal:    v.boolVal,
-		intVal:     v.intVal,
-		uintVal:    v.uintVal,
-		floatVal:   v.floatVal,
-		bitLen:     v.bitLen,
-		stringVal:  v.stringVal,
-		timeVal:    v.timeVal,
-		binaryTime: v.binaryTime,
-		accessErr:  v.accessErr,
-		bytesVal:   copyBytes(v.bytesVal),
+		typ:         v.typ,
+		boolVal:     v.boolVal,
+		intVal:      v.intVal,
+		uintVal:     v.uintVal,
+		floatVal:    v.floatVal,
+		bitLen:      v.bitLen,
+		stringVal:   v.stringVal,
+		timeVal:     v.timeVal,
+		timeQuality: v.timeQuality,
+		binaryTime:  v.binaryTime,
+		accessErr:   v.accessErr,
+		bytesVal:    copyBytes(v.bytesVal),
 	}
 	if v.oidVal != nil {
 		c.oidVal = make([]int, len(v.oidVal))
@@ -441,7 +492,7 @@ func (v *Value) Equal(other *Value) bool {
 	case ValueTypeVisibleString, ValueTypeMmsString:
 		return v.stringVal == other.stringVal
 	case ValueTypeUTCTime:
-		return v.timeVal.Equal(other.timeVal)
+		return v.timeVal.Equal(other.timeVal) && v.timeQuality == other.timeQuality
 	case ValueTypeBinaryTime:
 		return v.binaryTime == other.binaryTime
 	case ValueTypeGeneralizedTime:
@@ -503,7 +554,7 @@ func (v *Value) String() string {
 	case ValueTypeMmsString:
 		return fmt.Sprintf("MmsString(%q)", v.stringVal)
 	case ValueTypeUTCTime:
-		return v.timeVal.Format(time.RFC3339)
+		return fmt.Sprintf("%s(q=0x%02x)", v.timeVal.Format(time.RFC3339), v.timeQuality)
 	case ValueTypeBinaryTime:
 		return fmt.Sprintf("BinaryTime(%d ms)", v.binaryTime)
 	case ValueTypeStructure:
