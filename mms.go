@@ -2010,6 +2010,10 @@ func valueToDataValue(v *Value) (*pdu.DataValue, error) {
 		oid := make([]int, len(v.oidVal))
 		copy(oid, v.oidVal)
 		return &pdu.DataValue{Tag: pdu.TagDataObjId, OID: oid}, nil
+	case ValueTypeReal:
+		return &pdu.DataValue{Tag: pdu.TagDataReal, Float: v.floatVal}, nil
+	case ValueTypeBooleanArray:
+		return &pdu.DataValue{Tag: pdu.TagDataBooleanArray, Bytes: copyBytes(v.bytesVal), BitLen: v.bitLen}, nil
 	case ValueTypeDataAccessError:
 		return nil, fmt.Errorf("cannot marshal DataAccessError as writable MMS Data value")
 	default:
@@ -2071,6 +2075,10 @@ func dataValueToValue(dv *pdu.DataValue) (*Value, error) {
 		oid := make([]int, len(dv.OID))
 		copy(oid, dv.OID)
 		return &Value{typ: ValueTypeObjectIdentifier, oidVal: oid}, nil
+	case pdu.TagDataReal:
+		return &Value{typ: ValueTypeReal, floatVal: dv.Float}, nil
+	case pdu.TagDataBooleanArray:
+		return &Value{typ: ValueTypeBooleanArray, bytesVal: copyBytes(dv.Bytes), bitLen: dv.BitLen}, nil
 	case pdu.TagDataAccessError:
 		return &Value{typ: ValueTypeDataAccessError, accessErr: DataAccessErrorCode(dv.ErrCode)}, nil
 	default:

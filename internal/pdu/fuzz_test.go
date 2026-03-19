@@ -2,6 +2,7 @@ package pdu
 
 import (
 	"encoding/asn1"
+	"math"
 	"testing"
 	"time"
 
@@ -81,7 +82,7 @@ func FuzzUnmarshalDataElement(f *testing.F) {
 	f.Add(berutil.EncodeTLV(0x8d, []byte{42}))
 	// object identifier (1.2.840.10004)
 	oidContent, _ := berutil.EncodeObjectIdentifier([]int{1, 2, 840, 10004})
-	f.Add(berutil.EncodeTLV(0x88, oidContent))
+	f.Add(berutil.EncodeTLV(0x8f, oidContent))
 	// empty
 	f.Add([]byte{})
 	// truncated
@@ -501,6 +502,71 @@ func FuzzDecodeBCD(f *testing.F) {
 		}
 		if dv.Int != dv2.Int {
 			t.Fatalf("round-trip mismatch: %d vs %d", dv.Int, dv2.Int)
+		}
+	})
+}
+
+// FuzzDecodeReal fuzzes the ASN.1 REAL data element decoder.
+func FuzzDecodeReal(f *testing.F) {
+	f.Add(encodeASN1Real(0))
+	f.Add(encodeASN1Real(1.0))
+	f.Add(encodeASN1Real(-1.0))
+	f.Add(encodeASN1Real(3.14159265358979))
+	f.Add(encodeASN1Real(math.MaxFloat64))
+	f.Add(encodeASN1Real(math.SmallestNonzeroFloat64))
+	f.Add(encodeASN1Real(math.Inf(1)))
+	f.Add(encodeASN1Real(math.Inf(-1)))
+	f.Add([]byte{0x42}) // NaN
+	f.Add([]byte{0x43}) // -0
+	f.Add([]byte{})
+
+	f.Fuzz(func(t *testing.T, content []byte) {
+		data := berutil.EncodeTLV(TagDataReal, content)
+		dv, _, err := UnmarshalDataElement(data, 0)
+		if err != nil {
+			return
+		}
+		encoded, err := MarshalData(dv)
+		if err != nil {
+			t.Fatalf("re-encode failed: %v", err)
+		}
+		dv2, _, err := UnmarshalDataElement(encoded, 0)
+		if err != nil {
+			t.Fatalf("re-decode failed: %v", err)
+		}
+		if math.IsNaN(dv.Float) && math.IsNaN(dv2.Float) {
+			return
+		}
+		if dv.Float != dv2.Float {
+			t.Fatalf("round-trip Real mismatch: %v vs %v", dv.Float, dv2.Float)
+		}
+	})
+}
+
+// FuzzDecodeBooleanArray fuzzes the BooleanArray data element decoder.
+func FuzzDecodeBooleanArray(f *testing.F) {
+	f.Add(encodeBitString([]byte{0xff}, 8))
+	f.Add(encodeBitString([]byte{0xaa, 0x55}, 16))
+	f.Add(encodeBitString([]byte{0xf0}, 4))
+	f.Add(encodeBitString(nil, 0))
+	f.Add([]byte{0x00})
+
+	f.Fuzz(func(t *testing.T, content []byte) {
+		data := berutil.EncodeTLV(TagDataBooleanArray, content)
+		dv, _, err := UnmarshalDataElement(data, 0)
+		if err != nil {
+			return
+		}
+		encoded, err := MarshalData(dv)
+		if err != nil {
+			t.Fatalf("re-encode failed: %v", err)
+		}
+		dv2, _, err := UnmarshalDataElement(encoded, 0)
+		if err != nil {
+			t.Fatalf("re-decode failed: %v", err)
+		}
+		if dv.BitLen != dv2.BitLen {
+			t.Fatalf("round-trip BooleanArray bitLen mismatch: %d vs %d", dv.BitLen, dv2.BitLen)
 		}
 	})
 }

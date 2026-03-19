@@ -45,24 +45,26 @@
 
 ## Data Type Support
 
-| MMS Type | Encode | Decode | Round-trip Test | Fuzzed | Notes |
-|----------|:------:|:------:|:---------------:|:------:|-------|
-| Boolean | ✅ | ✅ | ✅ | ✅ | Tag `0x83` |
-| Integer | ✅ | ✅ | ✅ | ✅ | Signed, variable-width; up to 8-byte encoding |
-| Unsigned | ✅ | ✅ | ✅ | ✅ | Unsigned, variable-width; up to 9-byte (with leading zero) |
-| Float | ✅ | ✅ | ✅ | ✅ | IEEE 754 float32 and float64; exponent-width detection |
-| BitString | ✅ | ✅ | ✅ | ✅ | Unused-bits prefix; empty bit-string support |
-| OctetString | ✅ | ✅ | ✅ | ✅ | Raw byte sequences |
-| VisibleString | ✅ | ✅ | ✅ | ✅ | ISO 646 strings |
-| MmsString | ✅ | ✅ | ✅ | ✅ | UTF-8 encoded |
-| UTCTime | ✅ | ✅ | ✅ | ✅ | 8-byte or 12-byte wire format |
-| BinaryTime | ✅ | ✅ | ✅ | ✅ | 4-byte (days) and 6-byte (ms) forms |
-| GeneralizedTime | ✅ | ✅ | ✅ | ✅ | ISO 8601 format |
-| BCD | ✅ | ✅ | ✅ | ✅ | Binary-coded decimal |
-| ObjectIdentifier | ✅ | ✅ | ✅ | ✅ | ASN.1 OID |
-| Array | ✅ | ✅ | ✅ | ✅ | Nested, recursive decode |
-| Structure | ✅ | ✅ | ✅ | ✅ | Nested, recursive decode; named components in TypeSpec |
-| DataAccessError | ✅ | ✅ | ✅ | ✅ | Per-variable error in Read/Write results |
+| MMS Data Variant | Encode | Decode | Round-trip Test | Fuzzed | Tag | Notes |
+|------------------|:------:|:------:|:---------------:|:------:|:-------------------:|-------|
+| DataAccessError  | ✅ | ✅ | ✅ | ✅ | `0x80` [0]  | Per-variable error in Read/Write results |
+| Array            | ✅ | ✅ | ✅ | ✅ | `0xa1` [1]  | Recursive/nested decode |
+| Structure        | ✅ | ✅ | ✅ | ✅ | `0xa2` [2]  | Recursive/nested decode |
+| Boolean          | ✅ | ✅ | ✅ | ✅ | `0x83` [3]  | |
+| BitString        | ✅ | ✅ | ✅ | ✅ | `0x84` [4]  | BIT STRING with unused-bits prefix |
+| Integer          | ✅ | ✅ | ✅ | ✅ | `0x85` [5]  | Signed BER integer |
+| Unsigned         | ✅ | ✅ | ✅ | ✅ | `0x86` [6]  | Unsigned BER integer |
+| FloatingPoint    | ✅ | ✅ | ✅ | ✅ | `0x87` [7]  | MMS FloatingPoint, not ASN.1 REAL |
+| Real             | ✅ | ✅ | ✅ | ✅ | `0x88` [8]  | ASN.1 REAL |
+| OctetString      | ✅ | ✅ | ✅ | ✅ | `0x89` [9]  | Raw bytes |
+| VisibleString    | ✅ | ✅ | ✅ | ✅ | `0x8a` [10] | VisibleString |
+| GeneralizedTime  | ✅ | ✅ | ✅ | ✅ | `0x8b` [11] | ASN.1 GeneralizedTime |
+| BinaryTime       | ✅ | ✅ | ✅ | ✅ | `0x8c` [12] | MMS BinaryTime, short and extended forms |
+| BCD              | ✅ | ✅ | ✅ | ✅ | `0x8d` [13] | Binary-coded decimal |
+| BooleanArray     | ✅ | ✅ | ✅ | ✅ | `0x8e` [14] | Packed booleans using BIT STRING encoding |
+| ObjectIdentifier | ✅ | ✅ | ✅ | ✅ | `0x8f` [15] | ASN.1 OBJECT IDENTIFIER |
+| MmsString        | ✅ | ✅ | ✅ | ✅ | `0x90` [16] | MMSString |
+| UTCTime          | ✅ | ✅ | ✅ | ✅ | `0x91` [17] | MMS UTC time wire format |
 
 ## Test Infrastructure
 
@@ -72,7 +74,7 @@
 | Integration tests (end-to-end) | ~42 | Client↔Server over loopback transport; file, journal, NVL lifecycle |
 | Negative/strictness tests | ~200+ | Malformed PDU, unknown tags, trailing bytes, truncated inputs, missing fields, invalid scopes (across 33 test files) |
 | Race/concurrency tests | ~14 | `TestConcurrent*`, `TestDoubleClose*`, `TestClose*During*`; designed for `go test -race` |
-| Fuzz targets | 36 | `internal/pdu/fuzz_test.go` (29): DecodePdu, DataElement, TypeSpec, ObjectName, AccessResults, ReadResponse, WriteResponse, GetNameList, GetVarAccess, NVLAttrs, DeleteNVL, ConfirmedError, RejectPDU, ConfirmedResponse, FileOpenRequest, FileOpenResponse, FileReadResponse, FileDirectoryRequest, FileDirectoryResponse, ReadJournalRequest, ReadJournalResponse, GetNameListRequest, ReadRequestParsed, WriteRequestParsed, DefineNVLRequest, InformationReport, GeneralizedTime, BCD, ObjectIdentifier + `internal/berutil/fuzz_test.go` (4): TLV, Length, Integer, Unsigned + `internal/acse/fuzz_test.go` (1), `internal/session/fuzz_test.go` (1), `internal/presentation/fuzz_test.go` (1) |
+| Fuzz targets | 38 | `internal/pdu/fuzz_test.go` (31): DecodePdu, DataElement, TypeSpec, ObjectName, AccessResults, ReadResponse, WriteResponse, GetNameList, GetVarAccess, NVLAttrs, DeleteNVL, ConfirmedError, RejectPDU, ConfirmedResponse, FileOpenRequest, FileOpenResponse, FileReadResponse, FileDirectoryRequest, FileDirectoryResponse, ReadJournalRequest, ReadJournalResponse, GetNameListRequest, ReadRequestParsed, WriteRequestParsed, DefineNVLRequest, InformationReport, GeneralizedTime, BCD, ObjectIdentifier, Real, BooleanArray + `internal/berutil/fuzz_test.go` (4): TLV, Length, Integer, Unsigned + `internal/acse/fuzz_test.go` (1), `internal/session/fuzz_test.go` (1), `internal/presentation/fuzz_test.go` (1) |
 | Benchmarks | 20 | `internal/pdu/bench_test.go` (14) + `value_bench_test.go` (6) |
 | Interop tests | 8 | `internal/pdu/interop_test.go` — validates wire encoding against known-good BER patterns compatible with C reference implementation |
 | Golden fixture tests | 33 | 27 in `internal/pdu/testdata/golden/` + 6 in `internal/codec/testdata/golden/`; regenerate with `-update-golden` flag |
