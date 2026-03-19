@@ -1,291 +1,125 @@
-I did another pass on the latest code_mms.log against the attached C mms_functions.csv.
 
-Overall: this is now in a strong place. The library is clearly not drifting into a C clone, and most of the earlier high-value protocol gaps are either closed or nearly closed. The remaining issues are now mostly about end-to-end completeness, server/client symmetry, and a few subtle semantic mismatches.
+Abort PDU (server→client) — The server detects client disconnects and handles ISO Release, but does not proactively send an MMS Abort PDU to the client. Client-initiated Abort is fully implemented.
 
-What looks good now:
-	•	FileOpenOptions.InitialPosition exists.
-	•	client-side file directory paging exists, with ContinueAfter, MoreFollows, and FileDirectoryAll.
-	•	Negotiated() exists.
-	•	Abort() exists in the public client API.
-	•	NVL members now use []VariableSpec, not plain names.
-	•	write APIs now preserve per-item results with []WriteAccessResult.
-	•	public type/value layer now includes GeneralizedTime, BCD, and ObjectIdentifier.
-	•	Value.Get(...) and TypeSpec.Resolve(...) are good ergonomic additions.
-	•	file helpers like FileReadAll and DownloadFile are useful and Go-shaped.
+Association-scope object listing — Association-scoped variables and NVLs can be stored and accessed, but GetNameList for association scope returns service-not-supported. Listing and lifecycle management for association-scope objects is deferred.
 
-So this is no longer about missing big chunks of MMS. It is now about a smaller set of sharper issues.
+DeleteNamedVariableList scope — Only scopeOfDelete=0 (specific list names) is supported. Scope-based bulk deletion (e.g., delete all domain NVLs) is not implemented.
 
-Remaining gaps / bugs I still see
+No live-wire interop testing — The interop tests validate encoding compatibility via inline byte patterns. There is no automated test harness that connects to a real MMS server or C reference implementation.
 
-1. File directory paging is only really implemented on the client side
+Semaphore, Event, Program Invocation services — These MMS services (ISO 9506 Part 2) are not implemented. The ObjectClass enum includes them for GetNameList classification, but no client methods or server handlers exist.
 
-This is the clearest remaining protocol gap.
+Unsolicited Status — The MMS UnsolicitedStatus service is not implemented. Only request/response Status is supported.
 
-You now have:
-	•	client request type with ContinueAfter
-	•	client response type with MoreFollows
-	•	FileDirectoryAll
+Cancel service — The MMS Cancel service (to cancel an in-flight confirmed request) is not implemented.
 
-But on the server side, the implementation is still effectively single-shot:
-	•	pdu.UnmarshalFileDirectoryRequest parses fileSpecification, but does not parse continueAfter
-	•	Server.handleFileDirectory calls FileProvider.List(ctx, req.FileSpec) only
-	•	it always responds with moreFollows = false
-	•	FileProvider.List still returns all entries at once
+Segmented file transfer — ObtainFile delegates to the FileProvider as a single synchronous operation. The MMS-specified segmented transfer protocol (where the server calls back to the client's file services) is not implemented.
 
-So right now the client can speak paged file directory, but your server cannot actually serve it.
+----
 
-That means the feature is half-finished, not fully complete.
 
-What I would change:
+Now I have a thorough picture. Here is my analysis:
 
-type FileListRequest struct {
-    FileSpec      string
-    ContinueAfter string
-    MaxEntries    int
+---
+
+## Gap-by-Gap Assessment Against C Reference (libIEC61850)
+
+### 1. Abort PDU (server→client)
+
+**C status: Not implemented either.** The C server's `MmsServer_abortConnection` (line 931 of `mms_server.c`) simply calls `IsoServer_closeConnection` — it tears down the TCP/ISO connection without sending an MMS Abort PDU. The PDU dispatcher in `mms_server_connection.c` has no code to *send* an Abort PDU, only to silently ignore a received Reject PDU (tag `0xa4`). The C server does handle Conclude (request/response) but not Abort.
+
+**Effort to implement in Go:** Low-medium. It's a simple unconfirmed PDU (tag `0xa0`, just an optional reason integer). The Go code already has the Abort encoder on the client side — the server just needs to send it before closing the transport. Not blocked by missing C reference code; can be implemented directly from the standard. ~50-100 lines.
+
+---
+
+### 2. Association-scope object listing (GetNameList)
+
+**C status: Implemented.** The C server fully supports association-scoped NVL listing (`OBJECT_SCOPE_ASSOCIATION = 2`) in `mms_get_namelist_service.c` lines 810-828 — it calls `getNamedVariableListAssociationSpecific(connection)` and returns the name list. This is gated behind compile-time flags `MMS_DATA_SET_SERVICE` and `MMS_DYNAMIC_DATA_SETS`.
+
+**Effort to implement in Go:** Medium. The C code is relatively straightforward — ~20 lines for the name list case. The main work is on the Go server model side: the server already stores association-scoped NVLs per connection, so you just need to wire up the listing through `GetNameList`. Roughly ~100-150 lines of Go, mostly following existing patterns for VMD/domain scope.
+
+---
+
+### 3. DeleteNamedVariableList scope
+
+**C status: Only `scopeOfDelete=specific` is implemented.** In `mms_named_variable_list_service.c` lines 153-267, the C code parses `scopeOfDelete`, but the handler at line 264 shows:
+
+```c
+else {
+    mmsMsg_createServiceErrorPdu(invokeId, response, MMS_ERROR_ACCESS_OBJECT_ACCESS_UNSUPPORTED);
 }
+```
 
-type FileListResult struct {
-    Entries     []FileEntry
-    MoreFollows bool
-}
+So scopes `aaspecific` (1), `domain` (2), and `vmd` (3) all return "unsupported" in the C code too. Only `specific` (0) is implemented, exactly like the Go version.
 
-and then:
+**Effort to implement in Go:** Low, but arguably not worth it — the C reference doesn't implement it either, and it's rarely used in practice. If needed, ~100-200 lines to iterate and delete all NVLs matching the given scope.
 
-type FileProvider interface {
-    List(ctx context.Context, req FileListRequest) (*FileListResult, error)
-    ...
-}
+---
 
-That keeps paging real end-to-end instead of simulated only on the client.
+### 4. No live-wire interop testing
 
-⸻
+**C status: N/A — this is an infrastructure/test gap**, not a protocol feature. The C reference is itself one of the implementations you'd test *against*, not something that provides a test harness.
 
-2. ReadNamedVariableList(... SpecificationWithResult) is still only partially real
+**Effort:** This requires setting up a test environment (Docker container with the C server, automated Go test client), not porting C code. Medium-high effort for the infrastructure, but no code to port.
 
-You added the option, and the request encoder supports it. Good.
+---
 
-But server-side, MarshalReadResponse still explicitly skips the optional variableAccessSpecification in the response body and only emits listOfAccessResult.
+### 5. Semaphore, Event, Program Invocation services
 
-So the API suggests “spec-with-result” support, but the server does not actually produce that richer response shape.
+**C status: Not implemented.** The C code defines the `ObjectClass` enum values for these (e.g., `eventCondition = 5`, `programInvocation = 10`) and the `ServiceSupportOptions` bit positions, but there are **zero service handlers, zero client methods, and zero server logic** for Semaphore, Event Condition, Event Action, Event Enrollment, or Program Invocation services. The "Semaphore" references in the C source are OS-level mutexes (POSIX/threading primitives), not MMS Semaphore services.
 
-That means one of two things should happen:
-	•	either fully implement spec-with-result in responses, or
-	•	remove/defer the public option until the response path really supports it
+**Effort to implement in Go:** Very high, and there's **no C code to port**. These are full MMS service groups with complex state machines (event conditions have trigger monitoring, enrollments, notifications). Implementing them from the ISO 9506-2 standard alone would be a major undertaking (thousands of lines). In practice, most IEC 61850 deployments don't use these services — they're legacy MMS features.
 
-I would recommend finishing it, because it is useful for debugging and for upper layers that want stronger response introspection.
+---
 
-⸻
+### 6. Unsolicited Status
 
-3. Abort() is public, but it does not actually send an MMS/ACSE/session abort
+**C status: Not implemented.** The constant `MMS_SERVICE_UNSOLICITED_STATUS` is defined (0x02) in `mms_association_service.c` but **never used** — it's not OR'd into the `servicesSupported` bitstring during initiation, and there's no handler or sender for it. The C server only implements request/response Status (via `mmsServer_handleStatusRequest`).
 
-This is subtle but important.
+**Effort to implement in Go:** Low. It's an unconfirmed service (similar to InformationReport) — the server sends an unsolicited `UnconfirmedPDU` containing VMD status. ~50-80 lines, following the existing InformationReport pattern. No C code to port, but straightforward from the standard.
 
-You now expose Client.Abort(ctx), but the implementation just:
-	•	marks the client closed
-	•	cancels pending requests
-	•	stops the reader
-	•	closes the transport
+---
 
-I can see internal abort encoders in the ISO/session stack, but they are not actually used by Client.Abort.
+### 7. Cancel service
 
-So semantically this is closer to:
-	•	“hard local close”
+**C status: Not implemented.** The C code declares `MMS_SERVICE_CANCEL = 0x08` and even includes it in the `servicesSupported` bitstring during initiation (line 126: `| MMS_SERVICE_CANCEL`), but there is **no handler** for Cancel PDUs in the server dispatcher (`mms_server_connection.c`). The ASN.1 generated code (`RejectPDU.c`) has the `cancelRequestPDU` reject reason, but that's just ASN.1 struct definitions, not actual service logic.
 
-than to:
-	•	“send protocol abort”
+**Effort to implement in Go:** Medium. Cancel requires tracking in-flight invoke IDs and being able to abort the processing of a confirmed request. The PDU encoding is simple (just the invoke ID to cancel), but the concurrency/lifecycle coordination in the Go server to actually interrupt an in-progress handler makes this non-trivial. No C code to port. ~200-400 lines, depending on how thoroughly you support interruption.
 
-If you want true parity with the C notion of abort, Abort() should try to emit the abort PDU first, then close the transport.
+---
 
-Suggested behavior:
-	•	best-effort send ABRT / session ABORT
-	•	ignore send failure if peer already vanished
-	•	always close transport afterward
+### 8. Segmented file transfer (ObtainFile)
 
-That would make the method name match protocol reality.
+**C status: Fully implemented.** This is the one big gap where the C code has a **complete implementation** that could serve as a porting reference. The C server implements ObtainFile as a multi-step state machine in `mms_file_service.c` (lines 430-820):
 
-⸻
+1. Receives `ObtainFileRequest` from client
+2. Sends `FileOpenRequest` back to the client (role reversal — server calls client's file services)
+3. Iterates with `FileReadRequest` to download chunks
+4. Sends `FileCloseRequest` when done
+5. Sends `ObtainFileResponse` or `ObtainFileError`
 
-4. Server-side support for association-specific objects is still incomplete
+The state machine has ~8 states (`FILE_OPEN_SENT`, `SEND_FILE_READ`, `FILE_READ_SENT`, `SEND_FILE_CLOSE`, `FILE_CLOSE_SENT`, etc.) with timeouts. The client side (`mms_client_files.c`, `mms_client_connection.c`) handles receiving the server's file requests during an active ObtainFile operation.
 
-Your internal model knows about association scope:
-	•	ObjectScopeAssociation exists
-	•	ObjectNameWire supports association scope
-	•	VarEntry.Scope allows association scope
+**Effort to implement in Go:** High. This is ~400 lines of C state machine logic that would translate to ~300-500 lines of Go. The key complexity is the role reversal: during an ObtainFile, the server sends confirmed requests *to the client*, and the client must handle them. The Go architecture currently doesn't support the server sending confirmed requests or the client handling incoming requests — this requires new connection-level plumbing. Estimated ~500-800 lines total including the infrastructure changes.
 
-But the actual server registry/listing support is incomplete:
-	•	RegisterVariable stores association-scope variables, but ordering/indexing is only maintained for VMD and domain
-	•	GetNameList server dispatch handles:
-	•	domains
-	•	VMD variables
-	•	domain variables
-	•	VMD NVLs
-	•	domain NVLs
-	•	but not association-scope variables/NVLs
+---
 
-Also NVLEntry.Scope is only 0=VMD, 1=Domain, not association.
+## Summary Table
 
-So association-specific MMS objects are still more “type-level supported” than “real feature”.
+| # | Gap | In C? | C Code to Port? | Go Effort | Priority |
+|---|-----|:-----:|:---------------:|:---------:|:--------:|
+| 1 | Abort PDU (server→client) | No | None | Low | Nice-to-have |
+| 2 | Association-scope GetNameList | **Yes** | ~20 lines | Medium | Useful |
+| 3 | DeleteNVL bulk scope | No | None | Low | Not needed |
+| 4 | Live-wire interop testing | N/A | N/A | Medium-high | Infrastructure |
+| 5 | Semaphore/Event/ProgramInvoc | No | None | Very high | Not needed |
+| 6 | Unsolicited Status | No | None | Low | Nice-to-have |
+| 7 | Cancel service | No | None | Medium | Rare in practice |
+| 8 | Segmented ObtainFile | **Yes** | ~400 lines | High | Valuable |
 
-For a generic MMS library, I would either:
-	•	finish association-scope support properly, including per-connection storage for association NVLs, or
-	•	explicitly document that the current server only supports VMD and domain scopes
+Key takeaways:
 
-For go-iec61850, this matters less than domain-scope behavior, but for raw MMS completeness it is still a gap.
-
-⸻
-
-5. There is still no public server API for static named variable lists
-
-On the client side, dynamic NVL creation is there.
-
-On the server side, dynamic define/delete handlers exist too.
-
-But there is no clean public API like:
-
-func (s *Server) RegisterNamedVariableList(...)
-
-That is a practical gap.
-
-Why this matters:
-	•	IEC 61850 data sets map naturally onto MMS named variable lists
-	•	a server wrapper above go-mms will want to expose static datasets cleanly
-	•	forcing everything through dynamic client-defined NVLs is not enough
-
-I would add a public registration API for VMD/domain static NVLs now. That will make go-iec61850 much cleaner.
-
-Suggested shape:
-
-type NamedVariableList struct {
-    Name      ObjectName
-    Deletable bool
-    Variables []VariableSpec
-}
-
-func (s *Server) RegisterNamedVariableList(nvl NamedVariableList) error
-
-This is probably the most useful next server-side API addition.
-
-⸻
-
-6. File provider comments and behavior are now out of sync
-
-Your code evolved, but some comments still reflect the older state.
-
-Example: FileProvider.List still says:
-	•	“server returns all entries in one response”
-	•	“no pagination in this phase”
-
-That no longer matches the client API direction.
-
-So even before changing behavior, I would clean up the comments. Right now they undercut the public API story.
-
-⸻
-
-Potential design improvements beyond the strict gaps
-
-These are not protocol holes, but they would improve the library.
-
-1. Add a public ReadNamedVariableListResult type for spec-with-result mode
-
-Right now ReadNamedVariableList returns []AccessResult.
-
-That is fine for the common path, but if you fully support SpecificationWithResult, the return shape should probably become richer.
-
-For example:
-
-type NVLAccessResult struct {
-    Variable  *VariableSpec
-    Value     *Value
-    ErrorCode DataAccessErrorCode
-}
-
-Then the API can preserve the extra meaning instead of silently discarding it.
-
-⸻
-
-2. Add a server-side paging abstraction for GetNameList too
-
-You already page internal registry results, which is good.
-
-But provider-backed areas like journals and files should follow the same pattern consistently. A generic “paged list result” idiom across the library would help:
-
-type Page[T any] struct {
-    Items       []T
-    MoreFollows bool
-    NextToken   string
-}
-
-You do not need to over-genericize the public API, but the internal model would benefit from one paging convention.
-
-⸻
-
-3. Consider a ClientCapabilities / ServerCapabilities snapshot
-
-The C codebase has lots of parameter/configuration accessors. You correctly avoided cloning that API. Good.
-
-But one Go-friendly replacement could be a compact capabilities snapshot:
-
-type Capabilities struct {
-    Negotiated NegotiatedParameters
-    TLS        bool
-    Auth       AuthMechanism
-}
-
-That could be useful for diagnostics and for go-iec61850.
-
-⸻
-
-4. Add a public helper for alternate-access builder ergonomics
-
-Right now selectors are fine, but upper-layer code will end up repeating patterns like:
-	•	component
-	•	array index
-	•	array range
-	•	chained selectors
-
-Convenience builders would improve readability:
-
-func SelectComponent(name string) AccessSelector
-func SelectIndex(i int) AccessSelector
-func SelectRange(low, count int) AccessSelector
-
-Not necessary, but nice.
-
-⸻
-
-What still looks intentionally fine to me
-
-These are still good decisions and I would not change them just to imitate C:
-	•	no async function explosion
-	•	no threadless/tick model
-	•	no create/destroy style API
-	•	no separate client function per tiny addressing variant
-	•	use of context.Context
-	•	structured types instead of huge flat function sets
-
-That is exactly the right Go direction.
-
-Best next steps from here
-
-If I were prioritizing the next round, I would do this order:
-	1.	Finish server-side file directory paging end-to-end.
-	2.	Make Abort() send a real protocol abort before closing.
-	3.	Either fully implement or temporarily hide SpecificationWithResult.
-	4.	Add public server registration for static named variable lists.
-	5.	Decide whether association-scope support is real or intentionally out of scope, and make the code/docs consistent.
-
-For go-iec61850 specifically
-
-The most useful extra thing you can do now in go-mms for the upper layer is:
-	•	add static server-side NVL registration
-	•	make file services page correctly
-	•	make spec-with-result either real or absent
-	•	keep the current Value.Get / TypeSpec.Resolve path-oriented ergonomics
-
-That will give go-iec61850 a much cleaner base for:
-	•	datasets
-	•	model browsing
-	•	report member resolution
-	•	file/config retrieval
-
-This codebase is now past the “missing major services” phase. The next wins are mostly about finishing the last 10% cleanly.
+- **Gaps 3, 5, 6, 7** are also missing from the C reference — these are not regressions vs. the C implementation.
+- **Gap 2** (association-scope listing) is the easiest win with existing C code to reference.
+- **Gap 8** (segmented ObtainFile) is the most substantial feature gap — the C code has a full implementation, but porting it requires architectural changes to Go's server/client connection model to support role-reversal (server sending confirmed requests to clients).
+- **Gap 1** (server Abort) is trivial but the C code doesn't do it either, so there's no interop expectation.

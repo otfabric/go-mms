@@ -1,6 +1,7 @@
 package mms
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -193,5 +194,142 @@ func TestValueStructureCopyIsolation(t *testing.T) {
 	got2, _ := v.Structure()
 	if got2[1].Type() != ValueTypeInteger {
 		t.Error("accessor should copy output: mutation of returned slice affected stored value")
+	}
+}
+
+func TestValueReal(t *testing.T) {
+	v := NewReal(2.718281828)
+	if v.Type() != ValueTypeReal {
+		t.Fatalf("Type() = %v, want Real", v.Type())
+	}
+	got, ok := v.Real()
+	if !ok || got != 2.718281828 {
+		t.Errorf("Real() = (%v, %v), want (2.718281828, true)", got, ok)
+	}
+
+	_, ok = v.Float64()
+	if ok {
+		t.Error("Float64() on Real should return ok=false")
+	}
+}
+
+func TestValueRealSpecial(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		val  float64
+	}{
+		{"positive_infinity", math.Inf(1)},
+		{"negative_infinity", math.Inf(-1)},
+		{"negative_zero", math.Copysign(0, -1)},
+		{"zero", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := NewReal(tc.val)
+			got, ok := v.Real()
+			if !ok {
+				t.Fatal("Real() ok=false")
+			}
+			if math.IsInf(tc.val, 0) {
+				if !math.IsInf(got, int(math.Copysign(1, tc.val))) {
+					t.Errorf("Real() = %v, want %v", got, tc.val)
+				}
+			} else if math.Signbit(tc.val) != math.Signbit(got) || got != tc.val {
+				t.Errorf("Real() = %v, want %v", got, tc.val)
+			}
+		})
+	}
+}
+
+func TestValueRealNaN(t *testing.T) {
+	v := NewReal(math.NaN())
+	got, ok := v.Real()
+	if !ok {
+		t.Fatal("Real() ok=false")
+	}
+	if !math.IsNaN(got) {
+		t.Errorf("Real() = %v, want NaN", got)
+	}
+}
+
+func TestValueBooleanArray(t *testing.T) {
+	bits := []byte{0b11001010, 0b10000000}
+	v := NewBooleanArray(bits, 9)
+	if v.Type() != ValueTypeBooleanArray {
+		t.Fatalf("Type() = %v, want BooleanArray", v.Type())
+	}
+	gotBits, gotLen, ok := v.BooleanArray()
+	if !ok {
+		t.Fatal("BooleanArray() ok=false")
+	}
+	if gotLen != 9 {
+		t.Errorf("bitLen = %d, want 9", gotLen)
+	}
+	if len(gotBits) != 2 || gotBits[0] != 0b11001010 || gotBits[1] != 0b10000000 {
+		t.Errorf("BooleanArray() bits = %v, want [0xCA 0x80]", gotBits)
+	}
+
+	_, ok = v.Bool()
+	if ok {
+		t.Error("Bool() on BooleanArray should return ok=false")
+	}
+}
+
+func TestValueBooleanArrayCopyIsolation(t *testing.T) {
+	orig := []byte{0xff, 0x0f}
+	v := NewBooleanArray(orig, 12)
+
+	orig[0] = 0x00
+	gotBits, _, ok := v.BooleanArray()
+	if !ok {
+		t.Fatal("BooleanArray() ok=false")
+	}
+	if gotBits[0] != 0xff {
+		t.Error("constructor should copy input")
+	}
+
+	gotBits[1] = 0x00
+	gotBits2, _, _ := v.BooleanArray()
+	if gotBits2[1] != 0x0f {
+		t.Error("accessor should copy output")
+	}
+}
+
+func TestValueRealEqual(t *testing.T) {
+	v1 := NewReal(3.14)
+	v2 := NewReal(3.14)
+	v3 := NewReal(2.71)
+	if !v1.Equal(v2) {
+		t.Error("Equal(same value) should be true")
+	}
+	if v1.Equal(v3) {
+		t.Error("Equal(different value) should be false")
+	}
+}
+
+func TestValueBooleanArrayEqual(t *testing.T) {
+	v1 := NewBooleanArray([]byte{0xCA}, 7)
+	v2 := NewBooleanArray([]byte{0xCA}, 7)
+	v3 := NewBooleanArray([]byte{0xCA}, 6)
+	if !v1.Equal(v2) {
+		t.Error("Equal(same) should be true")
+	}
+	if v1.Equal(v3) {
+		t.Error("Equal(different bitLen) should be false")
+	}
+}
+
+func TestValueRealString(t *testing.T) {
+	v := NewReal(1.5)
+	s := v.String()
+	if s == "" {
+		t.Error("String() should not be empty")
+	}
+}
+
+func TestValueBooleanArrayString(t *testing.T) {
+	v := NewBooleanArray([]byte{0xff}, 8)
+	s := v.String()
+	if s == "" {
+		t.Error("String() should not be empty")
 	}
 }

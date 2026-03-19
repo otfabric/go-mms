@@ -4650,3 +4650,108 @@ Two previously unsupported MMS data types were added based on the Wireshark diss
 | `value.go` | Added `NewReal`, `NewBooleanArray` constructors, `Real()`, `BooleanArray()` accessors, `Equal`/`String` support |
 | `mms.go` | Added `valueToDataValue`/`dataValueToValue` conversion for both new types |
 | `COMPLIANCE.md` | Added Real and BooleanArray to data type table, updated fuzz target count to 38 |
+
+---
+
+## Feedback Round: Protocol Gap Closures (Gaps 1, 2, 3, 6, 7)
+
+Five protocol gaps from `COMPLIANCE.md` were implemented in a single pass, resolving all non-infrastructure, non-legacy MMS service gaps.
+
+### Gap 1: Server-side Abort PDU
+
+**Problem:** The server detected client disconnects and handled ISO Release, but never proactively sent an MMS Abort PDU to the client.
+
+**Solution:**
+- Added `serverconn.Conn.SendAbort(ctx)` — sends `isostack.EncodeAbort()` (Session ABORT / ACSE ABRT) directly on the transport, bypassing the MMS data framing
+- Added `ServerConn.Abort(ctx)` — public API method on the server connection, follows the same closed-check pattern as `SendInformationReport`
+- Best-effort semantics: errors are returned but the caller should close the transport regardless
+
+**Files:** `internal/serverconn/conn.go`, `server.go`
+
+### Gap 2: Association-scope GetNameList
+
+**Problem:** Association-scoped NVLs could be stored via `DefineNamedVariableList`, but `GetNameList` for association scope returned `service-not-supported`.
+
+**Solution:**
+- Added per-connection NVL storage to `ServerConn` (`assocNVLs map`, `assocNVLOrder []string`)
+- Added internal methods: `defineAssocNVL`, `lookupAssocNVL`, `deleteAssocNVL`, `listAssocNVLs`, `deleteAllAssocNVLs`
+- Updated `handleGetNameList` to handle `ObjectClassNamedVariableList + ScopeAssociation` by listing from the connection's storage
+- Updated `handleDefineNVL` to route association-scope entries to the per-connection storage instead of the shared registry
+- Updated `handleGetNVLAttrs` and `resolveNVLMembers` to check association-scope NVLs on the connection
+- All lookup uses the `ServerConn` from the request context (`serverConnCtxKey{}`)
+
+**Files:** `server.go`
+
+### Gap 3: DeleteNamedVariableList Scope
+
+**Problem:** Only `scopeOfDelete=0` (specific list names) was supported. All other scopes returned unsupported.
+
+**Solution:**
+- Added `scopeOfDelete=1` (aa-specific) support: deletes all association-scoped NVLs for the current connection
+- Specific deletion (`scopeOfDelete=0`) now also checks association-scope NVLs on the connection
+- Domain (2) and VMD (3) bulk scope remain unsupported, matching the C reference implementation (libIEC61850)
+- Added `deleteAllAssocNVLs()` method that counts matched/deleted entries for the response
+
+**Files:** `server.go`
+
+### Gap 6: Unsolicited Status
+
+**Problem:** The MMS UnsolicitedStatus service was not implemented. Only request/response Status was supported.
+
+**Solution:**
+- Added `pdu.MarshalUnsolicitedStatus(logical, physical)` — builds an UnconfirmedPDU (0xa3) with UnsolicitedStatus ([1] in UnconfirmedService CHOICE)
+- Added `ServerConn.SendUnsolicitedStatus(ctx, ServerStatus)` — public API following the InformationReport pattern
+- Uses `SendUnconfirmed` like InformationReport for consistent MMS data framing
+
+**Files:** `internal/pdu/status.go`, `server.go`
+
+### Gap 7: Cancel Service
+
+**Problem:** The MMS Cancel service was not implemented. CancelRequestPDUs would be logged as "unexpected PDU kind".
+
+**Solution:**
+- Added Cancel PDU tag constants (`TagCancelRequest=0x86`, `TagCancelResponse=0x87`, `TagCancelError=0x88`) to `asn1util/tags.go`
+- Added `PduCancelRequest/Response/Error` kinds to `pdu/mmspdu.go` with classification in `classifyTag`
+- Added `codec.MarshalCancelError` and `codec.MarshalCancelResponse` to `codec/response.go`
+- Added `handleCancelRequest` in `serverconn/conn.go` — responds with CancelError (error class 10 = cancel, error code 1 = invoke-id-unknown) since requests are processed synchronously and there is never an in-flight request to cancel
+- Added Cancel dispatch case in the `Serve` loop
+
+**Files:** `internal/asn1util/tags.go`, `internal/pdu/mmspdu.go`, `internal/codec/response.go`, `internal/serverconn/conn.go`
+
+### Test Coverage Fix: NewReal and NewBooleanArray
+
+**Problem:** `NewReal` and `NewBooleanArray` had 0% test coverage.
+
+**Solution:** Added comprehensive tests in `value_test.go`:
+- `TestValueReal` — basic constructor/accessor, type mismatch check
+- `TestValueRealSpecial` — ±infinity, ±zero
+- `TestValueRealNaN` — NaN round-trip
+- `TestValueBooleanArray` — constructor/accessor, bit length, type mismatch check
+- `TestValueBooleanArrayCopyIsolation` — defensive copy in constructor and accessor
+- `TestValueRealEqual`, `TestValueBooleanArrayEqual` — equality testing
+- `TestValueRealString`, `TestValueBooleanArrayString` — String() coverage
+
+Both functions now at 100% coverage.
+
+### New Server Tests
+
+- `TestServerConnAbort` — integration test for `ServerConn.Abort()`
+- `TestServerConnAbortClosed` — closed connection returns `ErrServerConnClosed`
+- `TestServerConnSendUnsolicitedStatus` — integration test for unsolicited status
+- `TestServerConnSendUnsolicitedStatusClosed` — closed connection error
+- `TestServerConnAssocNVLLifecycle` — define/lookup/list/delete cycle for association-scope NVLs
+- `TestServerConnDeleteAllAssocNVLs` — bulk delete of association NVLs
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `internal/asn1util/tags.go` | Added `TagCancelRequest` (0x86), `TagCancelResponse` (0x87), `TagCancelError` (0x88) |
+| `internal/pdu/mmspdu.go` | Added `PduCancelRequest`, `PduCancelResponse`, `PduCancelError`; updated `classifyTag` and `pduKindNames` |
+| `internal/codec/response.go` | Added `MarshalCancelError`, `MarshalCancelResponse` |
+| `internal/pdu/status.go` | Added `MarshalUnsolicitedStatus` for UnconfirmedPDU with UnsolicitedStatus |
+| `internal/serverconn/conn.go` | Added `SendAbort`, `handleCancelRequest`; Cancel dispatch in `Serve` loop |
+| `server.go` | Added `ServerConn.Abort`, `SendUnsolicitedStatus`; per-connection NVL storage (`assocNVLs`, `assocNVLOrder`); association-scope support in `handleGetNameList`, `handleDefineNVL`, `handleDeleteNVL`, `handleGetNVLAttrs`, `resolveNVLMembers` |
+| `value_test.go` | Added 9 tests for `NewReal` and `NewBooleanArray` (100% coverage) |
+| `server_test.go` | Added 6 tests for Abort, UnsolicitedStatus, and association NVL lifecycle |
+| `COMPLIANCE.md` | Updated Abort/GetNameList/DeleteNVL/Status rows; added UnsolicitedStatus and Cancel rows; restructured Known Gaps into Resolved and Remaining with priority/impact table |

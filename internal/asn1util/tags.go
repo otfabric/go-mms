@@ -14,6 +14,9 @@ const (
 	TagConcludeRequest   byte = 0x8b // context 11, primitive (NULL)
 	TagConcludeResponse  byte = 0x8c // context 12, primitive (NULL)
 	TagConcludeError     byte = 0x8d // context 13, primitive
+	TagCancelRequest     byte = 0x86 // context 6, primitive (Unsigned32 invokeID)
+	TagCancelResponse    byte = 0x87 // context 7, primitive (Unsigned32 invokeID)
+	TagCancelError       byte = 0x88 // context 8, constructed
 )
 
 // ConfirmedServiceRequest CHOICE tags within a ConfirmedRequestPdu.
