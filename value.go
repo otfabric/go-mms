@@ -212,6 +212,25 @@ func (v *Value) ObjectIdentifier() (val []int, ok bool) {
 	return c, true
 }
 
+// Real returns the ASN.1 REAL value as float64. ok is false if the
+// value is not [ValueTypeReal].
+func (v *Value) Real() (val float64, ok bool) {
+	if v.typ != ValueTypeReal {
+		return 0, false
+	}
+	return v.floatVal, true
+}
+
+// BooleanArray returns a copy of the packed boolean array as a byte slice
+// and the number of valid bits. ok is false if the value is not
+// [ValueTypeBooleanArray].
+func (v *Value) BooleanArray() (bits []byte, bitLen int, ok bool) {
+	if v.typ != ValueTypeBooleanArray {
+		return nil, 0, false
+	}
+	return copyBytes(v.bytesVal), v.bitLen, true
+}
+
 // Structure returns a shallow copy of the element slice of a structure
 // value. The returned slice is independent but the child [*Value]
 // pointers are shared; mutating a child affects the original Value.
@@ -325,6 +344,20 @@ func NewObjectIdentifier(oid []int) *Value {
 	return &Value{typ: ValueTypeObjectIdentifier, oidVal: c}
 }
 
+// NewReal creates a [Value] of type [ValueTypeReal].
+// The value uses ASN.1 REAL encoding (ITU-T X.690 §8.5) on the wire,
+// as opposed to MMS FloatingPoint encoding used by [ValueTypeFloat].
+func NewReal(f float64) *Value {
+	return &Value{typ: ValueTypeReal, floatVal: f}
+}
+
+// NewBooleanArray creates a [Value] of type [ValueTypeBooleanArray].
+// The byte slice and bit length represent packed boolean values encoded
+// as a BIT STRING. The slice is defensively copied.
+func NewBooleanArray(bits []byte, bitLen int) *Value {
+	return &Value{typ: ValueTypeBooleanArray, bytesVal: copyBytes(bits), bitLen: bitLen}
+}
+
 // NewArray creates a [Value] of type [ValueTypeArray].
 // The element slice is shallow-copied: the slice header is independent
 // but the child [*Value] pointers are shared with the caller. Mutating
@@ -425,6 +458,10 @@ func (v *Value) Equal(other *Value) bool {
 			}
 		}
 		return true
+	case ValueTypeReal:
+		return v.floatVal == other.floatVal
+	case ValueTypeBooleanArray:
+		return v.bitLen == other.bitLen && bytes.Equal(v.bytesVal, other.bytesVal)
 	case ValueTypeStructure, ValueTypeArray:
 		if len(v.elementsVal) != len(other.elementsVal) {
 			return false
@@ -487,6 +524,10 @@ func (v *Value) String() string {
 		return fmt.Sprintf("BCD(%d)", v.intVal)
 	case ValueTypeObjectIdentifier:
 		return fmt.Sprintf("OID(%v)", v.oidVal)
+	case ValueTypeReal:
+		return fmt.Sprintf("Real(%g)", v.floatVal)
+	case ValueTypeBooleanArray:
+		return fmt.Sprintf("BooleanArray(%d bits)", v.bitLen)
 	case ValueTypeDataAccessError:
 		return fmt.Sprintf("DataAccessError(%s)", v.accessErr)
 	default:

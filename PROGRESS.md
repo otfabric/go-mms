@@ -4604,8 +4604,49 @@ The library is ready for serious evaluation and early adoption, but the conserva
 | Metric | Value |
 |--------|:-----:|
 | Test coverage | 82.4% |
-| Fuzz targets | 33 |
+| Fuzz targets | 38 |
 | Golden fixtures | 33 |
 | Documentation files | 14 |
 | Race detector | Clean |
 | `make check` | Clean |
+
+---
+
+## Wire-Compatibility Bug Fix and New Data Types
+
+### TagDataObjId Wire-Incompatibility Fix
+
+A critical wire-incompatibility bug was discovered by auditing against the Wireshark MMS dissector (`packet-mms.c`) and the C reference implementation:
+
+- **Bug**: `TagDataObjId` was incorrectly defined as `0x88` (context tag [8]), which per ISO 9506-2 is the tag for **REAL** data.
+- **Fix**: Changed `TagDataObjId` to `0x8f` (context tag [15]), the correct tag for ObjectIdentifier per the MMS `Data` CHOICE definition.
+- **Impact**: ObjectIdentifier values encoded by the Go library were wire-incompatible with other correct MMS implementations. Internal round-trip tests passed because encoding and decoding both used the same (incorrect) tag.
+
+### New Data Types: REAL and BooleanArray
+
+Two previously unsupported MMS data types were added based on the Wireshark dissector analysis:
+
+#### REAL (tag `0x88`, context [8])
+- **Wire format**: ASN.1 REAL BER encoding (ITU-T X.690 §8.5)
+- **Public API**: `ValueTypeReal`, `NewReal(float64)`, `(*Value).Real() (float64, bool)`
+- **Encoding support**: Binary base-2 encoding with full special value support (+0, -0, +inf, -inf, NaN)
+- **Tests**: Round-trip test for normal values, special values test, fuzz target `FuzzDecodeReal`
+- **Note**: Distinct from MMS FloatingPoint (`ValueTypeFloat`, tag [7]) which uses MMS-specific encoding (exponent-width byte + IEEE 754 bytes)
+
+#### BooleanArray (tag `0x8e`, context [14])
+- **Wire format**: BIT STRING (same encoding as `[4] bit-string`: unused-bits prefix + data bytes)
+- **Public API**: `ValueTypeBooleanArray`, `NewBooleanArray([]byte, int)`, `(*Value).BooleanArray() ([]byte, int, bool)`
+- **Tests**: Round-trip test, empty array test, fuzz target `FuzzDecodeBooleanArray`
+- **Note**: Semantically represents a packed array of boolean values, distinct from generic `BitString` (tag [4])
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `internal/pdu/data.go` | Fixed `TagDataObjId` (0x88 to 0x8f), added `TagDataReal` (0x88), `TagDataBooleanArray` (0x8e), ASN.1 REAL encode/decode, marshal/unmarshal cases |
+| `internal/pdu/data_test.go` | Added `TestDataRealRoundTrip`, `TestDataRealSpecialValues`, `TestDataBooleanArrayRoundTrip`, `TestDataBooleanArrayEmpty`, `TestDataObjIdTagCorrectness` |
+| `internal/pdu/fuzz_test.go` | Fixed ObjId seed tag (0x88 to 0x8f), added `FuzzDecodeReal`, `FuzzDecodeBooleanArray` |
+| `types.go` | Added `ValueTypeReal`, `ValueTypeBooleanArray` with string names and `DefaultValue` support |
+| `value.go` | Added `NewReal`, `NewBooleanArray` constructors, `Real()`, `BooleanArray()` accessors, `Equal`/`String` support |
+| `mms.go` | Added `valueToDataValue`/`dataValueToValue` conversion for both new types |
+| `COMPLIANCE.md` | Added Real and BooleanArray to data type table, updated fuzz target count to 38 |

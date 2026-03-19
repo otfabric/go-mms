@@ -11,24 +11,26 @@ import (
 
 const maxDataNestingDepth = 64
 
-// MMS Data CHOICE tags (context-specific implicit).
+// MMS Data CHOICE tags (context-specific implicit), per ISO 9506-2.
 const (
-	TagDataAccessError byte = 0x80 // [0] IMPLICIT INTEGER
-	TagDataArray       byte = 0xa1 // [1] IMPLICIT SEQUENCE OF Data
-	TagDataStructure   byte = 0xa2 // [2] IMPLICIT SEQUENCE OF Data
-	TagDataBoolean     byte = 0x83 // [3] IMPLICIT BOOLEAN
-	TagDataBitString   byte = 0x84 // [4] IMPLICIT BIT STRING
-	TagDataInteger     byte = 0x85 // [5] IMPLICIT INTEGER
-	TagDataUnsigned    byte = 0x86 // [6] IMPLICIT unsigned INTEGER
-	TagDataFloat       byte = 0x87 // [7] IMPLICIT FloatingPoint
-	TagDataOctetString byte = 0x89 // [9] IMPLICIT OCTET STRING
-	TagDataVisibleStr  byte = 0x8a // [10] IMPLICIT VisibleString
-	TagDataBinaryTime  byte = 0x8c // [12] IMPLICIT TimeOfDay (4 or 6 bytes)
-	TagDataObjId       byte = 0x88 // [8] IMPLICIT OBJECT IDENTIFIER
-	TagDataMmsString   byte = 0x90 // [16] IMPLICIT MMSString (UTF-8)
-	TagDataGenTime     byte = 0x8b // [11] IMPLICIT GeneralizedTime
-	TagDataBCD         byte = 0x8d // [13] IMPLICIT INTEGER (BCD encoded)
-	TagDataUTCTime     byte = 0x91 // [17] IMPLICIT UtcTime (8 bytes)
+	TagDataAccessError   byte = 0x80 // [0] IMPLICIT INTEGER
+	TagDataArray         byte = 0xa1 // [1] IMPLICIT SEQUENCE OF Data
+	TagDataStructure     byte = 0xa2 // [2] IMPLICIT SEQUENCE OF Data
+	TagDataBoolean       byte = 0x83 // [3] IMPLICIT BOOLEAN
+	TagDataBitString     byte = 0x84 // [4] IMPLICIT BIT STRING
+	TagDataInteger       byte = 0x85 // [5] IMPLICIT INTEGER
+	TagDataUnsigned      byte = 0x86 // [6] IMPLICIT unsigned INTEGER
+	TagDataFloat         byte = 0x87 // [7] IMPLICIT FloatingPoint
+	TagDataReal          byte = 0x88 // [8] IMPLICIT REAL (ASN.1 REAL encoding)
+	TagDataOctetString   byte = 0x89 // [9] IMPLICIT OCTET STRING
+	TagDataVisibleStr    byte = 0x8a // [10] IMPLICIT VisibleString
+	TagDataGenTime       byte = 0x8b // [11] IMPLICIT GeneralizedTime
+	TagDataBinaryTime    byte = 0x8c // [12] IMPLICIT TimeOfDay (4 or 6 bytes)
+	TagDataBCD           byte = 0x8d // [13] IMPLICIT INTEGER (BCD encoded)
+	TagDataBooleanArray  byte = 0x8e // [14] IMPLICIT BIT STRING (packed boolean array)
+	TagDataObjId         byte = 0x8f // [15] IMPLICIT OBJECT IDENTIFIER
+	TagDataMmsString     byte = 0x90 // [16] IMPLICIT MMSString (UTF-8)
+	TagDataUTCTime       byte = 0x91 // [17] IMPLICIT UtcTime (8 bytes)
 )
 
 // Defensive limit for access results decoders.
@@ -89,6 +91,12 @@ func MarshalData(v *DataValue) ([]byte, error) {
 
 	case TagDataBinaryTime:
 		return berutil.EncodeTLV(TagDataBinaryTime, encodeBinaryTime(v.BinTimeMs)), nil
+
+	case TagDataReal:
+		return berutil.EncodeTLV(TagDataReal, encodeASN1Real(v.Float)), nil
+
+	case TagDataBooleanArray:
+		return berutil.EncodeTLV(TagDataBooleanArray, encodeBitString(v.Bytes, v.BitLen)), nil
 
 	case TagDataObjId:
 		content, err := berutil.EncodeObjectIdentifier(v.OID)
@@ -222,6 +230,13 @@ func decodeDataContentWithDepth(tag byte, content []byte, depth int) (*DataValue
 		}
 		return &DataValue{Tag: tag, Bytes: data, BitLen: bitLen}, nil
 
+	case TagDataReal:
+		f, err := decodeASN1Real(content)
+		if err != nil {
+			return nil, fmt.Errorf("pdu: real: %w", err)
+		}
+		return &DataValue{Tag: tag, Float: f}, nil
+
 	case TagDataOctetString:
 		b := make([]byte, len(content))
 		copy(b, content)
@@ -267,6 +282,13 @@ func decodeDataContentWithDepth(tag byte, content []byte, depth int) (*DataValue
 			return nil, fmt.Errorf("pdu: bcd integer: %w", err)
 		}
 		return &DataValue{Tag: tag, Int: v}, nil
+
+	case TagDataBooleanArray:
+		data, bitLen, err := decodeBitString(content)
+		if err != nil {
+			return nil, fmt.Errorf("pdu: boolean array: %w", err)
+		}
+		return &DataValue{Tag: tag, Bytes: data, BitLen: bitLen}, nil
 
 	case TagDataArray, TagDataStructure:
 		elements, err := unmarshalAccessResultsWithDepth(content, depth+1)
@@ -497,4 +519,164 @@ func decodeBinaryTime(data []byte) (int64, error) {
 	default:
 		return 0, fmt.Errorf("binary time must be 4 or 6 bytes, got %d", len(data))
 	}
+}
+
+// ASN.1 REAL encoding (ITU-T X.690 §8.5).
+//
+// Binary base-2 encoding: info_byte + exponent + mantissa.
+// Special values: +0 → empty, -0 → 0x43, +∞ → 0x40, -∞ → 0x41.
+
+func encodeASN1Real(f float64) []byte {
+	if f == 0 {
+		if math.Signbit(f) {
+			return []byte{0x43}
+		}
+		return nil
+	}
+	if math.IsInf(f, 1) {
+		return []byte{0x40}
+	}
+	if math.IsInf(f, -1) {
+		return []byte{0x41}
+	}
+	if math.IsNaN(f) {
+		return []byte{0x42}
+	}
+
+	bits := math.Float64bits(f)
+	sign := (bits >> 63) != 0
+	rawExp := int((bits >> 52) & 0x7ff)
+	frac := bits & ((1 << 52) - 1)
+
+	var mantissa uint64
+	var exponent int64
+	if rawExp == 0 {
+		mantissa = frac
+		exponent = -1022 - 52
+	} else {
+		mantissa = (1 << 52) | frac
+		exponent = int64(rawExp) - 1023 - 52
+	}
+
+	for mantissa != 0 && mantissa&1 == 0 {
+		mantissa >>= 1
+		exponent++
+	}
+
+	mBuf := make([]byte, 8)
+	binary.BigEndian.PutUint64(mBuf, mantissa)
+	mi := 0
+	for mi < 7 && mBuf[mi] == 0 {
+		mi++
+	}
+	mBytes := mBuf[mi:]
+
+	eBytes := encodeSignedInt(exponent)
+
+	info := byte(0x80)
+	if sign {
+		info |= 0x40
+	}
+	switch len(eBytes) {
+	case 1:
+		// EE = 00
+	case 2:
+		info |= 0x01
+	case 3:
+		info |= 0x02
+	default:
+		info |= 0x03
+	}
+
+	var result []byte
+	result = append(result, info)
+	if info&0x03 == 0x03 {
+		result = append(result, byte(len(eBytes)))
+	}
+	result = append(result, eBytes...)
+	result = append(result, mBytes...)
+	return result
+}
+
+func decodeASN1Real(content []byte) (float64, error) {
+	if len(content) == 0 {
+		return 0, nil
+	}
+	info := content[0]
+	switch info {
+	case 0x40:
+		return math.Inf(1), nil
+	case 0x41:
+		return math.Inf(-1), nil
+	case 0x42:
+		return math.NaN(), nil
+	case 0x43:
+		return math.Copysign(0, -1), nil
+	}
+
+	if info&0x80 == 0 {
+		return 0, fmt.Errorf("decimal/ISO 6093 REAL encoding not supported")
+	}
+
+	negative := info&0x40 != 0
+
+	var baseShift int
+	switch (info >> 4) & 0x03 {
+	case 0:
+		baseShift = 1
+	case 1:
+		baseShift = 3
+	case 2:
+		baseShift = 4
+	default:
+		return 0, fmt.Errorf("reserved REAL base encoding")
+	}
+
+	scalingFactor := int((info >> 2) & 0x03)
+
+	var expLen int
+	offset := 1
+	switch info & 0x03 {
+	case 0:
+		expLen = 1
+	case 1:
+		expLen = 2
+	case 2:
+		expLen = 3
+	case 3:
+		if offset >= len(content) {
+			return 0, fmt.Errorf("REAL: missing exponent length")
+		}
+		expLen = int(content[offset])
+		offset++
+	}
+
+	if offset+expLen > len(content) {
+		return 0, fmt.Errorf("REAL: exponent overflow")
+	}
+	exp, err := decodeSignedInt(content[offset : offset+expLen])
+	if err != nil {
+		return 0, fmt.Errorf("REAL exponent: %w", err)
+	}
+	offset += expLen
+
+	mBytes := content[offset:]
+	if len(mBytes) == 0 {
+		return 0, fmt.Errorf("REAL: missing mantissa")
+	}
+
+	var mantissa uint64
+	if len(mBytes) > 8 {
+		return 0, fmt.Errorf("REAL: mantissa too large (%d bytes)", len(mBytes))
+	}
+	for _, b := range mBytes {
+		mantissa = (mantissa << 8) | uint64(b)
+	}
+
+	effectiveExp := int64(scalingFactor) + exp*int64(baseShift)
+	result := float64(mantissa) * math.Pow(2, float64(effectiveExp))
+	if negative {
+		result = -result
+	}
+	return result, nil
 }

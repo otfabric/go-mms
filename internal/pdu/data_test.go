@@ -464,6 +464,106 @@ func TestUnmarshalAccessResults_TooMany(t *testing.T) {
 	}
 }
 
+func TestDataRealRoundTrip(t *testing.T) {
+	cases := []float64{0.0, 1.0, -1.0, 3.14159265358979, math.MaxFloat64, math.SmallestNonzeroFloat64, -42.5}
+	for _, val := range cases {
+		dv := &DataValue{Tag: TagDataReal, Float: val}
+		b, err := MarshalData(dv)
+		if err != nil {
+			t.Fatalf("marshal real(%v): %v", val, err)
+		}
+		got, _, err := UnmarshalDataElement(b, 0)
+		if err != nil {
+			t.Fatalf("unmarshal real(%v): %v", val, err)
+		}
+		if got.Tag != TagDataReal {
+			t.Errorf("real(%v): tag = 0x%02x, want 0x%02x", val, got.Tag, TagDataReal)
+		}
+		if got.Float != val {
+			t.Errorf("real(%v): got %v", val, got.Float)
+		}
+	}
+}
+
+func TestDataRealSpecialValues(t *testing.T) {
+	tests := []struct {
+		name string
+		val  float64
+		test func(float64) bool
+	}{
+		{"positive infinity", math.Inf(1), func(f float64) bool { return math.IsInf(f, 1) }},
+		{"negative infinity", math.Inf(-1), func(f float64) bool { return math.IsInf(f, -1) }},
+		{"NaN", math.NaN(), func(f float64) bool { return math.IsNaN(f) }},
+		{"negative zero", math.Copysign(0, -1), func(f float64) bool { return f == 0 && math.Signbit(f) }},
+		{"positive zero", 0, func(f float64) bool { return f == 0 && !math.Signbit(f) }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dv := &DataValue{Tag: TagDataReal, Float: tc.val}
+			b, err := MarshalData(dv)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			got, _, err := UnmarshalDataElement(b, 0)
+			if err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if !tc.test(got.Float) {
+				t.Errorf("got %v, not %s", got.Float, tc.name)
+			}
+		})
+	}
+}
+
+func TestDataBooleanArrayRoundTrip(t *testing.T) {
+	data := []byte{0xAA, 0x55, 0xF0}
+	dv := &DataValue{Tag: TagDataBooleanArray, Bytes: data, BitLen: 20}
+	b, err := MarshalData(dv)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got, _, err := UnmarshalDataElement(b, 0)
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Tag != TagDataBooleanArray {
+		t.Errorf("tag = 0x%02x, want 0x%02x", got.Tag, TagDataBooleanArray)
+	}
+	if got.BitLen != 20 {
+		t.Errorf("bitLen = %d, want 20", got.BitLen)
+	}
+	if len(got.Bytes) != 3 {
+		t.Errorf("bytes len = %d, want 3", len(got.Bytes))
+	}
+}
+
+func TestDataBooleanArrayEmpty(t *testing.T) {
+	dv := &DataValue{Tag: TagDataBooleanArray, Bytes: nil, BitLen: 0}
+	b, err := MarshalData(dv)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got, _, err := UnmarshalDataElement(b, 0)
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Tag != TagDataBooleanArray || got.BitLen != 0 || len(got.Bytes) != 0 {
+		t.Errorf("expected empty boolean array, got %+v", got)
+	}
+}
+
+func TestDataObjIdTagCorrectness(t *testing.T) {
+	if TagDataObjId != 0x8f {
+		t.Errorf("TagDataObjId = 0x%02x, want 0x8f (context tag [15])", TagDataObjId)
+	}
+	if TagDataReal != 0x88 {
+		t.Errorf("TagDataReal = 0x%02x, want 0x88 (context tag [8])", TagDataReal)
+	}
+	if TagDataBooleanArray != 0x8e {
+		t.Errorf("TagDataBooleanArray = 0x%02x, want 0x8e (context tag [14])", TagDataBooleanArray)
+	}
+}
+
 func TestEmptyBitStringRoundTrip(t *testing.T) {
 	dv := &DataValue{Tag: TagDataBitString, Bytes: nil, BitLen: 0}
 	raw, err := MarshalData(dv)

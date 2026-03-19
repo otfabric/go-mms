@@ -131,6 +131,8 @@ const (
 	ValueTypeGeneralizedTime            // ISO 8601 generalized time
 	ValueTypeBCD                        // binary-coded decimal
 	ValueTypeObjectIdentifier           // ASN.1 OBJECT IDENTIFIER
+	ValueTypeReal                       // ASN.1 REAL (ITU-T X.690 §8.5 binary encoding)
+	ValueTypeBooleanArray               // packed boolean array (BIT STRING)
 )
 
 var valueTypeNames = [...]string{
@@ -151,6 +153,8 @@ var valueTypeNames = [...]string{
 	"GeneralizedTime",
 	"BCD",
 	"ObjectIdentifier",
+	"Real",
+	"BooleanArray",
 }
 
 // String returns the human-readable name of the ValueType.
@@ -536,6 +540,10 @@ func (ts *TypeSpec) DefaultValue() *Value {
 		return NewBCD(0)
 	case ValueTypeObjectIdentifier:
 		return NewObjectIdentifier(nil)
+	case ValueTypeReal:
+		return NewReal(0)
+	case ValueTypeBooleanArray:
+		return NewBooleanArray(nil, 0)
 	case ValueTypeStructure:
 		elems := make([]*Value, len(ts.Elements))
 		for i := range ts.Elements {
