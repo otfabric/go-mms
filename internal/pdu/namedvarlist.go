@@ -223,6 +223,30 @@ func MarshalDeleteNamedVarListRequest(invokeID codec.InvokeID, listNames []Objec
 	return marshalConfirmedLegacy(invokeID, asn1util.TagServiceDeleteNamedVariableList, listOfNames)
 }
 
+// MarshalDeleteNVLDomainScopeRequest builds a ConfirmedRequestPdu for
+// deleting all deletable NVLs in the specified domain (scopeOfDelete=2).
+func MarshalDeleteNVLDomainScopeRequest(invokeID codec.InvokeID, domain string) ([]byte, error) {
+	scopeBytes := berutil.EncodeTLV(0x80, berutil.EncodeInt(2))
+	listOfNames := berutil.EncodeTLV(0xa1, nil)
+	domainName := berutil.EncodeTLV(0x82, []byte(domain))
+	var payload []byte
+	payload = append(payload, scopeBytes...)
+	payload = append(payload, listOfNames...)
+	payload = append(payload, domainName...)
+	return marshalConfirmedLegacy(invokeID, asn1util.TagServiceDeleteNamedVariableList, payload)
+}
+
+// MarshalDeleteNVLVMDScopeRequest builds a ConfirmedRequestPdu for
+// deleting all deletable VMD-scoped NVLs (scopeOfDelete=3).
+func MarshalDeleteNVLVMDScopeRequest(invokeID codec.InvokeID) ([]byte, error) {
+	scopeBytes := berutil.EncodeTLV(0x80, berutil.EncodeInt(3))
+	listOfNames := berutil.EncodeTLV(0xa1, nil)
+	var payload []byte
+	payload = append(payload, scopeBytes...)
+	payload = append(payload, listOfNames...)
+	return marshalConfirmedLegacy(invokeID, asn1util.TagServiceDeleteNamedVariableList, payload)
+}
+
 // DeleteNamedVarListResult is the internal result of a
 // DeleteNamedVariableList response.
 type DeleteNamedVarListResult struct {

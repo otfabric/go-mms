@@ -377,3 +377,101 @@ func TestListNVLs(t *testing.T) {
 		t.Errorf("empty domain: count = %d, want 0", len(result.Names))
 	}
 }
+
+func TestDeleteAllDomainNVLs(t *testing.T) {
+	r := NewRegistry()
+	if err := r.RegisterDomain("dom1"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"list_a", "list_b", "list_c"} {
+		err := r.DefineNVL(&NVLEntry{
+			ItemID:    name,
+			Scope:     1,
+			Domain:    "dom1",
+			Deletable: true,
+		})
+		if err != nil {
+			t.Fatalf("define %s: %v", name, err)
+		}
+	}
+
+	err := r.DefineNVL(&NVLEntry{
+		ItemID:    "list_static",
+		Scope:     1,
+		Domain:    "dom1",
+		Deletable: false,
+	})
+	if err != nil {
+		t.Fatalf("define static: %v", err)
+	}
+
+	matched, deleted := r.DeleteAllDomainNVLs("dom1")
+	if matched != 4 {
+		t.Errorf("matched = %d, want 4", matched)
+	}
+	if deleted != 3 {
+		t.Errorf("deleted = %d, want 3", deleted)
+	}
+
+	remaining := r.ListDomainNVLs("dom1", "", 0)
+	if len(remaining.Names) != 1 || remaining.Names[0] != "list_static" {
+		t.Errorf("remaining = %v, want [list_static]", remaining.Names)
+	}
+}
+
+func TestDeleteAllDomainNVLsEmpty(t *testing.T) {
+	r := NewRegistry()
+	if err := r.RegisterDomain("empty"); err != nil {
+		t.Fatal(err)
+	}
+	matched, deleted := r.DeleteAllDomainNVLs("empty")
+	if matched != 0 || deleted != 0 {
+		t.Errorf("got (%d, %d), want (0, 0)", matched, deleted)
+	}
+}
+
+func TestDeleteAllVMDNVLs(t *testing.T) {
+	r := NewRegistry()
+
+	for _, name := range []string{"vmd_a", "vmd_b"} {
+		err := r.DefineNVL(&NVLEntry{
+			ItemID:    name,
+			Scope:     0,
+			Deletable: true,
+		})
+		if err != nil {
+			t.Fatalf("define %s: %v", name, err)
+		}
+	}
+
+	err := r.DefineNVL(&NVLEntry{
+		ItemID:    "vmd_static",
+		Scope:     0,
+		Deletable: false,
+	})
+	if err != nil {
+		t.Fatalf("define static: %v", err)
+	}
+
+	matched, deleted := r.DeleteAllVMDNVLs()
+	if matched != 3 {
+		t.Errorf("matched = %d, want 3", matched)
+	}
+	if deleted != 2 {
+		t.Errorf("deleted = %d, want 2", deleted)
+	}
+
+	remaining := r.ListVMDNVLs("", 0)
+	if len(remaining.Names) != 1 || remaining.Names[0] != "vmd_static" {
+		t.Errorf("remaining = %v, want [vmd_static]", remaining.Names)
+	}
+}
+
+func TestDeleteAllVMDNVLsEmpty(t *testing.T) {
+	r := NewRegistry()
+	matched, deleted := r.DeleteAllVMDNVLs()
+	if matched != 0 || deleted != 0 {
+		t.Errorf("got (%d, %d), want (0, 0)", matched, deleted)
+	}
+}

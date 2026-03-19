@@ -122,3 +122,44 @@ func TestUnmarshalDeleteNamedVarListResponse(t *testing.T) {
 		t.Errorf("numberDeleted = %d, want 1", result.NumberDeleted)
 	}
 }
+
+func TestMarshalDeleteNVLDomainScopeRequest(t *testing.T) {
+	b, err := MarshalDeleteNVLDomainScopeRequest(1, "testDomain")
+	if err != nil {
+		t.Fatalf("MarshalDeleteNVLDomainScopeRequest: %v", err)
+	}
+	if b[0] != asn1util.TagConfirmedRequest {
+		t.Fatalf("outer tag = 0x%02x, want 0x%02x", b[0], asn1util.TagConfirmedRequest)
+	}
+
+	body := extractServiceBody(t, b)
+	req, err := UnmarshalDeleteNVLRequest(body)
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if req.ScopeOfDelete != 2 {
+		t.Errorf("ScopeOfDelete = %d, want 2", req.ScopeOfDelete)
+	}
+	if req.DomainName != "testDomain" {
+		t.Errorf("DomainName = %q, want testDomain", req.DomainName)
+	}
+}
+
+func TestMarshalDeleteNVLVMDScopeRequest(t *testing.T) {
+	b, err := MarshalDeleteNVLVMDScopeRequest(1)
+	if err != nil {
+		t.Fatalf("MarshalDeleteNVLVMDScopeRequest: %v", err)
+	}
+	if b[0] != asn1util.TagConfirmedRequest {
+		t.Fatalf("outer tag = 0x%02x, want 0x%02x", b[0], asn1util.TagConfirmedRequest)
+	}
+
+	body := extractServiceBody(t, b)
+	req, err := UnmarshalDeleteNVLRequest(body)
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if req.ScopeOfDelete != 3 {
+		t.Errorf("ScopeOfDelete = %d, want 3", req.ScopeOfDelete)
+	}
+}

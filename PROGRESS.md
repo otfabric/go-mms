@@ -4799,3 +4799,58 @@ Implemented full per-connection association-scope variable support, closing the 
 | `internal/servermodel/registry.go` | Updated `RegisterVariable` doc comment |
 | `server_test.go` | Added 6 tests for association-scope variable lifecycle and end-to-end operations |
 | `COMPLIANCE.md` | Marked association-scope variable listing as resolved |
+
+---
+
+## DeleteNVL Bulk Scope (Domain and VMD)
+
+Implemented full client and server support for `scopeOfDelete=2` (domain) and `scopeOfDelete=3` (VMD) in the DeleteNamedVariableList service. The C reference (libIEC61850) does not support these scopes — it only supports `scopeOfDelete=0` (specific). The Go implementation now exceeds the C reference.
+
+### Changes
+
+**Registry (`internal/servermodel/registry.go`):**
+- Added `DeleteAllDomainNVLs(domain string) (matched, deleted int)` — iterates all NVLs in a domain, deletes those marked deletable
+- Added `DeleteAllVMDNVLs() (matched, deleted int)` — iterates all VMD-scoped NVLs, deletes those marked deletable
+
+**Server handler (`server.go`):**
+- Extended `handleDeleteNVL` switch to handle `scopeOfDelete=2` (domain) and `scopeOfDelete=3` (VMD), delegating to the new registry methods
+
+**PDU marshalling (`internal/pdu/namedvarlist.go`):**
+- Added `MarshalDeleteNVLDomainScopeRequest(invokeID, domain)` — builds a ConfirmedRequestPdu with `scopeOfDelete=2` and domain name
+- Added `MarshalDeleteNVLVMDScopeRequest(invokeID)` — builds a ConfirmedRequestPdu with `scopeOfDelete=3`
+
+**Client API (`mms.go`):**
+- Added `Client.DeleteAllDomainNVLs(ctx, domain)` — deletes all deletable NVLs in a domain
+- Added `Client.DeleteAllVMDNVLs(ctx)` — deletes all deletable VMD-scoped NVLs
+- Both return `*DeleteNamedVariableListResult` with `NumberMatched`/`NumberDeleted`
+
+### Tests
+
+**Registry unit tests (`internal/servermodel/registry_test.go`):**
+- `TestDeleteAllDomainNVLs` — 3 deletable + 1 non-deletable; verifies matched/deleted counts and remainder
+- `TestDeleteAllDomainNVLsEmpty` — empty domain returns (0, 0)
+- `TestDeleteAllVMDNVLs` — 2 deletable + 1 non-deletable; verifies counts and remainder
+- `TestDeleteAllVMDNVLsEmpty` — empty registry returns (0, 0)
+
+**PDU roundtrip tests (`internal/pdu/namedvarlist_test.go`):**
+- `TestMarshalDeleteNVLDomainScopeRequest` — marshal → unmarshal roundtrip, verifies scopeOfDelete=2 and domain name
+- `TestMarshalDeleteNVLVMDScopeRequest` — marshal → unmarshal roundtrip, verifies scopeOfDelete=3
+
+**End-to-end integration tests (`server_test.go`):**
+- `TestServerDeleteAllDomainNVLs` — define 3 NVLs, bulk-delete, verify all gone via GetNameList
+- `TestServerDeleteAllDomainNVLsEmptyDomain` — validates empty domain rejected client-side
+- `TestServerDeleteAllVMDNVLs` — define 2 VMD NVLs, bulk-delete, verify all gone
+- `TestServerDeleteAllDomainNVLsNonDeletable` — verifies non-deletable NVLs are matched but not deleted
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `internal/servermodel/registry.go` | Added `DeleteAllDomainNVLs`, `DeleteAllVMDNVLs` |
+| `internal/servermodel/registry_test.go` | Added 4 unit tests |
+| `server.go` | Extended `handleDeleteNVL` for scopeOfDelete 2 and 3 |
+| `internal/pdu/namedvarlist.go` | Added `MarshalDeleteNVLDomainScopeRequest`, `MarshalDeleteNVLVMDScopeRequest` |
+| `internal/pdu/namedvarlist_test.go` | Added 2 PDU roundtrip tests |
+| `mms.go` | Added `Client.DeleteAllDomainNVLs`, `Client.DeleteAllVMDNVLs` |
+| `server_test.go` | Added 4 end-to-end integration tests |
+| `COMPLIANCE.md` | Updated DeleteNVL row; moved bulk scope from remaining to resolved gaps |

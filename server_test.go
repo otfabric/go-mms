@@ -2665,3 +2665,157 @@ func TestServerAssocVarGetVarAccessEndToEnd(t *testing.T) {
 		t.Errorf("TypeSpec = %+v, want Integer/32", attrs.TypeSpec)
 	}
 }
+
+func TestServerDeleteAllDomainNVLs(t *testing.T) {
+	srv := testServer(t)
+	client := connectClientServer(t, srv)
+	defer client.Close(context.Background())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	for _, name := range []string{"list_alpha", "list_beta", "list_gamma"} {
+		err := client.DefineNamedVariableList(ctx, DefineNamedVariableListRequest{
+			ListName: ObjectName{Scope: ObjectScopeDomain, Domain: "testDomain", ItemID: ItemID(name)},
+			Variables: []VariableSpec{
+				{Name: ObjectName{Scope: ObjectScopeDomain, Domain: "testDomain", ItemID: "temperature"}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("DefineNamedVariableList %s: %v", name, err)
+		}
+	}
+
+	nl, err := client.GetNameList(ctx, NameListRequest{
+		ObjectClass: ObjectClassNamedVariableList,
+		Scope:       ObjectScopeDomain,
+		DomainID:    "testDomain",
+	})
+	if err != nil {
+		t.Fatalf("GetNameList before delete: %v", err)
+	}
+	if len(nl.Names) != 3 {
+		t.Fatalf("expected 3 NVLs before delete, got %d", len(nl.Names))
+	}
+
+	result, err := client.DeleteAllDomainNVLs(ctx, "testDomain")
+	if err != nil {
+		t.Fatalf("DeleteAllDomainNVLs: %v", err)
+	}
+	if result.NumberMatched != 3 {
+		t.Errorf("NumberMatched = %d, want 3", result.NumberMatched)
+	}
+	if result.NumberDeleted != 3 {
+		t.Errorf("NumberDeleted = %d, want 3", result.NumberDeleted)
+	}
+
+	nl, err = client.GetNameList(ctx, NameListRequest{
+		ObjectClass: ObjectClassNamedVariableList,
+		Scope:       ObjectScopeDomain,
+		DomainID:    "testDomain",
+	})
+	if err != nil {
+		t.Fatalf("GetNameList after delete: %v", err)
+	}
+	if len(nl.Names) != 0 {
+		t.Errorf("expected 0 NVLs after delete, got %d: %v", len(nl.Names), nl.Names)
+	}
+}
+
+func TestServerDeleteAllDomainNVLsEmptyDomain(t *testing.T) {
+	srv := testServer(t)
+	client := connectClientServer(t, srv)
+	defer client.Close(context.Background())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := client.DeleteAllDomainNVLs(ctx, "")
+	if err == nil {
+		t.Fatal("expected error for empty domain")
+	}
+}
+
+func TestServerDeleteAllVMDNVLs(t *testing.T) {
+	srv := testServer(t)
+	client := connectClientServer(t, srv)
+	defer client.Close(context.Background())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	for _, name := range []string{"vmd_list1", "vmd_list2"} {
+		err := client.DefineNamedVariableList(ctx, DefineNamedVariableListRequest{
+			ListName: ObjectName{Scope: ObjectScopeVMD, ItemID: ItemID(name)},
+			Variables: []VariableSpec{
+				{Name: ObjectName{Scope: ObjectScopeDomain, Domain: "testDomain", ItemID: "temperature"}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("DefineNamedVariableList %s: %v", name, err)
+		}
+	}
+
+	nl, err := client.GetNameList(ctx, NameListRequest{
+		ObjectClass: ObjectClassNamedVariableList,
+		Scope:       ObjectScopeVMD,
+	})
+	if err != nil {
+		t.Fatalf("GetNameList before delete: %v", err)
+	}
+	if len(nl.Names) != 2 {
+		t.Fatalf("expected 2 VMD NVLs before delete, got %d", len(nl.Names))
+	}
+
+	result, err := client.DeleteAllVMDNVLs(ctx)
+	if err != nil {
+		t.Fatalf("DeleteAllVMDNVLs: %v", err)
+	}
+	if result.NumberMatched != 2 {
+		t.Errorf("NumberMatched = %d, want 2", result.NumberMatched)
+	}
+	if result.NumberDeleted != 2 {
+		t.Errorf("NumberDeleted = %d, want 2", result.NumberDeleted)
+	}
+
+	nl, err = client.GetNameList(ctx, NameListRequest{
+		ObjectClass: ObjectClassNamedVariableList,
+		Scope:       ObjectScopeVMD,
+	})
+	if err != nil {
+		t.Fatalf("GetNameList after delete: %v", err)
+	}
+	if len(nl.Names) != 0 {
+		t.Errorf("expected 0 VMD NVLs after delete, got %d: %v", len(nl.Names), nl.Names)
+	}
+}
+
+func TestServerDeleteAllDomainNVLsNonDeletable(t *testing.T) {
+	srv := testServer(t)
+	client := connectClientServer(t, srv)
+	defer client.Close(context.Background())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := client.DefineNamedVariableList(ctx, DefineNamedVariableListRequest{
+		ListName: ObjectName{Scope: ObjectScopeDomain, Domain: "testDomain", ItemID: "deletable_list"},
+		Variables: []VariableSpec{
+			{Name: ObjectName{Scope: ObjectScopeDomain, Domain: "testDomain", ItemID: "temperature"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("DefineNamedVariableList: %v", err)
+	}
+
+	result, err := client.DeleteAllDomainNVLs(ctx, "testDomain")
+	if err != nil {
+		t.Fatalf("DeleteAllDomainNVLs: %v", err)
+	}
+	if result.NumberMatched != 1 {
+		t.Errorf("NumberMatched = %d, want 1", result.NumberMatched)
+	}
+	if result.NumberDeleted != 1 {
+		t.Errorf("NumberDeleted = %d, want 1", result.NumberDeleted)
+	}
+}

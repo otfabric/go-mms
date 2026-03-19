@@ -1802,6 +1802,93 @@ func (c *Client) DeleteNamedVariableList(ctx context.Context, listNames []Object
 	}, nil
 }
 
+// DeleteAllDomainNVLs deletes all deletable named variable lists in the
+// specified domain (scopeOfDelete=2). The server iterates all NVLs in
+// the domain and deletes those that are marked as deletable.
+func (c *Client) DeleteAllDomainNVLs(ctx context.Context, domain string) (*DeleteNamedVariableListResult, error) {
+	if domain == "" {
+		return nil, fmt.Errorf("mms: delete all domain NVLs: empty domain name")
+	}
+
+	invokeID := c.nextInvokeID()
+
+	reqBytes, err := pdu.MarshalDeleteNVLDomainScopeRequest(invokeID, domain)
+	if err != nil {
+		return nil, fmt.Errorf("mms: marshal delete domain NVLs request: %w", err)
+	}
+
+	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	if confirmed.ServiceKind != pdu.ServiceDeleteNamedVariableList {
+		return nil, &ProtocolError{
+			Phase:   "mms",
+			Message: fmt.Sprintf("expected DeleteNamedVariableList response, got %s", confirmed.ServiceKind),
+		}
+	}
+
+	result, err := pdu.UnmarshalDeleteNamedVarListResponse(confirmed.ServiceData)
+	if err != nil {
+		return nil, fmt.Errorf("mms: %w", err)
+	}
+
+	c.logger.Debug("mms: delete all domain NVLs",
+		"invoke_id", invokeID,
+		"service", "DeleteNamedVariableList",
+		"domain", domain,
+		"matched", result.NumberMatched,
+		"deleted", result.NumberDeleted,
+	)
+
+	return &DeleteNamedVariableListResult{
+		NumberMatched: result.NumberMatched,
+		NumberDeleted: result.NumberDeleted,
+	}, nil
+}
+
+// DeleteAllVMDNVLs deletes all deletable VMD-scoped named variable lists
+// (scopeOfDelete=3). The server iterates all VMD-scoped NVLs and deletes
+// those that are marked as deletable.
+func (c *Client) DeleteAllVMDNVLs(ctx context.Context) (*DeleteNamedVariableListResult, error) {
+	invokeID := c.nextInvokeID()
+
+	reqBytes, err := pdu.MarshalDeleteNVLVMDScopeRequest(invokeID)
+	if err != nil {
+		return nil, fmt.Errorf("mms: marshal delete VMD NVLs request: %w", err)
+	}
+
+	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	if confirmed.ServiceKind != pdu.ServiceDeleteNamedVariableList {
+		return nil, &ProtocolError{
+			Phase:   "mms",
+			Message: fmt.Sprintf("expected DeleteNamedVariableList response, got %s", confirmed.ServiceKind),
+		}
+	}
+
+	result, err := pdu.UnmarshalDeleteNamedVarListResponse(confirmed.ServiceData)
+	if err != nil {
+		return nil, fmt.Errorf("mms: %w", err)
+	}
+
+	c.logger.Debug("mms: delete all VMD NVLs",
+		"invoke_id", invokeID,
+		"service", "DeleteNamedVariableList",
+		"matched", result.NumberMatched,
+		"deleted", result.NumberDeleted,
+	)
+
+	return &DeleteNamedVariableListResult{
+		NumberMatched: result.NumberMatched,
+		NumberDeleted: result.NumberDeleted,
+	}, nil
+}
+
 // validateObjectName checks that a public ObjectName has valid field
 // combinations: non-empty ItemID, domain scope requires non-empty Domain,
 // and scope must be a known value.

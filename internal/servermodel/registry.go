@@ -250,6 +250,56 @@ func (r *Registry) DeleteNVL(scope int, domain, itemID string) bool {
 	return true
 }
 
+// DeleteAllDomainNVLs removes all deletable named variable lists in
+// the given domain. Returns the number of NVLs matched and deleted.
+func (r *Registry) DeleteAllDomainNVLs(domain string) (matched, deleted int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	names := make([]string, len(r.nvlOrder[domain]))
+	copy(names, r.nvlOrder[domain])
+
+	for _, itemID := range names {
+		key := nvlKey(1, domain, itemID)
+		entry, ok := r.nvls[key]
+		if !ok {
+			continue
+		}
+		matched++
+		if entry.Deletable {
+			delete(r.nvls, key)
+			r.nvlOrder[domain] = removeFromSorted(r.nvlOrder[domain], itemID)
+			deleted++
+		}
+	}
+	return matched, deleted
+}
+
+// DeleteAllVMDNVLs removes all deletable VMD-scoped named variable
+// lists. Returns the number of NVLs matched and deleted.
+func (r *Registry) DeleteAllVMDNVLs() (matched, deleted int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	names := make([]string, len(r.vmdNVLOrder))
+	copy(names, r.vmdNVLOrder)
+
+	for _, itemID := range names {
+		key := nvlKey(0, "", itemID)
+		entry, ok := r.nvls[key]
+		if !ok {
+			continue
+		}
+		matched++
+		if entry.Deletable {
+			delete(r.nvls, key)
+			r.vmdNVLOrder = removeFromSorted(r.vmdNVLOrder, itemID)
+			deleted++
+		}
+	}
+	return matched, deleted
+}
+
 func removeFromSorted(sorted []string, name string) []string {
 	for i, n := range sorted {
 		if n == name {
