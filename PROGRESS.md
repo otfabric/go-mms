@@ -4755,3 +4755,47 @@ Both functions now at 100% coverage.
 | `value_test.go` | Added 9 tests for `NewReal` and `NewBooleanArray` (100% coverage) |
 | `server_test.go` | Added 6 tests for Abort, UnsolicitedStatus, and association NVL lifecycle |
 | `COMPLIANCE.md` | Updated Abort/GetNameList/DeleteNVL/Status rows; added UnsolicitedStatus and Cancel rows; restructured Known Gaps into Resolved and Remaining with priority/impact table |
+
+---
+
+## Association-Scope Variable Support
+
+Implemented full per-connection association-scope variable support, closing the final association-scope gap. The C reference (libIEC61850) does not support association-scope variable listing either — it only supports NVLs at association scope.
+
+### Changes
+
+**Per-connection variable storage on `ServerConn`:**
+- Added `assocVars map[string]*servermodel.VarEntry` and `assocVarOrder []string` fields
+- Added internal methods: `registerAssocVar`, `lookupAssocVar`, `listAssocVars`
+- Added public `ServerConn.RegisterVariable(Variable)` for registering association-scope variables on a connection
+
+**Server handler updates:**
+- `handleGetNameList`: added `ObjectClassNamedVariable + ScopeAssociation` case to list from per-connection storage
+- `handleRead`: uses new `lookupVariable` helper that checks association scope on the connection
+- `handleWrite`: same `lookupVariable` helper
+- `handleGetVarAccess`: same `lookupVariable` helper
+- `Server.RegisterVariable`: now rejects `ObjectScopeAssociation` with a clear error directing to `ServerConn.RegisterVariable`
+
+**Documentation updates:**
+- `types.go`: Updated `ObjectScopeAssociation` doc to reflect full support
+- `internal/servermodel/registry.go`: Updated `RegisterVariable` doc to clarify association-scope routing
+- `COMPLIANCE.md`: Marked association-scope variable listing as resolved; updated GetNameList row
+
+### Tests
+
+- `TestServerConnAssocVarLifecycle` — register/duplicate/lookup/list cycle on standalone `ServerConn`
+- `TestServerConnAssocVarEmptyItemID` — validation of empty ItemID
+- `TestServerRegisterVariableRejectsAssociationScope` — `Server.RegisterVariable` rejects association scope
+- `TestServerAssocVarReadWriteEndToEnd` — full client↔server read/write of an association-scope variable
+- `TestServerAssocVarGetNameListEndToEnd` — client lists association-scope variables, verifies sorted order
+- `TestServerAssocVarGetVarAccessEndToEnd` — client queries type spec of an association-scope variable
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `server.go` | Added `ServerConn.RegisterVariable`, per-connection variable storage (`assocVars`, `assocVarOrder`), `lookupVariable` helper; updated `handleGetNameList`, `handleGetVarAccess`, `handleRead`, `handleWrite`; `Server.RegisterVariable` rejects association scope |
+| `types.go` | Updated `ObjectScopeAssociation` doc comment |
+| `internal/servermodel/registry.go` | Updated `RegisterVariable` doc comment |
+| `server_test.go` | Added 6 tests for association-scope variable lifecycle and end-to-end operations |
+| `COMPLIANCE.md` | Marked association-scope variable listing as resolved |

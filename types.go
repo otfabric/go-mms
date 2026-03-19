@@ -317,9 +317,9 @@ const (
 	// ObjectScopeDomain selects domain-specific scope (requires a DomainID).
 	ObjectScopeDomain
 	// ObjectScopeAssociation selects objects scoped to a single
-	// association. Association-scope storage is supported, but
-	// server-side listing and lifecycle management are not yet
-	// implemented.
+	// association. Association-scope variables and NVLs are stored
+	// per-connection on [ServerConn] and support full listing via
+	// GetNameList, Read, Write, and GetVariableAccessAttributes.
 	ObjectScopeAssociation
 )
 

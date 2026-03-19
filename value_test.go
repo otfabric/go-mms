@@ -333,3 +333,309 @@ func TestValueBooleanArrayString(t *testing.T) {
 		t.Error("String() should not be empty")
 	}
 }
+
+func TestValueAccessorWrongType(t *testing.T) {
+	intVal := NewInteger(42)
+
+	if _, ok := intVal.Float32(); ok {
+		t.Error("Float32() on Integer should return false")
+	}
+	if _, ok := intVal.Uint32(); ok {
+		t.Error("Uint32() on Integer should return false")
+	}
+	if _, ok := intVal.Uint64(); ok {
+		t.Error("Uint64() on Integer should return false")
+	}
+	if _, ok := intVal.BitString(); ok {
+		t.Error("BitString() on Integer should return false")
+	}
+	if _, ok := intVal.BitStringLength(); ok {
+		t.Error("BitStringLength() on Integer should return false")
+	}
+	if _, ok := intVal.OctetString(); ok {
+		t.Error("OctetString() on Integer should return false")
+	}
+	if _, ok := intVal.VisibleString(); ok {
+		t.Error("VisibleString() on Integer should return false")
+	}
+	if _, ok := intVal.BinaryTime(); ok {
+		t.Error("BinaryTime() on Integer should return false")
+	}
+	if _, ok := intVal.GeneralizedTime(); ok {
+		t.Error("GeneralizedTime() on Integer should return false")
+	}
+	if _, ok := intVal.BCD(); ok {
+		t.Error("BCD() on Integer should return false")
+	}
+	if _, ok := intVal.ObjectIdentifier(); ok {
+		t.Error("ObjectIdentifier() on Integer should return false")
+	}
+	if _, ok := intVal.Real(); ok {
+		t.Error("Real() on Integer should return false")
+	}
+	if _, _, ok := intVal.BooleanArray(); ok {
+		t.Error("BooleanArray() on Integer should return false")
+	}
+	if _, ok := intVal.Structure(); ok {
+		t.Error("Structure() on Integer should return false")
+	}
+	if _, ok := intVal.DataAccessErr(); ok {
+		t.Error("DataAccessErr() on Integer should return false")
+	}
+}
+
+func TestValueEqualNil(t *testing.T) {
+	v := NewBoolean(true)
+
+	if v.Equal(nil) {
+		t.Error("Equal(nil) should be false for non-nil value")
+	}
+
+	var nilVal *Value
+	if !nilVal.Equal(nil) {
+		t.Error("nil.Equal(nil) should be true")
+	}
+	if nilVal.Equal(v) {
+		t.Error("nil.Equal(non-nil) should be false")
+	}
+}
+
+func TestValueEqualDifferentType(t *testing.T) {
+	v1 := NewBoolean(true)
+	v2 := NewInteger(1)
+	if v1.Equal(v2) {
+		t.Error("Equal across different types should be false")
+	}
+}
+
+func TestValueEqualUnsigned(t *testing.T) {
+	v1 := NewUnsigned(100)
+	v2 := NewUnsigned(100)
+	v3 := NewUnsigned(200)
+	if !v1.Equal(v2) {
+		t.Error("Equal(same unsigned) should be true")
+	}
+	if v1.Equal(v3) {
+		t.Error("Equal(different unsigned) should be false")
+	}
+}
+
+func TestValueEqualBitString(t *testing.T) {
+	v1 := NewBitStringWithLength([]byte{0xCA}, 7)
+	v2 := NewBitStringWithLength([]byte{0xCA}, 7)
+	v3 := NewBitStringWithLength([]byte{0xCA}, 6)
+	v4 := NewBitStringWithLength([]byte{0xCB}, 7)
+	if !v1.Equal(v2) {
+		t.Error("Equal(same bitstring) should be true")
+	}
+	if v1.Equal(v3) {
+		t.Error("Equal(different bitLen) should be false")
+	}
+	if v1.Equal(v4) {
+		t.Error("Equal(different bytes) should be false")
+	}
+}
+
+func TestValueEqualOctetString(t *testing.T) {
+	v1 := NewOctetString([]byte{1, 2, 3})
+	v2 := NewOctetString([]byte{1, 2, 3})
+	v3 := NewOctetString([]byte{1, 2, 4})
+	if !v1.Equal(v2) {
+		t.Error("Equal(same octet string) should be true")
+	}
+	if v1.Equal(v3) {
+		t.Error("Equal(different octet string) should be false")
+	}
+}
+
+func TestValueEqualVisibleString(t *testing.T) {
+	if !NewVisibleString("abc").Equal(NewVisibleString("abc")) {
+		t.Error("Equal(same visible string) should be true")
+	}
+	if NewVisibleString("abc").Equal(NewVisibleString("xyz")) {
+		t.Error("Equal(different visible string) should be false")
+	}
+}
+
+func TestValueEqualMmsString(t *testing.T) {
+	if !NewMmsString("abc").Equal(NewMmsString("abc")) {
+		t.Error("Equal(same mms string) should be true")
+	}
+	if NewMmsString("abc").Equal(NewMmsString("xyz")) {
+		t.Error("Equal(different mms string) should be false")
+	}
+}
+
+func TestValueEqualUTCTime(t *testing.T) {
+	t1 := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	t2 := time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)
+	if !NewUTCTime(t1).Equal(NewUTCTime(t1)) {
+		t.Error("Equal(same utc time) should be true")
+	}
+	if NewUTCTime(t1).Equal(NewUTCTime(t2)) {
+		t.Error("Equal(different utc time) should be false")
+	}
+}
+
+func TestValueEqualBinaryTime(t *testing.T) {
+	if !NewBinaryTime(1000).Equal(NewBinaryTime(1000)) {
+		t.Error("Equal(same binary time) should be true")
+	}
+	if NewBinaryTime(1000).Equal(NewBinaryTime(2000)) {
+		t.Error("Equal(different binary time) should be false")
+	}
+}
+
+func TestValueEqualGeneralizedTime(t *testing.T) {
+	t1 := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	t2 := time.Date(2025, 6, 2, 12, 0, 0, 0, time.UTC)
+	if !NewGeneralizedTime(t1).Equal(NewGeneralizedTime(t1)) {
+		t.Error("Equal(same gen time) should be true")
+	}
+	if NewGeneralizedTime(t1).Equal(NewGeneralizedTime(t2)) {
+		t.Error("Equal(different gen time) should be false")
+	}
+}
+
+func TestValueEqualBCD(t *testing.T) {
+	if !NewBCD(42).Equal(NewBCD(42)) {
+		t.Error("Equal(same bcd) should be true")
+	}
+	if NewBCD(42).Equal(NewBCD(99)) {
+		t.Error("Equal(different bcd) should be false")
+	}
+}
+
+func TestValueEqualObjectIdentifier(t *testing.T) {
+	oid1 := []int{1, 2, 3, 4}
+	oid2 := []int{1, 2, 3, 5}
+	oid3 := []int{1, 2}
+	if !NewObjectIdentifier(oid1).Equal(NewObjectIdentifier(oid1)) {
+		t.Error("Equal(same oid) should be true")
+	}
+	if NewObjectIdentifier(oid1).Equal(NewObjectIdentifier(oid2)) {
+		t.Error("Equal(different oid arcs) should be false")
+	}
+	if NewObjectIdentifier(oid1).Equal(NewObjectIdentifier(oid3)) {
+		t.Error("Equal(different oid length) should be false")
+	}
+}
+
+func TestValueEqualFloat(t *testing.T) {
+	if !NewFloat(3.14).Equal(NewFloat(3.14)) {
+		t.Error("Equal(same float) should be true")
+	}
+	if NewFloat(3.14).Equal(NewFloat(2.71)) {
+		t.Error("Equal(different float) should be false")
+	}
+}
+
+func TestValueEqualDataAccessError(t *testing.T) {
+	if !NewDataAccessError(DataAccessErrorObjectUndefined).Equal(NewDataAccessError(DataAccessErrorObjectUndefined)) {
+		t.Error("Equal(same error) should be true")
+	}
+	if NewDataAccessError(DataAccessErrorObjectUndefined).Equal(NewDataAccessError(DataAccessErrorObjectAccessDenied)) {
+		t.Error("Equal(different error) should be false")
+	}
+}
+
+func TestValueEqualStructureMismatch(t *testing.T) {
+	s1 := NewStructure([]*Value{NewBoolean(true), NewInteger(1)})
+	s2 := NewStructure([]*Value{NewBoolean(true)})
+	s3 := NewStructure([]*Value{NewBoolean(false), NewInteger(1)})
+	if s1.Equal(s2) {
+		t.Error("Equal(different length structure) should be false")
+	}
+	if s1.Equal(s3) {
+		t.Error("Equal(different element) should be false")
+	}
+}
+
+func TestValueEqualArray(t *testing.T) {
+	a1 := NewArray([]*Value{NewInteger(1), NewInteger(2)})
+	a2 := NewArray([]*Value{NewInteger(1), NewInteger(2)})
+	a3 := NewArray([]*Value{NewInteger(1)})
+	if !a1.Equal(a2) {
+		t.Error("Equal(same array) should be true")
+	}
+	if a1.Equal(a3) {
+		t.Error("Equal(different array) should be false")
+	}
+}
+
+func TestValueStringAllTypes(t *testing.T) {
+	now := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		val  *Value
+	}{
+		{"nil", nil},
+		{"bool", NewBoolean(true)},
+		{"int", NewInteger(-5)},
+		{"uint", NewUnsigned(10)},
+		{"float", NewFloat(3.14)},
+		{"bitstring", NewBitStringWithLength([]byte{0xff}, 8)},
+		{"octetstring", NewOctetString([]byte{1, 2})},
+		{"visstring", NewVisibleString("hello")},
+		{"mmsstring", NewMmsString("world")},
+		{"utctime", NewUTCTime(now)},
+		{"binarytime", NewBinaryTime(12345)},
+		{"structure", NewStructure([]*Value{NewBoolean(true)})},
+		{"array", NewArray([]*Value{NewInteger(1)})},
+		{"gentime", NewGeneralizedTime(now)},
+		{"bcd", NewBCD(42)},
+		{"oid", NewObjectIdentifier([]int{1, 2, 3})},
+		{"real", NewReal(2.718)},
+		{"boolarray", NewBooleanArray([]byte{0xCA}, 7)},
+		{"dataerror", NewDataAccessError(DataAccessErrorObjectUndefined)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := tc.val.String()
+			if s == "" {
+				t.Error("String() should not be empty")
+			}
+		})
+	}
+}
+
+func TestValueEqualUnknownType(t *testing.T) {
+	v1 := &Value{typ: ValueType(200)}
+	v2 := &Value{typ: ValueType(200)}
+	if v1.Equal(v2) {
+		t.Error("Equal on unknown type should return false")
+	}
+}
+
+func TestValueStringUnknownType(t *testing.T) {
+	v := &Value{typ: ValueType(200)}
+	s := v.String()
+	if s == "" || s == "<nil>" {
+		t.Errorf("String() on unknown type = %q, want fallback", s)
+	}
+}
+
+func TestValueCloneNil(t *testing.T) {
+	var v *Value
+	if v.Clone() != nil {
+		t.Error("Clone of nil should be nil")
+	}
+}
+
+func TestValueObjectIdentifierCopyIsolation(t *testing.T) {
+	orig := []int{1, 2, 3, 4}
+	v := NewObjectIdentifier(orig)
+	orig[0] = 99
+	got, ok := v.ObjectIdentifier()
+	if !ok {
+		t.Fatal("ObjectIdentifier() ok=false")
+	}
+	if got[0] != 1 {
+		t.Error("constructor should copy OID")
+	}
+	got[1] = 99
+	got2, _ := v.ObjectIdentifier()
+	if got2[1] != 2 {
+		t.Error("accessor should copy OID")
+	}
+}

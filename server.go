@@ -100,6 +100,9 @@ type ServerConn struct {
 
 	assocNVLs     map[string]*servermodel.NVLEntry
 	assocNVLOrder []string
+
+	assocVars     map[string]*servermodel.VarEntry
+	assocVarOrder []string
 }
 
 // NewServer creates a new MMS server with the given options.
@@ -142,9 +145,16 @@ func (s *Server) RegisterDomain(name string) error {
 // The variable's domain (if domain-scoped) must already be registered.
 // The TypeSpec is validated at registration time; unsupported type
 // specifications are rejected early rather than at request time.
+//
+// For association-scoped variables, use [ServerConn.RegisterVariable]
+// instead — association-scope variables are per-connection and cannot
+// be registered on the shared server model.
 func (s *Server) RegisterVariable(v Variable) error {
 	if err := validateObjectName(v.Name); err != nil {
 		return fmt.Errorf("mms: register variable: %w", err)
+	}
+	if v.Name.Scope == ObjectScopeAssociation {
+		return fmt.Errorf("mms: register variable %q: use ServerConn.RegisterVariable for association-scope variables", v.Name.ItemID)
 	}
 	if _, err := typeSpecToWire(v.TypeSpec); err != nil {
 		return fmt.Errorf("mms: register variable %q: invalid type spec: %w", v.Name.ItemID, err)
@@ -442,6 +452,74 @@ func (sc *ServerConn) deleteAllAssocNVLs() (matched, deleted int) {
 		sc.assocNVLOrder = nil
 	}
 	return matched, deleted
+}
+
+// RegisterVariable adds an association-scoped variable to this
+// connection. Association-scope variables are visible only to this
+// client and are automatically discarded when the connection closes.
+//
+// This is typically called from an [Authenticator] or connection setup
+// callback after the association is established. The variable is
+// readable/writable via the standard MMS Read/Write services using
+// [ObjectScopeAssociation] addressing.
+func (sc *ServerConn) RegisterVariable(v Variable) error {
+	if v.Name.ItemID == "" {
+		return fmt.Errorf("mms: register association variable: empty ItemID")
+	}
+	entry := &servermodel.VarEntry{
+		ItemID:    string(v.Name.ItemID),
+		Scope:     int(ObjectScopeAssociation),
+		Deletable: v.Deletable,
+		TypeSpec:  v.TypeSpec,
+		ReadFunc:  v.Read,
+		WriteFunc: v.Write,
+	}
+	return sc.registerAssocVar(entry)
+}
+
+func (sc *ServerConn) registerAssocVar(entry *servermodel.VarEntry) error {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	if sc.assocVars == nil {
+		sc.assocVars = make(map[string]*servermodel.VarEntry)
+	}
+	if _, exists := sc.assocVars[entry.ItemID]; exists {
+		return fmt.Errorf("mms: association variable %q already defined", entry.ItemID)
+	}
+	sc.assocVars[entry.ItemID] = entry
+	sc.assocVarOrder = append(sc.assocVarOrder, entry.ItemID)
+	sort.Strings(sc.assocVarOrder)
+	return nil
+}
+
+func (sc *ServerConn) lookupAssocVar(itemID string) (*servermodel.VarEntry, bool) {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	e, ok := sc.assocVars[itemID]
+	return e, ok
+}
+
+func (sc *ServerConn) listAssocVars(continueAfter string, maxNames int) servermodel.NameListResult {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	if maxNames <= 0 {
+		maxNames = 100
+	}
+	sorted := sc.assocVarOrder
+	start := 0
+	if continueAfter != "" {
+		for i, name := range sorted {
+			if name == continueAfter {
+				start = i + 1
+				break
+			}
+		}
+	}
+	remaining := sorted[start:]
+	if len(remaining) > maxNames {
+		return servermodel.NameListResult{Names: remaining[:maxNames], MoreFollows: true}
+	}
+	return servermodel.NameListResult{Names: remaining, MoreFollows: false}
 }
 
 // Abort sends a protocol-level MMS Abort PDU (ACSE ABRT wrapped in a
@@ -777,6 +855,12 @@ func (s *Server) handleGetNameList(ctx context.Context, body []byte) (int, bool,
 			return 0, false, nil, errUnsupportedFeature
 		}
 		result = sc.listAssocNVLs(req.ContinueAfter, 0)
+	case req.ObjectClass == int(ObjectClassNamedVariable) && req.Scope == pdu.ScopeAssociation:
+		sc, _ := ctx.Value(serverConnCtxKey{}).(*ServerConn)
+		if sc == nil {
+			return 0, false, nil, errUnsupportedFeature
+		}
+		result = sc.listAssocVars(req.ContinueAfter, 0)
 	default:
 		return 0, false, nil, errUnsupportedFeature
 	}
@@ -821,13 +905,13 @@ func (s *Server) handleGetNameListJournal(ctx context.Context, req *pdu.GetNameL
 
 // --- GetVariableAccessAttributes ---
 
-func (s *Server) handleGetVarAccess(_ context.Context, body []byte) (int, bool, []byte, error) {
+func (s *Server) handleGetVarAccess(ctx context.Context, body []byte) (int, bool, []byte, error) {
 	wireName, err := pdu.UnmarshalGetVarAccessRequest(body)
 	if err != nil {
 		return 0, false, nil, errInvalidRequest
 	}
 
-	entry, ok := s.registry.LookupVariable(wireName.Scope, wireName.DomainID, wireName.ItemID)
+	entry, ok := s.lookupVariable(ctx, wireName.Scope, wireName.DomainID, wireName.ItemID)
 	if !ok {
 		return 0, false, nil, errObjectNonExistent
 	}
@@ -870,7 +954,7 @@ func (s *Server) handleRead(ctx context.Context, body []byte) (int, bool, []byte
 	var accessResults []*pdu.AccessResult
 	for _, spec := range specs {
 		wn := spec.Name
-		entry, ok := s.registry.LookupVariable(wn.Scope, wn.DomainID, wn.ItemID)
+		entry, ok := s.lookupVariable(ctx, wn.Scope, wn.DomainID, wn.ItemID)
 		if !ok {
 			accessResults = append(accessResults, &pdu.AccessResult{IsError: true, ErrorCode: wireErrObjectUndefined})
 			continue
@@ -945,7 +1029,7 @@ func (s *Server) handleWrite(ctx context.Context, body []byte) (int, bool, []byt
 			continue
 		}
 		wn := spec.Name
-		entry, ok := s.registry.LookupVariable(wn.Scope, wn.DomainID, wn.ItemID)
+		entry, ok := s.lookupVariable(ctx, wn.Scope, wn.DomainID, wn.ItemID)
 		if !ok {
 			results = append(results, wireErrObjectUndefined)
 			continue
@@ -994,6 +1078,19 @@ func (s *Server) handleWrite(ctx context.Context, body []byte) (int, bool, []byt
 		return 0, false, nil, fmt.Errorf("marshal write response: %w", err)
 	}
 	return asn1util.TagNumWrite, true, respBytes, nil
+}
+
+// lookupVariable resolves a variable by scope. For association scope,
+// it checks the per-connection storage first. For VMD/domain scope,
+// it uses the shared registry.
+func (s *Server) lookupVariable(ctx context.Context, scope int, domain, itemID string) (*servermodel.VarEntry, bool) {
+	if scope == pdu.ScopeAssociation {
+		if sc, _ := ctx.Value(serverConnCtxKey{}).(*ServerConn); sc != nil {
+			return sc.lookupAssocVar(itemID)
+		}
+		return nil, false
+	}
+	return s.registry.LookupVariable(scope, domain, itemID)
 }
 
 // extractTypeSpec returns the TypeSpec stored in a VarEntry.TypeSpec
