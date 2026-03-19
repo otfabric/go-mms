@@ -57,9 +57,9 @@
 | MmsString | ✅ | ✅ | ✅ | ✅ | UTF-8 encoded |
 | UTCTime | ✅ | ✅ | ✅ | ✅ | 8-byte or 12-byte wire format |
 | BinaryTime | ✅ | ✅ | ✅ | ✅ | 4-byte (days) and 6-byte (ms) forms |
-| GeneralizedTime | ✅ | ✅ | ✅ | ❌ | ISO 8601 format |
-| BCD | ✅ | ✅ | ✅ | ❌ | Binary-coded decimal |
-| ObjectIdentifier | ✅ | ✅ | ✅ | ❌ | ASN.1 OID |
+| GeneralizedTime | ✅ | ✅ | ✅ | ✅ | ISO 8601 format |
+| BCD | ✅ | ✅ | ✅ | ✅ | Binary-coded decimal |
+| ObjectIdentifier | ✅ | ✅ | ✅ | ✅ | ASN.1 OID |
 | Array | ✅ | ✅ | ✅ | ✅ | Nested, recursive decode |
 | Structure | ✅ | ✅ | ✅ | ✅ | Nested, recursive decode; named components in TypeSpec |
 | DataAccessError | ✅ | ✅ | ✅ | ✅ | Per-variable error in Read/Write results |
@@ -72,14 +72,14 @@
 | Integration tests (end-to-end) | ~42 | Client↔Server over loopback transport; file, journal, NVL lifecycle |
 | Negative/strictness tests | ~200+ | Malformed PDU, unknown tags, trailing bytes, truncated inputs, missing fields, invalid scopes (across 33 test files) |
 | Race/concurrency tests | ~14 | `TestConcurrent*`, `TestDoubleClose*`, `TestClose*During*`; designed for `go test -race` |
-| Fuzz targets | 18 | 14 in `internal/pdu/fuzz_test.go` (DecodePdu, DataElement, TypeSpec, ObjectName, AccessResults, ReadResponse, WriteResponse, GetNameList, GetVarAccess, NVLAttrs, DeleteNVL, ConfirmedError, RejectPDU, ConfirmedResponse) + 4 in `internal/berutil/fuzz_test.go` (TLV, Length, Integer, Unsigned) |
+| Fuzz targets | 36 | `internal/pdu/fuzz_test.go` (29): DecodePdu, DataElement, TypeSpec, ObjectName, AccessResults, ReadResponse, WriteResponse, GetNameList, GetVarAccess, NVLAttrs, DeleteNVL, ConfirmedError, RejectPDU, ConfirmedResponse, FileOpenRequest, FileOpenResponse, FileReadResponse, FileDirectoryRequest, FileDirectoryResponse, ReadJournalRequest, ReadJournalResponse, GetNameListRequest, ReadRequestParsed, WriteRequestParsed, DefineNVLRequest, InformationReport, GeneralizedTime, BCD, ObjectIdentifier + `internal/berutil/fuzz_test.go` (4): TLV, Length, Integer, Unsigned + `internal/acse/fuzz_test.go` (1), `internal/session/fuzz_test.go` (1), `internal/presentation/fuzz_test.go` (1) |
 | Benchmarks | 20 | `internal/pdu/bench_test.go` (14) + `value_bench_test.go` (6) |
 | Interop tests | 8 | `internal/pdu/interop_test.go` — validates wire encoding against known-good BER patterns compatible with C reference implementation |
-| Golden fixture tests | ❌ | No golden file fixtures; interop tests use inline byte sequences |
+| Golden fixture tests | 33 | 27 in `internal/pdu/testdata/golden/` + 6 in `internal/codec/testdata/golden/`; regenerate with `-update-golden` flag |
 
 ## Known Gaps
 
-1. **No golden-file corpus** — Interop tests use hardcoded byte slices rather than external `.bin` fixture files captured from a C implementation. A captured-wire corpus would strengthen conformance confidence.
+1. ~~No golden-file corpus~~ — **Resolved.** 33 golden hex fixtures in `testdata/golden/` covering all PDU services and codec envelopes. Interop tests additionally use inline byte sequences for C-compatible validation.
 
 2. **Abort PDU (server→client)** — The server detects client disconnects and handles ISO Release, but does not proactively send an MMS Abort PDU to the client. Client-initiated Abort is fully implemented.
 
@@ -87,7 +87,7 @@
 
 4. **DeleteNamedVariableList scope** — Only `scopeOfDelete=0` (specific list names) is supported. Scope-based bulk deletion (e.g., delete all domain NVLs) is not implemented.
 
-5. **No fuzz coverage for file/journal PDUs** — Fuzz targets cover core PDU types (Data, TypeSpec, ObjectName, Read, Write, GetNameList, GetVarAccess, NVL, Error, Reject) but not file service or journal service PDU decoders.
+5. ~~No fuzz coverage for file/journal PDUs~~ — **Resolved.** Fuzz targets now cover file service decoders (FileOpenRequest, FileOpenResponse, FileReadResponse, FileDirectoryRequest, FileDirectoryResponse), journal service decoders (ReadJournalRequest, ReadJournalResponse), server request decoders, ACSE/Session/Presentation parsers, and data type decoders (GeneralizedTime, BCD, ObjectIdentifier).
 
 6. **No live-wire interop testing** — The interop tests validate encoding compatibility via inline byte patterns. There is no automated test harness that connects to a real MMS server or C reference implementation.
 

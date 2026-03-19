@@ -75,6 +75,13 @@ func FuzzUnmarshalDataElement(f *testing.F) {
 	f.Add(berutil.EncodeTLV(0x89, []byte{0xde, 0xad}))
 	// bit string: unused=2, data=0xfc
 	f.Add(berutil.EncodeTLV(0x84, []byte{2, 0xfc}))
+	// generalized time
+	f.Add(berutil.EncodeTLV(0x8b, []byte("20240315120000Z")))
+	// bcd integer
+	f.Add(berutil.EncodeTLV(0x8d, []byte{42}))
+	// object identifier (1.2.840.10004)
+	oidContent, _ := berutil.EncodeObjectIdentifier([]int{1, 2, 840, 10004})
+	f.Add(berutil.EncodeTLV(0x88, oidContent))
 	// empty
 	f.Add([]byte{})
 	// truncated
@@ -430,5 +437,112 @@ func FuzzUnmarshalInformationReport(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		_, _ = UnmarshalInformationReport(data)
+	})
+}
+
+// FuzzDecodeGeneralizedTime fuzzes the GeneralizedTime data element
+// decoder via round-trip: encode a valid GeneralizedTime TLV, then
+// decode arbitrary mutations.
+func FuzzDecodeGeneralizedTime(f *testing.F) {
+	f.Add([]byte("20240315120000Z"))
+	f.Add([]byte("20000101000000Z"))
+	f.Add([]byte("19991231235959Z"))
+	f.Add([]byte(""))
+	f.Add([]byte("not-a-time"))
+	f.Add([]byte("2024031512000"))  // truncated
+	f.Add([]byte("20240315120000")) // missing Z
+
+	f.Fuzz(func(t *testing.T, content []byte) {
+		data := berutil.EncodeTLV(TagDataGenTime, content)
+		dv, _, err := UnmarshalDataElement(data, 0)
+		if err != nil {
+			return
+		}
+		encoded, err := MarshalData(dv)
+		if err != nil {
+			t.Fatalf("re-encode failed: %v", err)
+		}
+		dv2, _, err := UnmarshalDataElement(encoded, 0)
+		if err != nil {
+			t.Fatalf("re-decode failed: %v", err)
+		}
+		if !dv.Time.Equal(dv2.Time) {
+			t.Fatalf("round-trip mismatch: %v vs %v", dv.Time, dv2.Time)
+		}
+	})
+}
+
+// FuzzDecodeBCD fuzzes the BCD (binary-coded decimal) data element
+// decoder via round-trip.
+func FuzzDecodeBCD(f *testing.F) {
+	f.Add([]byte{0})
+	f.Add([]byte{42})
+	f.Add([]byte{0x7f})
+	f.Add([]byte{0x80})             // -128
+	f.Add([]byte{0xff})             // -1
+	f.Add([]byte{0x00, 0x80})       // 128
+	f.Add([]byte{0x7f, 0xff})       // 32767
+	f.Add([]byte{0x00, 0x00, 0x01}) // 1 with leading zero
+	f.Add([]byte{})
+
+	f.Fuzz(func(t *testing.T, content []byte) {
+		data := berutil.EncodeTLV(TagDataBCD, content)
+		dv, _, err := UnmarshalDataElement(data, 0)
+		if err != nil {
+			return
+		}
+		encoded, err := MarshalData(dv)
+		if err != nil {
+			t.Fatalf("re-encode failed: %v", err)
+		}
+		dv2, _, err := UnmarshalDataElement(encoded, 0)
+		if err != nil {
+			t.Fatalf("re-decode failed: %v", err)
+		}
+		if dv.Int != dv2.Int {
+			t.Fatalf("round-trip mismatch: %d vs %d", dv.Int, dv2.Int)
+		}
+	})
+}
+
+// FuzzDecodeObjectIdentifier fuzzes the ObjectIdentifier data element
+// decoder via round-trip.
+func FuzzDecodeObjectIdentifier(f *testing.F) {
+	for _, oid := range [][]int{
+		{1, 2, 840, 10004},
+		{2, 16, 840, 1, 101, 2, 1},
+		{0, 0},
+		{1, 3, 6, 1, 4, 1, 311},
+	} {
+		content, err := berutil.EncodeObjectIdentifier(oid)
+		if err == nil {
+			f.Add(content)
+		}
+	}
+	f.Add([]byte{})
+	f.Add([]byte{0x2a, 0x86, 0x48}) // partial OID (1.2.840 prefix)
+
+	f.Fuzz(func(t *testing.T, content []byte) {
+		data := berutil.EncodeTLV(TagDataObjId, content)
+		dv, _, err := UnmarshalDataElement(data, 0)
+		if err != nil {
+			return
+		}
+		encoded, err := MarshalData(dv)
+		if err != nil {
+			t.Fatalf("re-encode failed: %v", err)
+		}
+		dv2, _, err := UnmarshalDataElement(encoded, 0)
+		if err != nil {
+			t.Fatalf("re-decode failed: %v", err)
+		}
+		if len(dv.OID) != len(dv2.OID) {
+			t.Fatalf("round-trip OID length mismatch: %v vs %v", dv.OID, dv2.OID)
+		}
+		for i := range dv.OID {
+			if dv.OID[i] != dv2.OID[i] {
+				t.Fatalf("round-trip OID arc %d mismatch: %v vs %v", i, dv.OID, dv2.OID)
+			}
+		}
 	})
 }
