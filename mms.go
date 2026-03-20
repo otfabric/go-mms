@@ -330,7 +330,15 @@ func (c *Client) conclude(ctx context.Context) error {
 	case <-ctx.Done():
 		return fmt.Errorf("mms: conclude: %w", ctx.Err())
 	case <-c.readerDone:
-		return &ProtocolError{Phase: "mms", Message: "connection closed before conclude response"}
+		// The reader loop signals concludeCh then returns (closing
+		// readerDone). When both are ready, select picks randomly.
+		// Drain concludeCh to avoid a false-negative race.
+		select {
+		case <-c.concludeCh:
+			return nil
+		default:
+			return &ProtocolError{Phase: "mms", Message: "connection closed before conclude response"}
+		}
 	}
 }
 
