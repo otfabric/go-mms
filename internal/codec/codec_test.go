@@ -162,7 +162,7 @@ func TestUnmarshalInnerPrimitive(t *testing.T) {
 }
 
 func TestUnmarshalFull(t *testing.T) {
-	var val int = 42
+	val := 42
 	encoded, _ := asn1.Marshal(val)
 	raw := asn1.RawValue{FullBytes: encoded}
 

@@ -1680,7 +1680,7 @@ for development.
 
 | File | Changes |
 |------|---------|
-| `go.mod` | Added go-tpkt, go-cotp requires + replace directives; Go version → 1.22 |
+| `go.mod` | Added go-tpkt, go-cotp requires + replace directives; Go version → 1.21 |
 | `types.go` | Added `TransportListener` interface |
 | `server.go` | Added `Server.ListenAndServe`; updated Server doc |
 | `mms.go` | Updated `Dial` stub with deprecation and iso.Dial guidance |

@@ -14,11 +14,11 @@ import (
 
 // Well-known OIDs (pre-encoded BER bytes, excluding the 0x06 tag+length).
 var (
-	// ACSE abstract syntax: 2.2.1.0.1
+	// ACSE abstract syntax: 2.2.1.0.1.
 	oidACSE = []byte{0x52, 0x01, 0x00, 0x01}
-	// MMS abstract syntax: 1.0.9506.2.1
+	// MMS abstract syntax: 1.0.9506.2.1.
 	oidMMS = []byte{0x28, 0xca, 0x22, 0x02, 0x01}
-	// BER transfer syntax: 2.1.1
+	// BER transfer syntax: 2.1.1.
 	oidBER = []byte{0x51, 0x01}
 )
 

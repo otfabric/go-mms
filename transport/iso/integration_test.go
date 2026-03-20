@@ -38,7 +38,7 @@ func testServer(t *testing.T) *mms.Server {
 		t.Fatal(err)
 	}
 
-	var temperature float64 = 42.5
+	temperature := 42.5
 	var mu sync.Mutex
 	if err := srv.RegisterVariable(mms.Variable{
 		Name:     mms.ObjectName{Scope: mms.ObjectScopeDomain, Domain: "testDomain", ItemID: "temperature"},

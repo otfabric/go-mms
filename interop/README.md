@@ -16,7 +16,7 @@ the `server_example_basic_io` binary can be built.
 
 ## Prerequisites
 
-- Go 1.22+
+- Go 1.21+
 - GCC or Clang
 - CMake 3.10+
 - A full libIEC61850 clone (see below)

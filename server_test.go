@@ -117,7 +117,7 @@ func testServer(t *testing.T) *Server {
 		t.Fatalf("register domain: %v", err)
 	}
 
-	var temperature float64 = 21.5
+	temperature := 21.5
 	var mu sync.Mutex
 
 	if err := srv.RegisterVariable(Variable{
@@ -2495,7 +2495,7 @@ func TestServerAssocVarReadWriteEndToEnd(t *testing.T) {
 	}
 	sc := conns[0]
 
-	var temperature float64 = 21.5
+	temperature := 21.5
 	var mu sync.Mutex
 
 	err = sc.RegisterVariable(Variable{

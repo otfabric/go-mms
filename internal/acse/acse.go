@@ -364,6 +364,7 @@ func parseAARQ(content []byte) (userData []byte, auth AuthInfo, err error) {
 				return nil, AuthInfo{}, parseErr
 			}
 			auth.Password = pw
+		default:
 		}
 	}
 
@@ -419,7 +420,7 @@ func parsePasswordAuthValue(data []byte) ([]byte, error) {
 }
 
 // parseExternalPayload extracts the MMS payload from EXTERNAL encoding:
-// 0x28 (EXTERNAL) → 0x02 (indirect-reference) → 0xa0 (single-ASN1-type)
+// 0x28 (EXTERNAL) → 0x02 (indirect-reference) → 0xa0 (single-ASN1-type).
 func parseExternalPayload(data []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("acse: empty user-information")
