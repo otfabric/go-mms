@@ -43,7 +43,7 @@ Based on the source files in `sources/mms/iso_mms/server/`:
 
 ## Prerequisites
 
-- Go 1.22+
+- Go 1.21+
 - GCC or Clang
 - CMake 3.10+
 

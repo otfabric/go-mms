@@ -17,7 +17,7 @@ func nvlValueTestSetup(t *testing.T) *Client {
 		t.Fatal(err)
 	}
 
-	var temp float64 = 21.5
+	temp := 21.5
 	var valid = true
 	var mu sync.Mutex
 

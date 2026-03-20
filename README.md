@@ -38,7 +38,7 @@ All services are supported on both client and server unless noted in
 go get github.com/otfabric/go-mms
 ```
 
-Requires Go 1.22 or later.
+Requires Go 1.21 or later.
 
 ### Client
 

@@ -66,7 +66,7 @@ func (l *Listener) Accept(ctx context.Context) (mms.Transport, error) {
 		}
 
 		if dl, ok := l.ln.(*net.TCPListener); ok {
-			dl.SetDeadline(time.Now().Add(acceptPollInterval))
+			_ = dl.SetDeadline(time.Now().Add(acceptPollInterval))
 		}
 
 		conn, err := l.ln.Accept()

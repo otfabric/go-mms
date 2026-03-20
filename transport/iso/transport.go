@@ -54,7 +54,7 @@ func (t *cotpTransport) Send(ctx context.Context, data []byte) error {
 		if err := t.conn.SetWriteDeadline(deadline); err != nil {
 			return err
 		}
-		defer t.conn.SetWriteDeadline(time.Time{})
+		defer func() { _ = t.conn.SetWriteDeadline(time.Time{}) }()
 	}
 
 	if _, err := t.writer.WriteFrame(raw); err != nil {
@@ -76,7 +76,7 @@ func (t *cotpTransport) Receive(ctx context.Context) ([]byte, error) {
 		if err := t.conn.SetReadDeadline(deadline); err != nil {
 			return nil, err
 		}
-		defer t.conn.SetReadDeadline(time.Time{})
+		defer func() { _ = t.conn.SetReadDeadline(time.Time{}) }()
 	}
 
 	frame, err := t.reader.ReadFrame()
