@@ -1,5 +1,13 @@
 # go-mms
 
+[![Go](https://img.shields.io/badge/Go-1.21%2B-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Go Report Card](https://goreportcard.com/badge/github.com/otfabric/go-mms)](https://goreportcard.com/report/github.com/otfabric/go-mms)
+[![CI](https://github.com/otfabric/go-mms/actions/workflows/ci.yml/badge.svg)](https://github.com/otfabric/go-mms/actions/workflows/ci.yml)
+[![Codecov](https://codecov.io/github.com/otfabric/go-mms/graph/badge.svg)](https://app.codecov.io/github.com/otfabric/go-mms)
+[![Release](https://img.shields.io/github/v/release/otfabric/go-mms?label=release)](https://github.com/otfabric/go-mms/releases)
+
+
 A pure-Go implementation of the MMS (Manufacturing Message Specification)
 protocol, ISO 9506-1/2, designed as the base transport layer for industrial
 automation systems including IEC 61850.
