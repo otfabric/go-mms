@@ -1,5 +1,22 @@
 # go-mms Releases
 
+## v0.1.3
+
+**Fixed**: Race condition in `Client.Close` / conclude handshake.
+
+When the reader loop received a `ConcludeResponse`, it signaled `concludeCh` and then returned (closing `readerDone`). Because Go's `select` picks randomly among ready cases, `conclude()` could non-deterministically hit the `readerDone` case and return a spurious `"connection closed before conclude response"` error. The fix drains `concludeCh` when `readerDone` fires before reporting failure.
+
+**Changed**: Lint configuration and code quality.
+
+- Restored sensible test-file exclusions in `.golangci.yml` for `errcheck` and `staticcheck` SA2002.
+- Fixed `godot` comment punctuation in `internal/acse` and `internal/presentation`.
+- Fixed `exhaustive` switch in `internal/acse` (missing `default` case for `AuthMechanism`).
+- Fixed `errcheck` in `transport/iso` (unchecked `SetDeadline` / `SetWriteDeadline` / `SetReadDeadline` return values).
+- Fixed `staticcheck` ST1023 redundant type declarations in test files.
+- `make check` now passes cleanly.
+
+---
+
 ## v0.1.2
 
 **Changed**: Lowered minimum required Go version to 1.21 (was 1.22). All documentation, CI, and go.mod references updated accordingly. No code changes.
