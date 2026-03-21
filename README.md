@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Go Report Card](https://goreportcard.com/badge/github.com/otfabric/go-mms)](https://goreportcard.com/report/github.com/otfabric/go-mms)
 [![CI](https://github.com/otfabric/go-mms/actions/workflows/ci.yml/badge.svg)](https://github.com/otfabric/go-mms/actions/workflows/ci.yml)
-[![Codecov](https://codecov.io/github.com/otfabric/go-mms/graph/badge.svg)](https://app.codecov.io/github.com/otfabric/go-mms)
+[![Codecov](https://codecov.io/github/otfabric/go-mms/graph/badge.svg?token=gLnElUyTuD)](https://codecov.io/github/otfabric/go-mms)
 [![Release](https://img.shields.io/github/v/release/otfabric/go-mms?label=release)](https://github.com/otfabric/go-mms/releases)
 
 
