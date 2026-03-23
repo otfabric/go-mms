@@ -20,9 +20,9 @@ permissions:
 
 jobs:
   release:
-    uses: otfabric/.github/.github/workflows/go-release.yml@v1
+    uses: otfabric/.github/.github/workflows/go-package-release.yml@v2
     with:
       bump: ${{ inputs.bump }}
       release-name-prefix: go-mms
-      update-major-tag: true
+      update-major-tag: false
     secrets: inherit

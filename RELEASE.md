@@ -1,5 +1,11 @@
 # go-mms Releases
 
+## v0.1.4
+
+**Changed**: Increased minimum required Go version to 1.23 (was 1.21). All documentation, CI, and go.mod references updated accordingly. No code changes.
+
+---
+
 ## v0.1.3
 
 **Fixed**: Race condition in `Client.Close` / conclude handshake.
