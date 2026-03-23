@@ -1,6 +1,6 @@
 # go-mms
 
-[![Go](https://img.shields.io/badge/Go-1.21%2B-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![Go](https://img.shields.io/badge/Go-1.23%2B-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Go Report Card](https://goreportcard.com/badge/github.com/otfabric/go-mms)](https://goreportcard.com/report/github.com/otfabric/go-mms)
 [![CI](https://github.com/otfabric/go-mms/actions/workflows/ci.yml/badge.svg)](https://github.com/otfabric/go-mms/actions/workflows/ci.yml)
@@ -46,7 +46,7 @@ All services are supported on both client and server unless noted in
 go get github.com/otfabric/go-mms
 ```
 
-Requires Go 1.21 or later.
+Requires Go 1.23 or later.
 
 ### Client
 
