@@ -1,16 +1,30 @@
 # go-mms
 
 [![Go](https://img.shields.io/badge/Go-1.23%2B-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![Go Reference](https://pkg.go.dev/badge/github.com/otfabric/go-mms.svg)](https://pkg.go.dev/github.com/otfabric/go-mms)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Go Report Card](https://goreportcard.com/badge/github.com/otfabric/go-mms)](https://goreportcard.com/report/github.com/otfabric/go-mms)
 [![CI](https://github.com/otfabric/go-mms/actions/workflows/ci.yml/badge.svg)](https://github.com/otfabric/go-mms/actions/workflows/ci.yml)
-[![Codecov](https://codecov.io/github/otfabric/go-mms/graph/badge.svg?token=gLnElUyTuD)](https://codecov.io/github/otfabric/go-mms)
+[![Codecov](https://codecov.io/gh/otfabric/go-mms/graph/badge.svg)](https://codecov.io/gh/otfabric/go-mms)
 [![Release](https://img.shields.io/github/v/release/otfabric/go-mms?label=release)](https://github.com/otfabric/go-mms/releases)
 
 
 A pure-Go implementation of the MMS (Manufacturing Message Specification)
 protocol, ISO 9506-1/2, designed as the base transport layer for industrial
 automation systems including IEC 61850.
+
+## Table of Contents
+
+- [What is go-mms](#what-is-go-mms)
+- [Features](#features)
+- [Quick Start](#quick-start)
+  - [Installation](#installation)
+  - [Client](#client)
+  - [Server](#server)
+- [Architecture](#architecture)
+- [Out of Scope](#out-of-scope)
+- [Status](#status)
+- [Documentation](#documentation)
+- [License](#license)
 
 ## What is go-mms
 
@@ -197,5 +211,4 @@ go-mms is **pre-1.0**. The API may change between minor versions.
 
 ## License
 
-go-mms is proprietary software. See the license terms in your agreement
-with OTfabric.
+This project is licensed under the MIT License. See [LICENSE](./LICENSE).

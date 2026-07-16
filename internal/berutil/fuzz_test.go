@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package berutil
 
 import "testing"

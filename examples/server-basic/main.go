@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Command server-basic demonstrates a minimal MMS server using go-mms.
 //
 // This example registers a domain with a readable/writable variable
@@ -63,7 +65,7 @@ func main() {
 	}
 
 	var (
-		temperature float64 = 21.5
+		temperature = 21.5
 		mu          sync.Mutex
 	)
 

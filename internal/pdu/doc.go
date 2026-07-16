@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package pdu handles MMS PDU construction and parsing.
 //
 // It defines the internal Go struct representations for MMS protocol

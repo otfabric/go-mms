@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package mms
 
 import "github.com/otfabric/go-mms/internal/acse"

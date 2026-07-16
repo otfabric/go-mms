@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package pdu
 
 // Interop tests validate encoding/decoding against known-good wire

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package mms implements the Manufacturing Message Specification (MMS)
 // protocol — ISO 9506.
 //

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package asn1util provides helpers for working with stdlib encoding/asn1
 // types at the boundary between Go struct marshaling and raw BER data.
 //
