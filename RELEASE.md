@@ -1,5 +1,29 @@
 # go-mms Releases
 
+## v0.1.5
+
+**Changed**: Open-source release under the MIT License.
+
+- Added root `LICENSE` file (MIT, Copyright (c) 2026 OT Fabric).
+- Added `// SPDX-License-Identifier: MIT` to all first-party Go source files.
+- Updated README license section to reference the MIT License.
+
+**Changed**: README improvements for public release.
+
+- Standardized badge block (Go, pkg.go.dev, License, CI, Codecov, Release).
+- Added pkg.go.dev documentation badge.
+- Removed Go Report Card badge and Codecov upload token from badge URLs.
+- Added table of contents.
+
+**Changed**: Dependency updates.
+
+- `github.com/otfabric/go-cotp` v0.1.4 → v0.1.5
+- `github.com/otfabric/go-tpkt` v0.1.2 → v0.1.3
+
+No API or behavior changes.
+
+---
+
 ## v0.1.4
 
 **Changed**: Increased minimum required Go version to 1.23 (was 1.21). All documentation, CI, and go.mod references updated accordingly. No code changes.

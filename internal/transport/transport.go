@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package transport defines the interface between the MMS client and
 // the underlying ISO transport stack (TPKT + COTP).
 //

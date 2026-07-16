@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Command basic demonstrates a typical go-mms client session:
 // connect to an MMS server, identify it, browse its name list,
 // read a variable, write a value, and disconnect.
@@ -69,7 +71,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Dial: %v", err)
 	}
-	defer client.Close(ctx)
+	defer func() {
+		if err := client.Close(ctx); err != nil {
+			log.Printf("Close: %v", err)
+		}
+	}()
 
 	// Identify
 	id, err := client.Identify(ctx)

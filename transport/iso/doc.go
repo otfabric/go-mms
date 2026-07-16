@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package iso provides TCP+TPKT+COTP transport integration for go-mms.
 //
 // This package bridges the gap between raw TCP connections and the

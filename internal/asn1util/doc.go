@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package asn1util provides thin helpers for gaps in [encoding/asn1].
 //
 // This package must remain minimal. It exists only for MMS wire

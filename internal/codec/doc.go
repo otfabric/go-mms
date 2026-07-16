@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package codec provides MMS-specific marshal/unmarshal wrappers built
 // on top of [encoding/asn1].
 //

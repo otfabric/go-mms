@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package asn1util
 
 // MMS PDU top-level CHOICE tags (first byte of the BER encoding).
