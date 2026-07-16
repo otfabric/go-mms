@@ -4,16 +4,16 @@ package iso_test
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/otfabric/go-cotp"
-	"github.com/otfabric/go-tpkt"
 
 	mms "github.com/otfabric/go-mms"
 	"github.com/otfabric/go-mms/transport/iso"
@@ -335,9 +335,7 @@ func TestHandshakeWrongTPDUType(t *testing.T) {
 		t.Fatal(err)
 	}
 	dt := &cotp.DT{EOT: true, UserData: []byte("fake")}
-	raw, _ := dt.MarshalBinary()
-	w := tpkt.NewWriter(badConn)
-	w.WriteFrame(raw)
+	writePeerTPDU(t, badConn, mustMarshalTPDU(t, dt))
 	badConn.Close()
 
 	// Second: good client connection — Accept should succeed.
@@ -385,6 +383,13 @@ func TestHandshakeTSAPSelectorMismatch(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected handshake error for TSAP mismatch")
 	}
+	if !errors.Is(err, cotp.ErrConnectionRefused) {
+		t.Errorf("got %v, want ErrConnectionRefused", err)
+	}
+	var rej *cotp.RejectionError
+	if !errors.As(err, &rej) {
+		t.Errorf("got %v, want RejectionError", err)
+	}
 
 	// Good client: correct called selector. Listener should still be alive.
 	goodConn, err := iso.DialTCP(ctx, ln.Addr().String(),
@@ -420,10 +425,7 @@ func TestClientHandshakeReceivesDR(t *testing.T) {
 		}
 		defer conn.Close()
 
-		r := tpkt.NewReader(conn)
-		w := tpkt.NewWriter(conn)
-
-		crFrame, err := r.ReadFrame()
+		crFrame, err := readPeerTPDU(conn)
 		if err != nil {
 			return
 		}
@@ -435,10 +437,13 @@ func TestClientHandshakeReceivesDR(t *testing.T) {
 		dr := &cotp.DR{
 			DestinationRef: decoded.CR.SourceRef,
 			SourceRef:      0,
-			Reason:         2,
+			Reason:         uint8(cotp.ReasonAddressUnknown),
 		}
-		raw, _ := dr.MarshalBinary()
-		w.WriteFrame(raw)
+		raw, err := dr.MarshalBinary()
+		if err != nil {
+			return
+		}
+		_ = writePeerTPDUErr(conn, raw)
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -448,8 +453,15 @@ func TestClientHandshakeReceivesDR(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when server sends DR")
 	}
-	if !strings.Contains(err.Error(), "DR reason=2") {
-		t.Errorf("error = %v, want to mention DR reason", err)
+	if !errors.Is(err, cotp.ErrConnectionRefused) {
+		t.Errorf("got %v, want ErrConnectionRefused", err)
+	}
+	var rej *cotp.RejectionError
+	if !errors.As(err, &rej) {
+		t.Fatalf("got %v, want RejectionError", err)
+	}
+	if rej.Reason != cotp.ReasonAddressUnknown {
+		t.Errorf("Reason = %d, want %d", rej.Reason, cotp.ReasonAddressUnknown)
 	}
 }
 
@@ -467,10 +479,7 @@ func TestClientHandshakeCCRefMismatch(t *testing.T) {
 		}
 		defer conn.Close()
 
-		r := tpkt.NewReader(conn)
-		w := tpkt.NewWriter(conn)
-
-		crFrame, err := r.ReadFrame()
+		crFrame, err := readPeerTPDU(conn)
 		if err != nil {
 			return
 		}
@@ -484,8 +493,11 @@ func TestClientHandshakeCCRefMismatch(t *testing.T) {
 			SourceRef:      1,
 			ClassOption:    0,
 		}
-		raw, _ := cc.MarshalBinary()
-		w.WriteFrame(raw)
+		raw, err := cc.MarshalBinary()
+		if err != nil {
+			return
+		}
+		_ = writePeerTPDUErr(conn, raw)
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -495,8 +507,8 @@ func TestClientHandshakeCCRefMismatch(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for CC destination ref mismatch")
 	}
-	if !strings.Contains(err.Error(), "destination ref") {
-		t.Errorf("error = %v, want to mention destination ref", err)
+	if !errors.Is(err, cotp.ErrHandshake) {
+		t.Errorf("got %v, want ErrHandshake", err)
 	}
 }
 
@@ -514,10 +526,7 @@ func TestClientHandshakeCCWrongClass(t *testing.T) {
 		}
 		defer conn.Close()
 
-		r := tpkt.NewReader(conn)
-		w := tpkt.NewWriter(conn)
-
-		crFrame, err := r.ReadFrame()
+		crFrame, err := readPeerTPDU(conn)
 		if err != nil {
 			return
 		}
@@ -531,8 +540,11 @@ func TestClientHandshakeCCWrongClass(t *testing.T) {
 			SourceRef:      1,
 			ClassOption:    0x40, // class 4
 		}
-		raw, _ := cc.MarshalBinary()
-		w.WriteFrame(raw)
+		raw, err := cc.MarshalBinary()
+		if err != nil {
+			return
+		}
+		_ = writePeerTPDUErr(conn, raw)
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -542,8 +554,8 @@ func TestClientHandshakeCCWrongClass(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unsupported class")
 	}
-	if !strings.Contains(err.Error(), "class") {
-		t.Errorf("error = %v, want to mention class", err)
+	if !errors.Is(err, cotp.ErrHandshake) {
+		t.Errorf("got %v, want ErrHandshake", err)
 	}
 }
 
@@ -575,13 +587,10 @@ func TestServerHandshakeCRWrongClass(t *testing.T) {
 		SourceRef:   42,
 		ClassOption: 0x20, // class 2
 	}
-	raw, _ := cr.MarshalBinary()
-	w := tpkt.NewWriter(conn)
-	w.WriteFrame(raw)
+	writePeerTPDU(t, conn, mustMarshalTPDU(t, cr))
 
-	// Expect DR back from server.
-	r := tpkt.NewReader(conn)
-	drFrame, err := r.ReadFrame()
+	// Expect DR back from server (go-cotp owns the response).
+	drFrame, err := readPeerTPDU(conn)
 	if err != nil {
 		t.Fatalf("expected DR from server: %v", err)
 	}
@@ -592,8 +601,8 @@ func TestServerHandshakeCRWrongClass(t *testing.T) {
 	if decoded.DR == nil {
 		t.Fatalf("expected DR, got %s", decoded.Type)
 	}
-	if decoded.DR.Reason != 2 {
-		t.Errorf("DR reason = %d, want 2", decoded.DR.Reason)
+	if cotp.DisconnectReason(decoded.DR.Reason) != cotp.ReasonNegotiationFailed {
+		t.Errorf("DR reason = %d, want %d", decoded.DR.Reason, cotp.ReasonNegotiationFailed)
 	}
 	conn.Close()
 
@@ -664,4 +673,54 @@ func TestWithLogger(t *testing.T) {
 	if opt == nil {
 		t.Fatal("nil option func")
 	}
+}
+
+// --- raw TPKT helpers for adversarial peers (no go-tpkt dependency) ---
+
+func writePeerTPDU(t *testing.T, c net.Conn, tpdu []byte) {
+	t.Helper()
+	if err := writePeerTPDUErr(c, tpdu); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writePeerTPDUErr(c net.Conn, tpdu []byte) error {
+	n := len(tpdu) + 4
+	if n > 0xffff {
+		return errors.New("tpkt payload too large")
+	}
+	hdr := make([]byte, 4)
+	hdr[0] = 0x03
+	hdr[1] = 0x00
+	binary.BigEndian.PutUint16(hdr[2:], uint16(n))
+	_, err := c.Write(append(hdr, tpdu...))
+	return err
+}
+
+func readPeerTPDU(c net.Conn) ([]byte, error) {
+	hdr := make([]byte, 4)
+	if _, err := io.ReadFull(c, hdr); err != nil {
+		return nil, err
+	}
+	if hdr[0] != 0x03 {
+		return nil, errors.New("invalid TPKT version")
+	}
+	n := int(binary.BigEndian.Uint16(hdr[2:]))
+	if n < 4 {
+		return nil, errors.New("invalid TPKT length")
+	}
+	payload := make([]byte, n-4)
+	if _, err := io.ReadFull(c, payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func mustMarshalTPDU(t *testing.T, v interface{ MarshalBinary() ([]byte, error) }) []byte {
+	t.Helper()
+	b, err := v.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
