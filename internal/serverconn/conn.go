@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package serverconn manages per-connection server state for one MMS
 // association. It handles the request→dispatch→response pipeline with
 // serialized confirmed request handling.

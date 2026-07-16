@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package acse implements ACSE (Association Control Service Element)
 // PDU construction and parsing per ISO 8650 / X.217.
 //

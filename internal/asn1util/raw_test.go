@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package asn1util
 
 import (

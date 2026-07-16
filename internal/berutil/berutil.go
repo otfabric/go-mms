@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package berutil provides minimal BER TLV encoding and decoding helpers.
 //
 // It is used by:
