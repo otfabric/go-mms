@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package servermodel provides the internal variable/domain registry
 // used by the MMS server. It stores domains, named variables, and
 // (optionally) named variable lists, and supports deterministic

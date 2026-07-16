@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package session implements ISO 8327-1 session layer SPDU construction
 // and parsing for the MMS protocol stack.
 //

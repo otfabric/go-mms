@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package invoke manages MMS invoke ID allocation and request/response
 // correlation.
 //

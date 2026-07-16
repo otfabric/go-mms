@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Command loopback demonstrates a fully runnable in-process MMS
 // client-server session using channel-based transports.
 //
@@ -45,7 +47,7 @@ func main() {
 	}
 
 	var (
-		temp float64 = 21.5
+		temp = 21.5
 		mu   sync.Mutex
 	)
 	if err := srv.RegisterVariable(mms.Variable{
@@ -86,7 +88,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("NewClient: %v", err)
 	}
-	defer client.Close(ctx)
+	defer func() {
+		if err := client.Close(ctx); err != nil {
+			log.Printf("Close: %v", err)
+		}
+	}()
 
 	ident, err := client.Identify(ctx)
 	if err != nil {

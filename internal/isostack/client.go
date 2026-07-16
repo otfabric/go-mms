@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package isostack orchestrates the ISO upper-layer protocol stack
 // (session → presentation → ACSE) for client-side MMS connections.
 //
