@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	"github.com/otfabric/go-mms/internal/asn1util"
-	"github.com/otfabric/go-mms/internal/berutil"
 	"github.com/otfabric/go-mms/internal/codec"
 )
 
@@ -61,16 +60,8 @@ func UnmarshalIdentifyResponse(serviceData asn1.RawValue) (*IdentifyResponse, er
 }
 
 // marshalBareSequence marshals a struct into bare SEQUENCE fields by stripping
-// the 0x30 wrapper that encoding/asn1 adds. This produces the content suitable
-// for IMPLICIT sequence tags in MMS PDUs.
+// the 0x30 wrapper that encoding/asn1 adds. Delegates to codec.MarshalSequenceContent
+// so the stripping logic lives in one place.
 func marshalBareSequence(v any) ([]byte, error) {
-	content, err := asn1.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	if len(content) < 2 || content[0] != 0x30 {
-		return nil, fmt.Errorf("pdu: expected SEQUENCE from asn1.Marshal, got 0x%02x", content[0])
-	}
-	_, inner, _, err := berutil.DecodeTLVAt(content, 0)
-	return inner, err
+	return codec.MarshalSequenceContent(v)
 }

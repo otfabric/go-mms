@@ -54,11 +54,22 @@ var (
 // These use the public DataAccessErrorCode constants and are independent
 // of the ConfirmedErrorPDU service-error codes above.
 const (
-	wireErrObjectUndefined  = int(DataAccessErrorObjectUndefined)
-	wireErrAccessDenied     = int(DataAccessErrorObjectAccessDenied)
-	wireErrTempUnavail      = int(DataAccessErrorTemporarilyUnavailable)
-	wireErrTypeInconsistent = int(DataAccessErrorTypeInconsistent)
+	wireErrObjectUndefined  = DataAccessErrorObjectUndefined
+	wireErrAccessDenied     = DataAccessErrorObjectAccessDenied
+	wireErrTempUnavail      = DataAccessErrorTemporarilyUnavailable
+	wireErrTypeInconsistent = DataAccessErrorTypeInconsistent
 )
+
+// wireErrCode converts a DataAccessErrorCode to its validated MMS wire integer.
+// It panics on DataAccessErrorNone or any out-of-range code, making accidental
+// sentinel serialization a development-time crash rather than a silent wire error.
+func wireErrCode(code DataAccessErrorCode) int {
+	wire, err := encodeDataAccessError(code)
+	if err != nil {
+		panic(fmt.Sprintf("mms: server: invalid DataAccessErrorCode in response: %v", err))
+	}
+	return wire
+}
 
 // Server is a generic MMS server that accepts associations and serves
 // confirmed MMS services via registered handlers and a variable registry.
@@ -942,19 +953,19 @@ func (s *Server) handleRead(ctx context.Context, body []byte) (int, bool, []byte
 		wn := spec.Name
 		entry, ok := s.lookupVariable(ctx, wn.Scope, wn.DomainID, wn.ItemID)
 		if !ok {
-			accessResults = append(accessResults, &pdu.AccessResult{IsError: true, ErrorCode: wireErrObjectUndefined})
+			accessResults = append(accessResults, &pdu.AccessResult{IsError: true, ErrorCode: wireErrCode(wireErrObjectUndefined)})
 			continue
 		}
 
 		readFn, ok := entry.ReadFunc.(func(context.Context) (*Value, error))
 		if !ok || readFn == nil {
-			accessResults = append(accessResults, &pdu.AccessResult{IsError: true, ErrorCode: wireErrAccessDenied})
+			accessResults = append(accessResults, &pdu.AccessResult{IsError: true, ErrorCode: wireErrCode(wireErrAccessDenied)})
 			continue
 		}
 
 		val, err := readFn(ctx)
 		if err != nil {
-			accessResults = append(accessResults, &pdu.AccessResult{IsError: true, ErrorCode: wireErrTempUnavail})
+			accessResults = append(accessResults, &pdu.AccessResult{IsError: true, ErrorCode: wireErrCode(wireErrTempUnavail)})
 			continue
 		}
 
@@ -962,14 +973,14 @@ func (s *Server) handleRead(ctx context.Context, body []byte) (int, bool, []byte
 			ts := extractTypeSpec(entry.TypeSpec)
 			val = applyAlternateAccessRead(val, ts, spec.AlternateAccess)
 			if val == nil {
-				accessResults = append(accessResults, &pdu.AccessResult{IsError: true, ErrorCode: wireErrObjectUndefined})
+				accessResults = append(accessResults, &pdu.AccessResult{IsError: true, ErrorCode: wireErrCode(wireErrObjectUndefined)})
 				continue
 			}
 		}
 
 		dv, err := valueToDataValue(val)
 		if err != nil {
-			accessResults = append(accessResults, &pdu.AccessResult{IsError: true, ErrorCode: wireErrTempUnavail})
+			accessResults = append(accessResults, &pdu.AccessResult{IsError: true, ErrorCode: wireErrCode(wireErrTempUnavail)})
 			continue
 		}
 		accessResults = append(accessResults, &pdu.AccessResult{IsError: false, Data: dv})
@@ -1008,55 +1019,55 @@ func (s *Server) handleWrite(ctx context.Context, body []byte) (int, bool, []byt
 
 	wireData := req.Values
 
-	var results []int // 0=success, >0=data-access-error code
+	var results []pdu.WriteResult
 	for i, spec := range specs {
 		if i >= len(wireData) {
-			results = append(results, wireErrTypeInconsistent)
+			results = append(results, pdu.WriteResult{Code: wireErrCode(wireErrTypeInconsistent)})
 			continue
 		}
 		wn := spec.Name
 		entry, ok := s.lookupVariable(ctx, wn.Scope, wn.DomainID, wn.ItemID)
 		if !ok {
-			results = append(results, wireErrObjectUndefined)
+			results = append(results, pdu.WriteResult{Code: wireErrCode(wireErrObjectUndefined)})
 			continue
 		}
 
 		writeFn, ok := entry.WriteFunc.(func(context.Context, *Value) error)
 		if !ok || writeFn == nil {
-			results = append(results, wireErrAccessDenied)
+			results = append(results, pdu.WriteResult{Code: wireErrCode(wireErrAccessDenied)})
 			continue
 		}
 
 		val, err := dataValueToValue(wireData[i])
 		if err != nil {
-			results = append(results, wireErrTypeInconsistent)
+			results = append(results, pdu.WriteResult{Code: wireErrCode(wireErrTypeInconsistent)})
 			continue
 		}
 
 		if len(spec.AlternateAccess) > 0 {
 			readFn, readOK := entry.ReadFunc.(func(context.Context) (*Value, error))
 			if !readOK || readFn == nil {
-				results = append(results, wireErrAccessDenied)
+				results = append(results, pdu.WriteResult{Code: wireErrCode(wireErrAccessDenied)})
 				continue
 			}
 			currentVal, readErr := readFn(ctx)
 			if readErr != nil {
-				results = append(results, wireErrTempUnavail)
+				results = append(results, pdu.WriteResult{Code: wireErrCode(wireErrTempUnavail)})
 				continue
 			}
 			ts := extractTypeSpec(entry.TypeSpec)
 			val = applyAlternateAccessWrite(currentVal, ts, spec.AlternateAccess, val)
 			if val == nil {
-				results = append(results, wireErrTypeInconsistent)
+				results = append(results, pdu.WriteResult{Code: wireErrCode(wireErrTypeInconsistent)})
 				continue
 			}
 		}
 
 		if err := writeFn(ctx, val); err != nil {
-			results = append(results, wireErrTempUnavail)
+			results = append(results, pdu.WriteResult{Code: wireErrCode(wireErrTempUnavail)})
 			continue
 		}
-		results = append(results, 0)
+		results = append(results, pdu.WriteResult{Success: true})
 	}
 
 	respBytes, err := pdu.MarshalWriteResponse(results)

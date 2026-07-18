@@ -93,6 +93,26 @@ func MarshalInitiateRequest(req InitiateRequest) ([]byte, error) {
 	return codec.MarshalMmsPduBareSequence(asn1util.TagInitiateRequest, req)
 }
 
+// UnmarshalInitiateRequest decodes the inner content of an
+// InitiateRequestPDU (after the 0xa8 outer tag has been stripped).
+//
+// InitiateRequestPDU uses an IMPLICIT context tag, so the 0xa8 outer tag
+// replaces the universal SEQUENCE tag. The content bytes are the SEQUENCE
+// fields directly, without a 0x30 header. A 0x30 wrapper is reconstructed
+// here because Go's encoding/asn1 requires it.
+func UnmarshalInitiateRequest(content []byte) (*InitiateRequest, error) {
+	var req InitiateRequest
+	seq := berutil.EncodeTLV(0x30, content)
+	rest, err := asn1.Unmarshal(seq, &req)
+	if err != nil {
+		return nil, fmt.Errorf("pdu: unmarshal initiate request: %w", err)
+	}
+	if len(rest) != 0 {
+		return nil, fmt.Errorf("pdu: unmarshal initiate request: %d trailing bytes", len(rest))
+	}
+	return &req, nil
+}
+
 // UnmarshalInitiateResponse decodes the inner content of an
 // InitiateResponsePDU (after the 0xa9 outer tag has been stripped).
 //

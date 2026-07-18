@@ -367,7 +367,12 @@ func TestMarshalReadResponse_Empty(t *testing.T) {
 // --- MarshalWriteResponse ---
 
 func TestMarshalWriteResponse(t *testing.T) {
-	results := []int{0, 1, 0, 2}
+	results := []WriteResult{
+		{Success: true},
+		{Success: false, Code: 1},
+		{Success: true},
+		{Success: false, Code: 2},
+	}
 	data, err := MarshalWriteResponse(results)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -377,13 +382,13 @@ func TestMarshalWriteResponse(t *testing.T) {
 	}
 
 	offset := 0
-	for i, code := range results {
+	for i, r := range results {
 		tag, _, n, err := berutil.DecodeTLVAt(data, offset)
 		if err != nil {
 			t.Fatalf("result[%d]: %v", i, err)
 		}
 		offset += n
-		if code == 0 {
+		if r.Success {
 			if tag != 0x81 {
 				t.Errorf("result[%d]: tag = 0x%02x, want 0x81 (success)", i, tag)
 			}
@@ -399,7 +404,7 @@ func TestMarshalWriteResponse(t *testing.T) {
 }
 
 func TestMarshalWriteResponse_AllSuccess(t *testing.T) {
-	data, err := MarshalWriteResponse([]int{0, 0, 0})
+	data, err := MarshalWriteResponse([]WriteResult{{Success: true}, {Success: true}, {Success: true}})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}

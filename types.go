@@ -169,20 +169,31 @@ func (t ValueType) String() string {
 
 // DataAccessErrorCode represents per-variable access errors returned
 // by MMS read/write operations.
+//
+// The values match the MMS ASN.1 data-access-error ENUMERATED wire encoding
+// (ISO 9506-2). DataAccessErrorNone (-1) is a Go-internal sentinel meaning
+// "no error"; it is never transmitted on the wire.
 type DataAccessErrorCode int
 
 const (
-	DataAccessErrorNone                    DataAccessErrorCode = 0
-	DataAccessErrorObjectInvalidated       DataAccessErrorCode = 1
-	DataAccessErrorHardwareFault           DataAccessErrorCode = 2
-	DataAccessErrorTemporarilyUnavailable  DataAccessErrorCode = 3
-	DataAccessErrorObjectAccessDenied      DataAccessErrorCode = 4
-	DataAccessErrorObjectUndefined         DataAccessErrorCode = 5
-	DataAccessErrorInvalidAddress          DataAccessErrorCode = 6
-	DataAccessErrorTypeMismatch            DataAccessErrorCode = 7
-	DataAccessErrorTypeInconsistent        DataAccessErrorCode = 8
-	DataAccessErrorObjectExists            DataAccessErrorCode = 9
-	DataAccessErrorObjectAccessUnsupported DataAccessErrorCode = 10
+	// DataAccessErrorNone is the no-error sentinel. A value of -1 is
+	// never encoded on the wire; it indicates the absence of an error in
+	// AccessResult and WriteAccessResult fields.
+	DataAccessErrorNone DataAccessErrorCode = -1
+
+	// Wire values 0–11 match the MMS data-access-error ENUMERATED (ISO 9506-2).
+	DataAccessErrorObjectInvalidated            DataAccessErrorCode = 0
+	DataAccessErrorHardwareFault                DataAccessErrorCode = 1
+	DataAccessErrorTemporarilyUnavailable       DataAccessErrorCode = 2
+	DataAccessErrorObjectAccessDenied           DataAccessErrorCode = 3
+	DataAccessErrorObjectUndefined              DataAccessErrorCode = 4
+	DataAccessErrorInvalidAddress               DataAccessErrorCode = 5
+	DataAccessErrorTypeUnsupported              DataAccessErrorCode = 6
+	DataAccessErrorTypeInconsistent             DataAccessErrorCode = 7
+	DataAccessErrorObjectAttributeInconsistent  DataAccessErrorCode = 8
+	DataAccessErrorObjectAccessUnsupported      DataAccessErrorCode = 9
+	DataAccessErrorObjectNonExistent            DataAccessErrorCode = 10
+	DataAccessErrorObjectValueInvalid           DataAccessErrorCode = 11
 )
 
 const (
@@ -191,24 +202,36 @@ const (
 
 	// Deprecated: Use [DataAccessErrorObjectAccessUnsupported].
 	DataAccessErrorObjectAccessUnsup = DataAccessErrorObjectAccessUnsupported
+
+	// Deprecated: Use [DataAccessErrorTypeUnsupported].
+	DataAccessErrorTypeMismatch = DataAccessErrorTypeUnsupported
+
+	// Deprecated: Use [DataAccessErrorObjectAttributeInconsistent].
+	DataAccessErrorObjectExists = DataAccessErrorObjectAttributeInconsistent
 )
 
+// dataAccessErrorNames maps wire values 0–11 to human-readable names.
+// Index matches the MMS data-access-error ENUMERATED value.
 var dataAccessErrorNames = [...]string{
-	"None",
-	"ObjectInvalidated",
-	"HardwareFault",
-	"TemporarilyUnavailable",
-	"ObjectAccessDenied",
-	"ObjectUndefined",
-	"InvalidAddress",
-	"TypeMismatch",
-	"TypeInconsistent",
-	"ObjectExists",
-	"ObjectAccessUnsupported",
+	"ObjectInvalidated",           // 0
+	"HardwareFault",               // 1
+	"TemporarilyUnavailable",      // 2
+	"ObjectAccessDenied",          // 3
+	"ObjectUndefined",             // 4
+	"InvalidAddress",              // 5
+	"TypeUnsupported",             // 6
+	"TypeInconsistent",            // 7
+	"ObjectAttributeInconsistent", // 8
+	"ObjectAccessUnsupported",     // 9
+	"ObjectNonExistent",           // 10
+	"ObjectValueInvalid",          // 11
 }
 
 // String returns the human-readable name of the DataAccessErrorCode.
 func (c DataAccessErrorCode) String() string {
+	if c == DataAccessErrorNone {
+		return "None"
+	}
 	if int(c) >= 0 && int(c) < len(dataAccessErrorNames) {
 		return dataAccessErrorNames[c]
 	}
