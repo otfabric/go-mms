@@ -628,7 +628,7 @@ func TestReadDataAccessError(t *testing.T) {
 	go func() {
 		invokeID, _, _ := srv.handleDataRequest(ctx)
 		srv.sendReadResponse(ctx, invokeID, []*pdu.DataValue{
-			{Tag: pdu.TagDataAccessError, ErrCode: 5},
+			{Tag: pdu.TagDataAccessError, ErrCode: int(DataAccessErrorObjectUndefined)},
 		})
 	}()
 
@@ -702,7 +702,7 @@ func TestWriteFailure(t *testing.T) {
 
 	go func() {
 		invokeID, _, _ := srv.handleDataRequest(ctx)
-		srv.sendWriteResponse(ctx, invokeID, false, 4)
+		srv.sendWriteResponse(ctx, invokeID, false, int(DataAccessErrorObjectAccessDenied))
 	}()
 
 	_, err = client.Write(ctx, WriteRequest{
@@ -720,6 +720,186 @@ func TestWriteFailure(t *testing.T) {
 	}
 	if dae.Code != DataAccessErrorObjectAccessDenied {
 		t.Errorf("error code = %s, want ObjectAccessDenied", dae.Code)
+	}
+
+	go func() {
+		srv.handleDataRequest(ctx)
+		srv.sendConcludeResponse(ctx)
+	}()
+	client.Close(ctx)
+}
+
+// TestRead_ObjectInvalidatedWireZeroIsError proves that wire value 0
+// (object-invalidated) is treated as a data-access error rather than success.
+// Before the DataAccessErrorCode fix, wire value 0 mapped to the None sentinel
+// and was silently ignored, causing the read to succeed with a nil Value.
+func TestRead_ObjectInvalidatedWireZeroIsError(t *testing.T) {
+	mt := newMockTransport()
+	srv := newMockServer(t, mt)
+	ctx := context.Background()
+
+	go srv.handleAssociation(ctx)
+
+	client, err := NewClient(ctx, mt, defaultDialOptions())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	go func() {
+		invokeID, _, _ := srv.handleDataRequest(ctx)
+		srv.sendReadResponse(ctx, invokeID, []*pdu.DataValue{
+			{Tag: pdu.TagDataAccessError, ErrCode: 0}, // wire 0 = object-invalidated
+		})
+	}()
+
+	_, err = client.Read(ctx, ReadRequest{DomainID: "D", ItemID: "V"})
+	if err == nil {
+		t.Fatal("expected error for wire value 0 (object-invalidated), got nil")
+	}
+	var dae *DataAccessError
+	if !errors.As(err, &dae) {
+		t.Fatalf("expected *DataAccessError, got %T: %v", err, err)
+	}
+	if dae.Code != DataAccessErrorObjectInvalidated {
+		t.Errorf("error code = %s, want ObjectInvalidated", dae.Code)
+	}
+
+	go func() {
+		srv.handleDataRequest(ctx)
+		srv.sendConcludeResponse(ctx)
+	}()
+	client.Close(ctx)
+}
+
+// TestReadMultiple_AccessResultInvariant verifies the AccessResult contract:
+//   - success: Value != nil, ErrorCode == DataAccessErrorNone
+//   - error:   Value == nil, ErrorCode != DataAccessErrorNone
+func TestReadMultiple_AccessResultInvariant(t *testing.T) {
+	mt := newMockTransport()
+	srv := newMockServer(t, mt)
+	ctx := context.Background()
+
+	go srv.handleAssociation(ctx)
+
+	client, err := NewClient(ctx, mt, defaultDialOptions())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	go func() {
+		invokeID, _, _ := srv.handleDataRequest(ctx)
+		srv.sendReadResponse(ctx, invokeID, []*pdu.DataValue{
+			{Tag: pdu.TagDataBoolean, Bool: true},
+			{Tag: pdu.TagDataAccessError, ErrCode: int(DataAccessErrorObjectAccessDenied)},
+		})
+	}()
+
+	results, err := client.ReadMultiple(ctx, []ObjectName{
+		{Scope: ObjectScopeDomain, Domain: "D", ItemID: "V1"},
+		{Scope: ObjectScopeDomain, Domain: "D", ItemID: "V2"},
+	})
+	if err != nil {
+		t.Fatalf("ReadMultiple: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("got %d results, want 2", len(results))
+	}
+
+	// Success result invariant.
+	r0 := results[0]
+	if r0.Value == nil {
+		t.Error("success result: Value is nil")
+	}
+	if r0.ErrorCode != DataAccessErrorNone {
+		t.Errorf("success result: ErrorCode = %v, want DataAccessErrorNone", r0.ErrorCode)
+	}
+
+	// Error result invariant.
+	r1 := results[1]
+	if r1.Value != nil {
+		t.Error("error result: Value should be nil")
+	}
+	if r1.ErrorCode == DataAccessErrorNone {
+		t.Error("error result: ErrorCode should not be DataAccessErrorNone")
+	}
+	if r1.ErrorCode != DataAccessErrorObjectAccessDenied {
+		t.Errorf("error result: ErrorCode = %v, want ObjectAccessDenied", r1.ErrorCode)
+	}
+
+	go func() {
+		srv.handleDataRequest(ctx)
+		srv.sendConcludeResponse(ctx)
+	}()
+	client.Close(ctx)
+}
+
+// TestWriteVariables_AccessResultInvariant verifies the WriteAccessResult contract:
+//   - success: Success == true,  ErrorCode == DataAccessErrorNone
+//   - error:   Success == false, ErrorCode != DataAccessErrorNone
+func TestWriteVariables_AccessResultInvariant(t *testing.T) {
+	mt := newMockTransport()
+	srv := newMockServer(t, mt)
+	ctx := context.Background()
+
+	go srv.handleAssociation(ctx)
+
+	client, err := NewClient(ctx, mt, defaultDialOptions())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	go func() {
+		invokeID, _, _ := srv.handleDataRequest(ctx)
+		srv.sendWriteResponse(ctx, invokeID, true, 0)
+	}()
+
+	results, err := client.WriteVariables(ctx,
+		[]VariableSpec{{Name: ObjectName{Scope: ObjectScopeDomain, Domain: "D", ItemID: "V1"}}},
+		[]*Value{NewBoolean(true)},
+	)
+	if err != nil {
+		t.Fatalf("WriteVariables (success): %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+
+	// Success result invariant.
+	ws := results[0]
+	if !ws.Success {
+		t.Error("expected Success=true")
+	}
+	if ws.ErrorCode != DataAccessErrorNone {
+		t.Errorf("success result: ErrorCode = %v, want DataAccessErrorNone", ws.ErrorCode)
+	}
+
+	// Now test error result.
+	go func() {
+		invokeID, _, _ := srv.handleDataRequest(ctx)
+		srv.sendWriteResponse(ctx, invokeID, false, int(DataAccessErrorObjectAccessDenied))
+	}()
+
+	results2, err := client.WriteVariables(ctx,
+		[]VariableSpec{{Name: ObjectName{Scope: ObjectScopeDomain, Domain: "D", ItemID: "V2"}}},
+		[]*Value{NewBoolean(false)},
+	)
+	if err != nil {
+		t.Fatalf("WriteVariables (failure): %v", err)
+	}
+	if len(results2) != 1 {
+		t.Fatalf("got %d results, want 1", len(results2))
+	}
+
+	// Error result invariant.
+	we := results2[0]
+	if we.Success {
+		t.Error("expected Success=false")
+	}
+	if we.ErrorCode == DataAccessErrorNone {
+		t.Error("error result: ErrorCode should not be DataAccessErrorNone")
+	}
+	if we.ErrorCode != DataAccessErrorObjectAccessDenied {
+		t.Errorf("error result: ErrorCode = %v, want ObjectAccessDenied", we.ErrorCode)
 	}
 
 	go func() {

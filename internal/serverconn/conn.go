@@ -7,7 +7,6 @@ package serverconn
 
 import (
 	"context"
-	"encoding/asn1"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -97,20 +96,12 @@ func (c *Conn) ReceiveAssociation(ctx context.Context) (acse.AuthInfo, error) {
 		return noAuth, fmt.Errorf("serverconn: expected InitiateRequest, got %s", kind)
 	}
 
-	// InitiateRequestPDU uses an IMPLICIT context tag, so initContent contains
-	// the SEQUENCE fields directly without a 0x30 header. Reconstruct the
-	// 0x30 wrapper that encoding/asn1 requires when decoding into a struct.
-	var initReq pdu.InitiateRequest
-	seq := berutil.EncodeTLV(0x30, initContent)
-	rest, err := asn1.Unmarshal(seq, &initReq)
+	initReq, err := pdu.UnmarshalInitiateRequest(initContent)
 	if err != nil {
-		return noAuth, fmt.Errorf("serverconn: unmarshal initiate request: %w", err)
-	}
-	if len(rest) != 0 {
-		return noAuth, fmt.Errorf("serverconn: initiate request: %d trailing bytes", len(rest))
+		return noAuth, fmt.Errorf("serverconn: %w", err)
 	}
 
-	c.pendingInitReq = &initReq
+	c.pendingInitReq = initReq
 	return assocReq.Auth, nil
 }
 

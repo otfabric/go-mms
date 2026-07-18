@@ -70,6 +70,26 @@ func (e *DataAccessError) Error() string {
 
 func (e *DataAccessError) Unwrap() error { return ErrDataAccess }
 
+// encodeDataAccessError converts a DataAccessErrorCode to its MMS wire
+// integer value. Returns an error if code is DataAccessErrorNone or outside
+// the known range 0–11, preventing accidental serialization of sentinels
+// or future enum additions before they are mapped.
+func encodeDataAccessError(code DataAccessErrorCode) (int, error) {
+	if code == DataAccessErrorNone || int(code) < 0 || int(code) > int(DataAccessErrorObjectValueInvalid) {
+		return 0, fmt.Errorf("mms: cannot encode DataAccessErrorCode %v as MMS wire value", code)
+	}
+	return int(code), nil
+}
+
+// decodeDataAccessError converts an MMS wire integer to a DataAccessErrorCode.
+// Returns an error for values outside the known range 0–11.
+func decodeDataAccessError(wire int) (DataAccessErrorCode, error) {
+	if wire < 0 || wire > int(DataAccessErrorObjectValueInvalid) {
+		return DataAccessErrorNone, fmt.Errorf("mms: unknown data-access-error wire value %d", wire)
+	}
+	return DataAccessErrorCode(wire), nil
+}
+
 // ProtocolError indicates a protocol-level violation at a specific ISO
 // stack layer.
 type ProtocolError struct {

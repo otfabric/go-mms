@@ -45,25 +45,44 @@ func MarshalConfirmedRequest(invokeID InvokeID, tagNum int, constructed bool, se
 	return asn1util.WrapConstructed(0, content), nil
 }
 
-// MarshalMmsPduBareSequence marshals a struct into an MMS PDU, stripping the
-// 0x30 SEQUENCE header that encoding/asn1 adds, so the outer context-specific
-// tag is IMPLICIT (it replaces the universal SEQUENCE tag). Use this for all
-// MMS PDU types whose ASN.1 definition uses an IMPLICIT context tag, such as
+// tagUniversalSequence is the BER tag for a universal SEQUENCE (0x30).
+const tagUniversalSequence byte = 0x30
+
+// MarshalSequenceContent marshals a struct using encoding/asn1 and returns
+// the SEQUENCE fields without the 0x30 wrapper. This produces the bare
+// content suitable for IMPLICIT sequence tags, where the context-specific
+// tag replaces the universal SEQUENCE tag.
+//
+// It validates that asn1.Marshal produced exactly one complete SEQUENCE TLV.
+func MarshalSequenceContent(value any) ([]byte, error) {
+	encoded, err := asn1.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("codec: marshal sequence: %w", err)
+	}
+	tag, inner, consumed, err := berutil.DecodeTLVAt(encoded, 0)
+	if err != nil {
+		return nil, fmt.Errorf("codec: decode SEQUENCE header: %w", err)
+	}
+	if tag != tagUniversalSequence {
+		return nil, fmt.Errorf("codec: expected SEQUENCE (0x30) from asn1.Marshal, got 0x%02x", tag)
+	}
+	if consumed != len(encoded) {
+		return nil, fmt.Errorf("codec: %d trailing bytes after SEQUENCE", len(encoded)-consumed)
+	}
+	return inner, nil
+}
+
+// MarshalMmsPduBareSequence marshals a struct into an MMS PDU using
+// MarshalSequenceContent, so the outer context-specific tag is IMPLICIT
+// (it replaces the universal SEQUENCE tag). Use this for all MMS PDU types
+// whose ASN.1 definition uses an IMPLICIT context tag, such as
 // InitiateRequestPDU [8] and InitiateResponsePDU [9].
 func MarshalMmsPduBareSequence(pduTag byte, payload any) ([]byte, error) {
-	content, err := asn1.Marshal(payload)
+	inner, err := MarshalSequenceContent(payload)
 	if err != nil {
-		return nil, fmt.Errorf("codec: marshal PDU content: %w", err)
+		return nil, err
 	}
-	if len(content) < 2 || content[0] != 0x30 {
-		return nil, fmt.Errorf("codec: expected SEQUENCE (0x30) from asn1.Marshal, got 0x%02x", content[0])
-	}
-	_, inner, _, err := berutil.DecodeTLVAt(content, 0)
-	if err != nil {
-		return nil, fmt.Errorf("codec: strip SEQUENCE header: %w", err)
-	}
-	tagNum := asn1util.TagNumber(pduTag)
-	return asn1util.WrapConstructed(tagNum, inner), nil
+	return asn1util.WrapConstructed(asn1util.TagNumber(pduTag), inner), nil
 }
 
 // MarshalConcludeRequest produces a ConcludeRequestPDU (context 11, NULL).

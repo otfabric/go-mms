@@ -518,13 +518,22 @@ func MarshalReadResponseWithSpec(listName *ObjectNameWire, specs []VariableSpecW
 //	  failure [0] IMPLICIT DataAccessError
 //	  success [1] IMPLICIT NULL
 //	}
-func MarshalWriteResponse(results []int) ([]byte, error) {
+//
+// WriteResult separates the success/failure flag from the error code so that
+// MarshalWriteResponse never uses an integer sentinel that could overlap with a
+// real MMS data-access-error wire value.
+type WriteResult struct {
+	Success bool
+	Code    int // MMS wire error value when !Success; ignored when Success
+}
+
+func MarshalWriteResponse(results []WriteResult) ([]byte, error) {
 	var encoded []byte
-	for _, code := range results {
-		if code == 0 {
+	for _, r := range results {
+		if r.Success {
 			encoded = append(encoded, berutil.EncodeTLV(tagWriteSuccess, nil)...) // [1] IMPLICIT NULL
 		} else {
-			encoded = append(encoded, berutil.EncodeTLV(tagWriteFailure, encodeSmallInt(code))...) // [0] IMPLICIT DataAccessError
+			encoded = append(encoded, berutil.EncodeTLV(tagWriteFailure, encodeSmallInt(r.Code))...) // [0] IMPLICIT DataAccessError
 		}
 	}
 	return encoded, nil
