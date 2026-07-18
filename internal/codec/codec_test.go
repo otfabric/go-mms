@@ -136,17 +136,18 @@ func TestMarshalMmsPdu(t *testing.T) {
 	}
 }
 
-func TestUnmarshalInner(t *testing.T) {
+func TestUnmarshalImplicitSequence(t *testing.T) {
 	type inner struct {
 		Value int
 	}
-	val := inner{Value: 42}
-	encoded, _ := asn1.Marshal(val)
-	raw := asn1.RawValue{Class: 2, Tag: 0, IsCompound: true, Bytes: encoded}
+	// Encode with asn1.Marshal, strip the 0x30 header to get bare fields,
+	// then place them in an IMPLICIT sequence RawValue.
+	encoded, _ := asn1.Marshal(inner{Value: 42})
+	bare := encoded[2:] // strip 0x30 + length byte (length fits in 1 byte)
+	raw := asn1.RawValue{Class: 2, Tag: 0, IsCompound: true, Bytes: bare}
 
 	var result inner
-	err := UnmarshalInner(raw, &result)
-	if err != nil {
+	if err := UnmarshalImplicitSequence(raw, &result); err != nil {
 		t.Fatal(err)
 	}
 	if result.Value != 42 {
@@ -154,12 +155,29 @@ func TestUnmarshalInner(t *testing.T) {
 	}
 }
 
-func TestUnmarshalInnerPrimitive(t *testing.T) {
+func TestUnmarshalImplicitSequencePrimitive(t *testing.T) {
 	raw := asn1.RawValue{Class: 2, Tag: 0, IsCompound: false, Bytes: []byte{1}}
 	var result int
-	err := UnmarshalInner(raw, &result)
-	if err == nil {
-		t.Fatal("expected error for primitive")
+	if err := UnmarshalImplicitSequence(raw, &result); err == nil {
+		t.Fatal("expected error for primitive value")
+	}
+}
+
+func TestUnmarshalExplicit(t *testing.T) {
+	type inner struct {
+		Value int
+	}
+	// For EXPLICIT wrapping, raw.Bytes starts with the full TLV of the inner
+	// type (0x30 + length + fields).
+	encoded, _ := asn1.Marshal(inner{Value: 42})
+	raw := asn1.RawValue{Class: 2, Tag: 0, IsCompound: true, Bytes: encoded}
+
+	var result inner
+	if err := UnmarshalExplicit(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Value != 42 {
+		t.Fatalf("got %d, want 42", result.Value)
 	}
 }
 

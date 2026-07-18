@@ -97,8 +97,12 @@ func (c *Conn) ReceiveAssociation(ctx context.Context) (acse.AuthInfo, error) {
 		return noAuth, fmt.Errorf("serverconn: expected InitiateRequest, got %s", kind)
 	}
 
+	// InitiateRequestPDU uses an IMPLICIT context tag, so initContent contains
+	// the SEQUENCE fields directly without a 0x30 header. Reconstruct the
+	// 0x30 wrapper that encoding/asn1 requires when decoding into a struct.
 	var initReq pdu.InitiateRequest
-	rest, err := asn1.Unmarshal(initContent, &initReq)
+	seq := berutil.EncodeTLV(0x30, initContent)
+	rest, err := asn1.Unmarshal(seq, &initReq)
 	if err != nil {
 		return noAuth, fmt.Errorf("serverconn: unmarshal initiate request: %w", err)
 	}
@@ -133,7 +137,7 @@ func (c *Conn) AcceptAssociation(ctx context.Context) error {
 		},
 	}
 
-	initRespBytes, err := codec.MarshalMmsPdu(asn1util.TagInitiateResponse, initResp)
+	initRespBytes, err := codec.MarshalMmsPduBareSequence(asn1util.TagInitiateResponse, initResp)
 	if err != nil {
 		return fmt.Errorf("serverconn: marshal initiate response: %w", err)
 	}

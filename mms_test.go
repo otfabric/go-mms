@@ -145,7 +145,7 @@ func (s *mockServer) handleAssociation(ctx context.Context) {
 		},
 	}
 
-	initRespBytes, err := codec.MarshalMmsPdu(asn1util.TagInitiateResponse, initResp)
+	initRespBytes, err := codec.MarshalMmsPduBareSequence(asn1util.TagInitiateResponse, initResp)
 	if err != nil {
 		s.t.Fatalf("server: marshal initiate response: %v", err)
 	}
@@ -199,17 +199,7 @@ func (s *mockServer) handleDataRequest(ctx context.Context) (codec.InvokeID, pdu
 func (s *mockServer) sendIdentifyResponse(ctx context.Context, invokeID codec.InvokeID) {
 	s.t.Helper()
 
-	type identifyRespASN1 struct {
-		VendorName string `asn1:"tag:0,implicit,ia5"`
-		ModelName  string `asn1:"tag:1,implicit,ia5"`
-		Revision   string `asn1:"tag:2,implicit,ia5"`
-	}
-
-	respBody, err := asn1.Marshal(identifyRespASN1{
-		VendorName: s.vendor,
-		ModelName:  s.model,
-		Revision:   s.revision,
-	})
+	respBody, err := pdu.MarshalIdentifyResponse(s.vendor, s.model, s.revision)
 	if err != nil {
 		s.t.Fatalf("server: marshal identify body: %v", err)
 	}
@@ -224,15 +214,7 @@ func (s *mockServer) sendIdentifyResponse(ctx context.Context, invokeID codec.In
 func (s *mockServer) sendStatusResponse(ctx context.Context, invokeID codec.InvokeID) {
 	s.t.Helper()
 
-	type statusRespASN1 struct {
-		VMDLogicalStatus  int `asn1:"tag:0,implicit"`
-		VMDPhysicalStatus int `asn1:"tag:1,implicit"`
-	}
-
-	respBody, err := asn1.Marshal(statusRespASN1{
-		VMDLogicalStatus:  0, // state-changes-allowed
-		VMDPhysicalStatus: 0, // operational
-	})
+	respBody, err := pdu.MarshalStatusResponse(0, 0) // state-changes-allowed, operational
 	if err != nil {
 		s.t.Fatalf("server: marshal status body: %v", err)
 	}
@@ -504,7 +486,8 @@ func (s *mockServer) sendReadResponse(ctx context.Context, invokeID codec.Invoke
 		}
 		elements = append(elements, b...)
 	}
-	seqOf := berutil.EncodeTLV(0x30, elements)
+	// listOfAccessResult [1] IMPLICIT SEQUENCE OF — context tag replaces 0x30.
+	seqOf := berutil.EncodeTLV(0xa1, elements)
 
 	respPdu, err := codec.MarshalConfirmedResponse(invokeID, asn1util.TagNumRead, true, seqOf)
 	if err != nil {
