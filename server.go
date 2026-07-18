@@ -768,16 +768,7 @@ func (s *Server) handleIdentify(ctx context.Context) (int, bool, []byte, error) 
 		return 0, false, nil, err
 	}
 
-	type identifyResp struct {
-		VendorName string `asn1:"tag:0,implicit,ia5"`
-		ModelName  string `asn1:"tag:1,implicit,ia5"`
-		Revision   string `asn1:"tag:2,implicit,ia5"`
-	}
-	payload, err := asn1.Marshal(identifyResp{
-		VendorName: result.Vendor,
-		ModelName:  result.Model,
-		Revision:   result.Revision,
-	})
+	payload, err := pdu.MarshalIdentifyResponse(result.Vendor, result.Model, result.Revision)
 	if err != nil {
 		return 0, false, nil, fmt.Errorf("marshal identify response: %w", err)
 	}
@@ -801,14 +792,7 @@ func (s *Server) handleStatus(ctx context.Context, body []byte) (int, bool, []by
 		return 0, false, nil, err
 	}
 
-	type statusResp struct {
-		VMDLogicalStatus  int `asn1:"tag:0,implicit"`
-		VMDPhysicalStatus int `asn1:"tag:1,implicit"`
-	}
-	payload, err := asn1.Marshal(statusResp{
-		VMDLogicalStatus:  int(result.Logical),
-		VMDPhysicalStatus: int(result.Physical),
-	})
+	payload, err := pdu.MarshalStatusResponse(int(result.Logical), int(result.Physical))
 	if err != nil {
 		return 0, false, nil, fmt.Errorf("marshal status response: %w", err)
 	}

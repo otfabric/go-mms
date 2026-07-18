@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/otfabric/go-mms/internal/asn1util"
+	"github.com/otfabric/go-mms/internal/berutil"
 	"github.com/otfabric/go-mms/internal/codec"
 )
 
@@ -84,17 +85,25 @@ func DefaultInitiateRequest(maxPDU, maxOutCalling, maxOutCalled, nestingLevel in
 	}
 }
 
-// MarshalInitiateRequest encodes an InitiateRequest into a complete
-// MMS PDU (with the 0xa8 outer tag).
+// MarshalInitiateRequest encodes an InitiateRequest into a complete MMS PDU
+// (outer tag 0xa8). InitiateRequestPDU uses an IMPLICIT context tag, so the
+// universal SEQUENCE (0x30) added by encoding/asn1 is stripped and the fields
+// are placed directly inside the 0xa8 wrapper.
 func MarshalInitiateRequest(req InitiateRequest) ([]byte, error) {
-	return codec.MarshalMmsPdu(asn1util.TagInitiateRequest, req)
+	return codec.MarshalMmsPduBareSequence(asn1util.TagInitiateRequest, req)
 }
 
 // UnmarshalInitiateResponse decodes the inner content of an
-// InitiateResponsePdu (after the 0xa9 outer tag has been stripped).
+// InitiateResponsePDU (after the 0xa9 outer tag has been stripped).
+//
+// InitiateResponsePDU is defined with an IMPLICIT context tag, so the 0xa9
+// outer tag replaces the universal SEQUENCE tag. The content bytes are the
+// SEQUENCE fields directly, without a 0x30 header. A 0x30 wrapper is
+// reconstructed here because Go's encoding/asn1 requires it.
 func UnmarshalInitiateResponse(content []byte) (*InitiateResponse, error) {
 	var resp InitiateResponse
-	rest, err := asn1.Unmarshal(content, &resp)
+	seq := berutil.EncodeTLV(0x30, content)
+	rest, err := asn1.Unmarshal(seq, &resp)
 	if err != nil {
 		return nil, fmt.Errorf("pdu: unmarshal initiate response: %w", err)
 	}

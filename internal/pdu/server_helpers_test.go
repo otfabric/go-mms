@@ -344,13 +344,13 @@ func TestMarshalReadResponse(t *testing.T) {
 		t.Fatal("expected non-empty output")
 	}
 
-	// Should be a SEQUENCE
+	// listOfAccessResult [1] IMPLICIT replaces the universal SEQUENCE tag.
 	tag, _, _, err := berutil.DecodeTLVAt(data, 0)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if tag != tagSequence {
-		t.Fatalf("tag = 0x%02x, want 0x%02x", tag, tagSequence)
+	if tag != tagReadListOfAccessResult {
+		t.Fatalf("tag = 0x%02x, want 0x%02x (listOfAccessResult [1])", tag, tagReadListOfAccessResult)
 	}
 }
 

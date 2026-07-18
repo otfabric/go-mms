@@ -38,9 +38,9 @@ func TestMarshalReadRequestMultipleVariables(t *testing.T) {
 }
 
 func TestUnmarshalReadResponseSingleValue(t *testing.T) {
-	// Build a Read response: SEQUENCE OF { boolean true }
+	// Build a Read response: listOfAccessResult [1] IMPLICIT { boolean true }
 	boolData := berutil.EncodeTLV(TagDataBoolean, []byte{0xff})
-	seqOf := berutil.EncodeTLV(0x30, boolData)
+	seqOf := berutil.EncodeTLV(tagReadListOfAccessResult, boolData)
 
 	serviceData := asn1.RawValue{
 		Class:      asn1.ClassContextSpecific,
@@ -71,7 +71,7 @@ func TestUnmarshalReadResponseMultipleValues(t *testing.T) {
 	b3 := berutil.EncodeTLV(TagDataAccessError, []byte{0x05})
 	elements = append(elements, b3...)
 
-	seqOf := berutil.EncodeTLV(0x30, elements)
+	seqOf := berutil.EncodeTLV(tagReadListOfAccessResult, elements)
 
 	serviceData := asn1.RawValue{
 		Class:      asn1.ClassContextSpecific,
@@ -102,7 +102,7 @@ func TestUnmarshalReadResponseWithVarSpec(t *testing.T) {
 	// Build response with optional variableAccessSpecification [0] present
 	varSpec := berutil.EncodeTLV(0xa0, []byte{0x01, 0x02}) // dummy varspec
 	boolData := berutil.EncodeTLV(TagDataBoolean, []byte{0x00})
-	seqOf := berutil.EncodeTLV(0x30, boolData)
+	seqOf := berutil.EncodeTLV(tagReadListOfAccessResult, boolData)
 
 	content := make([]byte, 0, len(varSpec)+len(seqOf))
 	content = append(content, varSpec...)
