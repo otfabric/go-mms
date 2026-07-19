@@ -1,93 +1,100 @@
-# Go↔C Interop Testing
+# go-mms Interoperability
 
-## Overview
+`go-mms` owns its interoperability assertions. Tests in `interop/` consume the adapter images published by [mms-interop](https://github.com/otfabric/mms-interop) and assert `go-mms` behaviour against a live, independent implementation.
 
-The `interop/` directory contains a harness for testing go-mms against the
-C reference implementation (libIEC61850).
+## Architecture
 
-The `sources/mms/` tree contains the MMS-layer source extracted from
-libIEC61850 (ASN.1/BER codec, ISO stack, MMS client/server). It does
-**not** include the full library build system or example programs, so
-interop testing requires a separate full libIEC61850 checkout.
-
-### MMS services available in the C reference
-
-Based on the source files in `sources/mms/iso_mms/server/`:
-
-| Service | C server file | Go client method |
-|---------|--------------|-----------------|
-| Identify | `mms_identify_service.c` | `Client.Identify` |
-| Status | `mms_status_service.c` | `Client.Status` |
-| GetNameList | `mms_get_namelist_service.c` | `Client.GetNameList` |
-| GetVariableAccessAttributes | `mms_get_var_access_service.c` | `Client.GetVariableAccessAttributes` |
-| Read | `mms_read_service.c` | `Client.Read` / `Client.ReadMultiple` |
-| Write | `mms_write_service.c` | `Client.Write` / `Client.WriteVariables` |
-| InformationReport | `mms_information_report.c` | `Client.OnInformationReport` |
-| NamedVariableList | `mms_named_variable_list_service.c` | `Client.DefineNamedVariableList` |
-| File services | `mms_file_service.c` | `Client.FileOpen` / `Client.FileRead` / ... |
-| Journal | `mms_journal_service.c` | `Client.ReadJournal` |
-
-## Current status
-
-| Scenario | Status | Notes |
-|----------|--------|-------|
-| Go client → C server: Identify | 🔲 Ready | Test implemented |
-| Go client → C server: Status | 🔲 Ready | Test implemented |
-| Go client → C server: GetNameList | 🔲 Ready | Test implemented |
-| Go client → C server: Read | 🔲 Ready | Test implemented |
-| Go client → C server: GetVariableAccessAttributes | 🔲 Ready | Test implemented |
-| Go client → C server: Write | 📋 Planned | Not yet implemented |
-| Go client → C server: InformationReport | 📋 Planned | Not yet implemented |
-| Go client → C server: File services | 📋 Planned | Not yet implemented |
-| Go server → C client | 📋 Planned | Not yet implemented |
-
-## Prerequisites
-
-- Go 1.23+
-- GCC or Clang
-- CMake 3.10+
-
-## Quick start
-
-1. Clone and build the full libIEC61850:
-   ```bash
-   git clone https://github.com/mz-automation/libIEC61850.git /tmp/libIEC61850
-   cd /tmp/libIEC61850 && mkdir -p build && cd build && cmake .. && make
-   ```
-
-2. Start the C server:
-   ```bash
-   ./interop/start_c_server.sh
-   ```
-
-3. Run interop tests:
-   ```bash
-   go test -tags interop -v ./interop/...
-   ```
-
-4. Stop the C server:
-   ```bash
-   ./interop/stop_c_server.sh
-   ```
-
-## Custom server address
-
-Set `MMS_INTEROP_ADDR` to override the default `localhost:102`:
-
-```bash
-MMS_INTEROP_ADDR=192.168.1.100:102 go test -tags interop -v ./interop/...
+```
+mms-interop
+  libiec61850 adapter images
+         |
+    go-mms/interop/
+      harness_test.go              lifecycle helpers
+      libiec61850_client_test.go   TestClient_*
+      libiec61850_server_test.go   TestServer_*
 ```
 
-## Custom server binary
+Each test:
+1. Starts the adapter container with `docker run`.
+2. Waits for the readiness event (`{"event":"ready",...}`) on stdout.
+3. Exercises the `go-mms` API under test.
+4. Asserts results.
+5. Tears the container down.
 
-Set `INTEROP_SERVER_BIN` to use a different server binary:
+No pre-running containers. No manual steps. Tests are gated behind `-tags=interop`.
+
+## Running
 
 ```bash
-INTEROP_SERVER_BIN=/path/to/my/server ./interop/start_c_server.sh
+# Build adapter images locally (in mms-interop)
+cd ../mms-interop && make build
+
+# Run against local images
+LIBIEC61850_IMAGE=mms-interop-libiec61850:local make interop
+
+# Run against published images (version tag)
+LIBIEC61850_IMAGE=ghcr.io/otfabric/mms-interop-libiec61850:v0.1.0 make interop
+
+# Run against published images (CI — digest pinned)
+LIBIEC61850_IMAGE=ghcr.io/otfabric/mms-interop-libiec61850@sha256:<digest> make interop
 ```
 
-## Adding new scenarios
+## Environment variables
 
-Add test functions to `interop/interop_test.go` using the standard Go testing
-framework. All tests are gated behind the `interop` build tag so they don't
-run during normal `go test ./...`.
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LIBIEC61850_IMAGE` | Adapter image | `mms-interop-libiec61850:local` |
+| `MMS_SERVER_BINARY` | Path to `libiec61850-mms-server` binary (skips Docker) | — |
+| `MMS_CLIENT_BINARY` | Path to `libiec61850-mms-client` binary (skips Docker) | — |
+| `MMS_FIXTURE` | Path to fixture JSON file | `testdata/interop.json` |
+
+## Test naming
+
+| Prefix | Go role | Adapter counterpart |
+|--------|---------|---------------------|
+| `TestClient_` | MMS client | `libiec61850-mms-server` |
+| `TestServer_` | MMS server | `libiec61850-mms-client` |
+
+## MMS compatibility matrix
+
+Black-box bidirectional interoperability against a pinned libiec61850 adapter through the independently versioned mms-interop infrastructure.
+
+**Key:** ✓ covered · — not yet tested · n/a not applicable
+
+| Capability | go-mms→libIEC | libIEC→go-mms | Notes |
+|-----------|:---:|:---:|-------|
+| Associate / conclude | ✓ | ✓ | |
+| Reconnect after close | ✓ | ✓ | |
+| Identify | ✓ | ✓ | |
+| Status | ✓ | ✓ | |
+| GetNameList (domains) | ✓ | ✓ | |
+| GetNameList (variables in domain) | ✓ | ✓ | |
+| Read boolean | ✓ | ✓ | |
+| Read integer | ✓ | ✓ | |
+| Read float32 | ✓ | ✓ | |
+| Read unsigned | ✓ | ✓ | |
+| Read visible-string | ✓ | ✓ | |
+| Read octet-string | ✓ | ✓ | |
+| Read bit-string | ✓ | ✓ | |
+| Read utc-time | ✓ | ✓ | |
+| Read array | ✓ | ✓ | |
+| Read structure | ✓ | ✓ | |
+| Write (writable variable) | ✓ | ✓ | |
+| Write + read-back | ✓ | ✓ | |
+| GetVariableAccessAttributes | ✓ | ✓ | |
+| Multi-variable read | ✓ | ✓ | |
+| Multi-variable write | ✓ | ✓ | |
+| Named variable list (define) | ✓ | ✓ | |
+| Named variable list (read) | ✓ | ✓ | |
+| Named variable list (delete) | ✓ | ✓ | |
+| Read unknown domain (negative) | ✓ | ✓ | server stays connected |
+| Read unknown variable (negative) | ✓ | ✓ | server stays connected |
+| Write wrong type (negative) | ✓ | ✓ | value unchanged |
+| Write read-only (negative) | ✓ | ✓ | ObjectAccessDenied; value unchanged |
+| InformationReport | — | — | |
+| File services | — | — | |
+| Journal services | — | — | |
+
+## Fixture
+
+`interop/testdata/interop.json` is a synchronized copy of the canonical fixture from mms-interop. It must be updated alongside the pinned adapter image version when the fixture contract changes.
