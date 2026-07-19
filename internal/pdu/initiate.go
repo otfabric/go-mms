@@ -96,13 +96,17 @@ func MarshalInitiateRequest(req InitiateRequest) ([]byte, error) {
 // UnmarshalInitiateRequest decodes the inner content of an
 // InitiateRequestPDU (after the 0xa8 outer tag has been stripped).
 //
-// InitiateRequestPDU uses an IMPLICIT context tag, so the 0xa8 outer tag
-// replaces the universal SEQUENCE tag. The content bytes are the SEQUENCE
-// fields directly, without a 0x30 header. A 0x30 wrapper is reconstructed
-// here because Go's encoding/asn1 requires it.
+// ISO 9506 defines InitiateRequestPDU as [8] IMPLICIT SEQUENCE, so the outer
+// 0xa8 tag replaces the SEQUENCE tag and the content bytes are the SEQUENCE
+// fields directly (no 0x30 header). A 0x30 wrapper is reconstructed so that
+// Go's encoding/asn1 can parse the struct.
+//
+// Some implementations (e.g. libiec61850's IedServer stack) encode an explicit
+// inner SEQUENCE (0x30) wrapper despite the IMPLICIT tag. Both forms are
+// accepted: when the content already begins with 0x30 it is used as-is.
 func UnmarshalInitiateRequest(content []byte) (*InitiateRequest, error) {
 	var req InitiateRequest
-	seq := berutil.EncodeTLV(0x30, content)
+	seq := wrapSequenceIfNeeded(content)
 	rest, err := asn1.Unmarshal(seq, &req)
 	if err != nil {
 		return nil, fmt.Errorf("pdu: unmarshal initiate request: %w", err)
@@ -116,13 +120,17 @@ func UnmarshalInitiateRequest(content []byte) (*InitiateRequest, error) {
 // UnmarshalInitiateResponse decodes the inner content of an
 // InitiateResponsePDU (after the 0xa9 outer tag has been stripped).
 //
-// InitiateResponsePDU is defined with an IMPLICIT context tag, so the 0xa9
-// outer tag replaces the universal SEQUENCE tag. The content bytes are the
-// SEQUENCE fields directly, without a 0x30 header. A 0x30 wrapper is
-// reconstructed here because Go's encoding/asn1 requires it.
+// ISO 9506 defines InitiateResponsePDU as [9] IMPLICIT SEQUENCE, so the outer
+// 0xa9 tag replaces the SEQUENCE tag and the content bytes are the SEQUENCE
+// fields directly (no 0x30 header). A 0x30 wrapper is reconstructed so that
+// Go's encoding/asn1 can parse the struct.
+//
+// Some implementations (e.g. libiec61850's IedServer stack) encode an explicit
+// inner SEQUENCE (0x30) wrapper despite the IMPLICIT tag. Both forms are
+// accepted: when the content already begins with 0x30 it is used as-is.
 func UnmarshalInitiateResponse(content []byte) (*InitiateResponse, error) {
 	var resp InitiateResponse
-	seq := berutil.EncodeTLV(0x30, content)
+	seq := wrapSequenceIfNeeded(content)
 	rest, err := asn1.Unmarshal(seq, &resp)
 	if err != nil {
 		return nil, fmt.Errorf("pdu: unmarshal initiate response: %w", err)
@@ -131,4 +139,16 @@ func UnmarshalInitiateResponse(content []byte) (*InitiateResponse, error) {
 		return nil, fmt.Errorf("pdu: unmarshal initiate response: %d trailing bytes", len(rest))
 	}
 	return &resp, nil
+}
+
+// wrapSequenceIfNeeded reconstructs the 0x30 SEQUENCE TLV wrapper that Go's
+// encoding/asn1 requires when unmarshalling a struct. If the content already
+// begins with a SEQUENCE tag (0x30) — as emitted by some implementations that
+// include an explicit inner SEQUENCE despite an IMPLICIT outer tag — the bytes
+// are returned as-is to avoid double-wrapping.
+func wrapSequenceIfNeeded(content []byte) []byte {
+	if len(content) > 0 && content[0] == 0x30 {
+		return content
+	}
+	return berutil.EncodeTLV(0x30, content)
 }
