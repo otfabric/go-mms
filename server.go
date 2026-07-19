@@ -1200,7 +1200,7 @@ func (s *Server) handleDefineNVL(ctx context.Context, body []byte) (int, bool, [
 		}
 	}
 
-	return asn1util.TagNumDefineNamedVariableList, true, nil, nil
+	return asn1util.TagNumDefineNamedVariableList, false, nil, nil
 }
 
 // --- GetNamedVariableListAttributes ---
