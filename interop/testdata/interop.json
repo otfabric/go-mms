@@ -1,0 +1,71 @@
+{
+  "identity": {
+    "vendor": "OTFabric",
+    "model": "libiec61850-mms-server",
+    "revision": "1.0"
+  },
+  "domains": {
+    "interop": {
+      "variables": {
+        "boolean": {
+          "type": "boolean",
+          "value": true,
+          "writable": true
+        },
+        "integer": {
+          "type": "integer",
+          "size": 32,
+          "value": -123,
+          "writable": true
+        },
+        "unsigned": {
+          "type": "unsigned",
+          "size": 32,
+          "value": 456,
+          "writable": true
+        },
+        "float32": {
+          "type": "float32",
+          "value": 21.5,
+          "writable": true
+        },
+        "visible-string": {
+          "type": "visible-string",
+          "size": 64,
+          "value": "interop",
+          "writable": true
+        },
+        "octet-string": {
+          "type": "octet-string",
+          "value": "deadbeef",
+          "comment": "hex-encoded bytes"
+        },
+        "bit-string": {
+          "type": "bit-string",
+          "value": "10110",
+          "comment": "MSB-first binary digits; leading zeros preserved; length = len(value)"
+        },
+        "utc-time": {
+          "type": "utc-time",
+          "value": "2024-01-01T00:00:00.000Z",
+          "comment": "RFC 3339 / ISO 8601 UTC timestamp"
+        },
+        "array": {
+          "type": "array",
+          "elementType": "integer",
+          "count": 5,
+          "value": [1, 2, 3, 4, 5],
+          "comment": "homogeneous integer array; read-only"
+        },
+        "structure": {
+          "type": "structure",
+          "value": [
+            { "type": "boolean", "value": true  },
+            { "type": "integer", "value": 42    }
+          ],
+          "comment": "anonymous ordered structure; components: boolean, integer; read-only"
+        }
+      }
+    }
+  }
+}
