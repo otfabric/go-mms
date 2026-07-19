@@ -4,6 +4,7 @@ package pdu
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/otfabric/go-mms/internal/berutil"
 )
@@ -832,9 +833,26 @@ func UnmarshalDeleteNVLRequest(data []byte) (*DeleteNVLRequest, error) {
 }
 
 // MarshalDeleteNVLResponse builds a DeleteNamedVariableList response.
+//
+// ISO 9506-2 DeleteNamedVariableList-Response:
+//
+//	DeleteNamedVariableList-Response ::= SEQUENCE {
+//	  numberMatched [0] IMPLICIT Unsigned32,
+//	  numberDeleted [1] IMPLICIT Unsigned32
+//	}
 func MarshalDeleteNVLResponse(numberMatched, numberDeleted int) ([]byte, error) {
+	if numberMatched < 0 || numberDeleted < 0 {
+		return nil, fmt.Errorf("MarshalDeleteNVLResponse: counts must be non-negative (got %d, %d)", numberMatched, numberDeleted)
+	}
+	if uint64(numberMatched) > uint64(math.MaxUint32) || uint64(numberDeleted) > uint64(math.MaxUint32) {
+		return nil, fmt.Errorf("MarshalDeleteNVLResponse: count exceeds Unsigned32 range")
+	}
+	const (
+		tagNumberMatched byte = 0x80 // [0] IMPLICIT Unsigned32
+		tagNumberDeleted byte = 0x81 // [1] IMPLICIT Unsigned32
+	)
 	var content []byte
-	content = berutil.AppendTLV(content, 0x02, encodeSmallInt(numberMatched))
-	content = berutil.AppendTLV(content, 0x02, encodeSmallInt(numberDeleted))
+	content = berutil.AppendTLV(content, tagNumberMatched, berutil.EncodeUint32(uint32(numberMatched)))
+	content = berutil.AppendTLV(content, tagNumberDeleted, berutil.EncodeUint32(uint32(numberDeleted)))
 	return content, nil
 }

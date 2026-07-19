@@ -258,40 +258,49 @@ type DeleteNamedVarListResult struct {
 
 // UnmarshalDeleteNamedVarListResponse parses a DeleteNamedVariableList response.
 //
-//	DeleteNamedVariableListResponse ::= SEQUENCE {
-//	  numberMatched Unsigned32
-//	  numberDeleted Unsigned32
+// ISO 9506-2 DeleteNamedVariableList-Response:
+//
+//	DeleteNamedVariableList-Response ::= SEQUENCE {
+//	  numberMatched [0] IMPLICIT Unsigned32,
+//	  numberDeleted [1] IMPLICIT Unsigned32
 //	}
+//
+// The wire tags are 0x80 (numberMatched) and 0x81 (numberDeleted).
 func UnmarshalDeleteNamedVarListResponse(serviceData asn1.RawValue) (*DeleteNamedVarListResult, error) {
 	content := serviceData.Bytes
 	if len(content) == 0 {
 		return nil, fmt.Errorf("pdu: deletenamelist response: empty content")
 	}
 
+	const (
+		tagDeleteNVLNumberMatched byte = 0x80 // [0] IMPLICIT Unsigned32
+		tagDeleteNVLNumberDeleted byte = 0x81 // [1] IMPLICIT Unsigned32
+	)
+
 	offset := 0
 
-	// numberMatched: Unsigned32
+	// numberMatched [0] IMPLICIT Unsigned32
 	tag, inner, n, err := berutil.DecodeTLVAt(content, offset)
 	if err != nil {
 		return nil, fmt.Errorf("pdu: deletenamelist response: numberMatched: %w", err)
 	}
 	offset += n
-	if tag != tagInteger {
-		return nil, fmt.Errorf("pdu: deletenamelist response: expected INTEGER (0x02), got 0x%02x", tag)
+	if tag != tagDeleteNVLNumberMatched {
+		return nil, fmt.Errorf("pdu: deletenamelist response: expected numberMatched [0] (0x80), got 0x%02x", tag)
 	}
 	matched, err := berutil.DecodeUnsigned(inner)
 	if err != nil {
 		return nil, fmt.Errorf("pdu: deletenamelist response: numberMatched value: %w", err)
 	}
 
-	// numberDeleted: Unsigned32
+	// numberDeleted [1] IMPLICIT Unsigned32
 	tag, inner, n, err = berutil.DecodeTLVAt(content, offset)
 	if err != nil {
 		return nil, fmt.Errorf("pdu: deletenamelist response: numberDeleted: %w", err)
 	}
 	offset += n
-	if tag != tagInteger {
-		return nil, fmt.Errorf("pdu: deletenamelist response: expected INTEGER (0x02), got 0x%02x", tag)
+	if tag != tagDeleteNVLNumberDeleted {
+		return nil, fmt.Errorf("pdu: deletenamelist response: expected numberDeleted [1] (0x81), got 0x%02x", tag)
 	}
 	deleted, err := berutil.DecodeUnsigned(inner)
 	if err != nil {

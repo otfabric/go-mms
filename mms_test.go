@@ -1347,7 +1347,9 @@ func TestGetVariableAccessAttributesStructure(t *testing.T) {
 func (s *mockServer) sendDefineNamedVarListResponse(ctx context.Context, invokeID codec.InvokeID) {
 	s.t.Helper()
 
-	respPdu, err := codec.MarshalConfirmedResponse(invokeID, asn1util.TagNumDefineNamedVariableList, true, nil)
+	// DefineNamedVariableList-Response is a primitive NULL (constructed=false):
+	// wire encoding is 0x8b 0x00 inside the ConfirmedResponsePdu.
+	respPdu, err := codec.MarshalConfirmedResponse(invokeID, asn1util.TagNumDefineNamedVariableList, false, nil)
 	if err != nil {
 		s.t.Fatalf("server: marshal define response: %v", err)
 	}
@@ -1384,9 +1386,10 @@ func (s *mockServer) sendGetNamedVarListAttrsResponse(ctx context.Context, invok
 func (s *mockServer) sendDeleteNamedVarListResponse(ctx context.Context, invokeID codec.InvokeID, matched, deleted int) {
 	s.t.Helper()
 
-	matchedBytes := berutil.EncodeTLV(0x02, []byte{byte(matched)})
-	deletedBytes := berutil.EncodeTLV(0x02, []byte{byte(deleted)})
-	content := append(matchedBytes, deletedBytes...)
+	content, err := pdu.MarshalDeleteNVLResponse(matched, deleted)
+	if err != nil {
+		s.t.Fatalf("server: marshal delete NVL response: %v", err)
+	}
 
 	respPdu, err := codec.MarshalConfirmedResponse(invokeID, asn1util.TagNumDeleteNamedVariableList, true, content)
 	if err != nil {
