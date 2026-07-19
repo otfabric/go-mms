@@ -57,6 +57,35 @@ const (
 type readyEvent struct {
 	Event   string `json:"event"`
 	Address string `json:"address"`
+	Fixture string `json:"fixture"`
+	Adapter string `json:"adapter"`
+	Version string `json:"version"`
+}
+
+type adapterReady struct {
+	addr    string
+	fixture string
+	adapter string
+	version string
+}
+
+// validateAdapterMeta asserts that the ready event carries the expected fixture
+// and adapter identifiers and a non-empty version string. In CI (env CI set) a
+// "dev" version is rejected so accidental use of a local image is caught early.
+func validateAdapterMeta(t *testing.T, m adapterReady, wantFixture, wantAdapter string) {
+	t.Helper()
+	if m.fixture != wantFixture {
+		t.Errorf("adapter fixture: got %q, want %q", m.fixture, wantFixture)
+	}
+	if m.adapter != wantAdapter {
+		t.Errorf("adapter name: got %q, want %q", m.adapter, wantAdapter)
+	}
+	if m.version == "" {
+		t.Error("adapter version is empty")
+	}
+	if os.Getenv("CI") != "" && m.version == "dev" {
+		t.Errorf("adapter version is %q in CI; pin a released image digest", m.version)
+	}
 }
 
 type serverHandle struct {
@@ -166,14 +195,19 @@ func startAdapter(t *testing.T) *serverHandle {
 		t.Fatalf("start adapter: %v", err)
 	}
 
-	ready := make(chan string, 1)
+	ready := make(chan adapterReady, 1)
 	go func() {
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
 			line := scanner.Text()
 			var ev readyEvent
 			if json.Unmarshal([]byte(line), &ev) == nil && ev.Event == "ready" {
-				ready <- fmt.Sprintf("localhost:%s", port)
+				ready <- adapterReady{
+					addr:    fmt.Sprintf("localhost:%s", port),
+					fixture: ev.Fixture,
+					adapter: ev.Adapter,
+					version: ev.Version,
+				}
 				break
 			}
 		}
@@ -188,13 +222,14 @@ func startAdapter(t *testing.T) *serverHandle {
 	}
 
 	select {
-	case addr, ok := <-ready:
+	case m, ok := <-ready:
 		if !ok {
 			stop()
 			t.Fatal("adapter exited before emitting readiness event")
 		}
+		validateAdapterMeta(t, m, "mms-v1", "libiec61850")
 		t.Cleanup(stop)
-		return &serverHandle{addr: addr, stop: stop}
+		return &serverHandle{addr: m.addr, stop: stop}
 	case <-ctx.Done():
 		stop()
 		t.Fatal("timed out waiting for adapter readiness")
