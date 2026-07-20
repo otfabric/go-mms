@@ -686,15 +686,6 @@ type InformationReportRequest struct {
 	Values []*Value
 }
 
-// NVLAccessResult extends [AccessResult] with the variable
-// specification that produced it, as returned when
-// [ReadNamedVariableListOptions.SpecificationWithResult] is true.
-type NVLAccessResult struct {
-	Variable  *VariableSpec
-	Value     *Value
-	ErrorCode DataAccessErrorCode
-}
-
 // WriteAccessResult holds the per-variable outcome from a multi-variable
 // write operation. Success is true when ErrorCode is zero.
 type WriteAccessResult struct {
