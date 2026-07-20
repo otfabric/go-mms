@@ -104,7 +104,7 @@ func TestRejectAssociation(t *testing.T) {
 		DataStructureNestingLevel: 10,
 	})
 
-	mmsPayload, _ := codec.MarshalMmsPdu(0xa8, pdu.DefaultInitiateRequest(65000, 5, 5, 10))
+	mmsPayload, _ := pdu.MarshalInitiateRequest(pdu.DefaultInitiateRequest(65000, 5, 5, 10))
 	assocReq, _ := isostack.EncodeAssociateRequest(isostack.Params{}, mmsPayload)
 	client.send <- assocReq
 
@@ -155,7 +155,7 @@ func TestFullAssociationAndConclude(t *testing.T) {
 		DataStructureNestingLevel: 10,
 	})
 
-	mmsPayload, _ := codec.MarshalMmsPdu(0xa8, pdu.DefaultInitiateRequest(65000, 5, 5, 10))
+	mmsPayload, _ := pdu.MarshalInitiateRequest(pdu.DefaultInitiateRequest(65000, 5, 5, 10))
 	assocReq, _ := isostack.EncodeAssociateRequest(isostack.Params{}, mmsPayload)
 	client.send <- assocReq
 
@@ -196,7 +196,7 @@ func TestFullAssociationAndRelease(t *testing.T) {
 		DataStructureNestingLevel: 10,
 	})
 
-	mmsPayload, _ := codec.MarshalMmsPdu(0xa8, pdu.DefaultInitiateRequest(65000, 5, 5, 10))
+	mmsPayload, _ := pdu.MarshalInitiateRequest(pdu.DefaultInitiateRequest(65000, 5, 5, 10))
 	assocReq, _ := isostack.EncodeAssociateRequest(isostack.Params{}, mmsPayload)
 	client.send <- assocReq
 
@@ -234,7 +234,7 @@ func TestConfirmedRequestHandling(t *testing.T) {
 		DataStructureNestingLevel: 10,
 	})
 
-	mmsPayload, _ := codec.MarshalMmsPdu(0xa8, pdu.DefaultInitiateRequest(65000, 5, 5, 10))
+	mmsPayload, _ := pdu.MarshalInitiateRequest(pdu.DefaultInitiateRequest(65000, 5, 5, 10))
 	assocReq, _ := isostack.EncodeAssociateRequest(isostack.Params{}, mmsPayload)
 	client.send <- assocReq
 
@@ -285,7 +285,7 @@ func TestServiceErrorHandling(t *testing.T) {
 		DataStructureNestingLevel: 10,
 	})
 
-	mmsPayload, _ := codec.MarshalMmsPdu(0xa8, pdu.DefaultInitiateRequest(65000, 5, 5, 10))
+	mmsPayload, _ := pdu.MarshalInitiateRequest(pdu.DefaultInitiateRequest(65000, 5, 5, 10))
 	assocReq, _ := isostack.EncodeAssociateRequest(isostack.Params{}, mmsPayload)
 	client.send <- assocReq
 

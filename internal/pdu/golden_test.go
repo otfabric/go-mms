@@ -144,7 +144,7 @@ func TestGoldenFixtures(t *testing.T) {
 		{
 			name: "write_response",
 			produce: func() ([]byte, error) {
-				return MarshalWriteResponse([]int{0})
+				return MarshalWriteResponse([]WriteResult{{Success: true}})
 			},
 		},
 		{

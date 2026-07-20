@@ -3,6 +3,7 @@
 package pdu
 
 import (
+	"encoding/asn1"
 	"testing"
 
 	"github.com/otfabric/go-mms/internal/asn1util"
@@ -344,13 +345,13 @@ func TestMarshalReadResponse(t *testing.T) {
 		t.Fatal("expected non-empty output")
 	}
 
-	// Should be a SEQUENCE
+	// listOfAccessResult [1] IMPLICIT replaces the universal SEQUENCE tag.
 	tag, _, _, err := berutil.DecodeTLVAt(data, 0)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if tag != tagSequence {
-		t.Fatalf("tag = 0x%02x, want 0x%02x", tag, tagSequence)
+	if tag != tagReadListOfAccessResult {
+		t.Fatalf("tag = 0x%02x, want 0x%02x (listOfAccessResult [1])", tag, tagReadListOfAccessResult)
 	}
 }
 
@@ -367,7 +368,12 @@ func TestMarshalReadResponse_Empty(t *testing.T) {
 // --- MarshalWriteResponse ---
 
 func TestMarshalWriteResponse(t *testing.T) {
-	results := []int{0, 1, 0, 2}
+	results := []WriteResult{
+		{Success: true},
+		{Success: false, Code: 1},
+		{Success: true},
+		{Success: false, Code: 2},
+	}
 	data, err := MarshalWriteResponse(results)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -377,13 +383,13 @@ func TestMarshalWriteResponse(t *testing.T) {
 	}
 
 	offset := 0
-	for i, code := range results {
+	for i, r := range results {
 		tag, _, n, err := berutil.DecodeTLVAt(data, offset)
 		if err != nil {
 			t.Fatalf("result[%d]: %v", i, err)
 		}
 		offset += n
-		if code == 0 {
+		if r.Success {
 			if tag != 0x81 {
 				t.Errorf("result[%d]: tag = 0x%02x, want 0x81 (success)", i, tag)
 			}
@@ -399,7 +405,7 @@ func TestMarshalWriteResponse(t *testing.T) {
 }
 
 func TestMarshalWriteResponse_AllSuccess(t *testing.T) {
-	data, err := MarshalWriteResponse([]int{0, 0, 0})
+	data, err := MarshalWriteResponse([]WriteResult{{Success: true}, {Success: true}, {Success: true}})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -634,6 +640,35 @@ func TestMarshalDefineNVLResponse(t *testing.T) {
 	}
 }
 
+// TestDefineNVLResponseWireTag asserts that a DefineNamedVariableList response PDU
+// encodes the service element as primitive (not constructed): tag=0x8b, length=0.
+func TestDefineNVLResponseWireTag(t *testing.T) {
+	raw, err := codec.MarshalConfirmedResponse(1, asn1util.TagNumDefineNamedVariableList, false, nil)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	_, content, err := codec.UnwrapPdu(raw)
+	if err != nil {
+		t.Fatalf("unwrap PDU: %v", err)
+	}
+	_, svc, err := codec.UnmarshalConfirmedResponse(content)
+	if err != nil {
+		t.Fatalf("unmarshal confirmed response: %v", err)
+	}
+	if svc.Class != asn1.ClassContextSpecific {
+		t.Errorf("class = %d, want %d (context-specific)", svc.Class, asn1.ClassContextSpecific)
+	}
+	if svc.Tag != asn1util.TagNumDefineNamedVariableList {
+		t.Errorf("tag = %d, want %d (DefineNamedVariableList)", svc.Tag, asn1util.TagNumDefineNamedVariableList)
+	}
+	if svc.IsCompound {
+		t.Error("DefineNamedVariableList response must be primitive (IsCompound=false)")
+	}
+	if len(svc.Bytes) != 0 {
+		t.Errorf("content length = %d, want 0", len(svc.Bytes))
+	}
+}
+
 func TestMarshalDeleteNVLResponse(t *testing.T) {
 	data, err := MarshalDeleteNVLResponse(3, 2)
 	if err != nil {
@@ -643,30 +678,92 @@ func TestMarshalDeleteNVLResponse(t *testing.T) {
 		t.Fatal("expected non-empty output")
 	}
 
-	// Decode numberMatched
+	// Decode numberMatched [0] IMPLICIT Unsigned32 → 0x80
 	tag, content, n, err := berutil.DecodeTLVAt(data, 0)
 	if err != nil {
 		t.Fatalf("decode matched: %v", err)
 	}
-	if tag != 0x02 {
-		t.Fatalf("matched tag = 0x%02x, want 0x02", tag)
+	if tag != 0x80 {
+		t.Fatalf("matched tag = 0x%02x, want 0x80 ([0] IMPLICIT)", tag)
 	}
-	matched, _ := berutil.DecodeInteger(content)
+	matched, _ := berutil.DecodeUnsigned(content)
 	if matched != 3 {
 		t.Errorf("matched = %d, want 3", matched)
 	}
 
-	// Decode numberDeleted
+	// Decode numberDeleted [1] IMPLICIT Unsigned32 → 0x81
 	tag, content, _, err = berutil.DecodeTLVAt(data, n)
 	if err != nil {
 		t.Fatalf("decode deleted: %v", err)
 	}
-	if tag != 0x02 {
-		t.Fatalf("deleted tag = 0x%02x, want 0x02", tag)
+	if tag != 0x81 {
+		t.Fatalf("deleted tag = 0x%02x, want 0x81 ([1] IMPLICIT)", tag)
 	}
-	deleted, _ := berutil.DecodeInteger(content)
+	deleted, _ := berutil.DecodeUnsigned(content)
 	if deleted != 2 {
 		t.Errorf("deleted = %d, want 2", deleted)
+	}
+}
+
+// TestMarshalDeleteNVLResponseUnsignedBoundaries verifies the Unsigned32 encoding
+// across BER length and sign-bit boundaries, particularly the required leading 0x00
+// sign-padding byte for values such as 128 and 255.
+func TestMarshalDeleteNVLResponseUnsignedBoundaries(t *testing.T) {
+	cases := []struct {
+		matched uint32
+		deleted uint32
+	}{
+		{0, 0},
+		{1, 1},
+		{127, 127},
+		{128, 128}, // BER boundary: needs 0x00 sign-pad byte
+		{255, 255},
+		{256, 256},
+		{65535, 65535},
+	}
+	for _, tc := range cases {
+		data, err := MarshalDeleteNVLResponse(int(tc.matched), int(tc.deleted))
+		if err != nil {
+			t.Fatalf("matched=%d deleted=%d: marshal: %v", tc.matched, tc.deleted, err)
+		}
+		tag, content, n, err := berutil.DecodeTLVAt(data, 0)
+		if err != nil {
+			t.Fatalf("matched=%d: decode: %v", tc.matched, err)
+		}
+		if tag != 0x80 {
+			t.Errorf("matched=%d: tag = 0x%02x, want 0x80", tc.matched, tag)
+		}
+		got, err := berutil.DecodeUnsigned(content)
+		if err != nil {
+			t.Fatalf("matched=%d: decode unsigned: %v", tc.matched, err)
+		}
+		if got != tc.matched {
+			t.Errorf("matched=%d: decoded %d", tc.matched, got)
+		}
+		tag, content, _, err = berutil.DecodeTLVAt(data, n)
+		if err != nil {
+			t.Fatalf("deleted=%d: decode: %v", tc.deleted, err)
+		}
+		if tag != 0x81 {
+			t.Errorf("deleted=%d: tag = 0x%02x, want 0x81", tc.deleted, tag)
+		}
+		got, err = berutil.DecodeUnsigned(content)
+		if err != nil {
+			t.Fatalf("deleted=%d: decode unsigned: %v", tc.deleted, err)
+		}
+		if got != tc.deleted {
+			t.Errorf("deleted=%d: decoded %d", tc.deleted, got)
+		}
+	}
+}
+
+// TestMarshalDeleteNVLResponseRejectsNegative verifies that negative counts are rejected.
+func TestMarshalDeleteNVLResponseRejectsNegative(t *testing.T) {
+	if _, err := MarshalDeleteNVLResponse(-1, 0); err == nil {
+		t.Error("expected error for negative numberMatched, got nil")
+	}
+	if _, err := MarshalDeleteNVLResponse(0, -1); err == nil {
+		t.Error("expected error for negative numberDeleted, got nil")
 	}
 }
 

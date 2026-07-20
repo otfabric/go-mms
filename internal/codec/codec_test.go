@@ -4,7 +4,10 @@ package codec
 
 import (
 	"encoding/asn1"
+	"strings"
 	"testing"
+
+	"github.com/otfabric/go-mms/internal/berutil"
 )
 
 func TestMarshalConcludeRequest(t *testing.T) {
@@ -136,17 +139,129 @@ func TestMarshalMmsPdu(t *testing.T) {
 	}
 }
 
-func TestUnmarshalInner(t *testing.T) {
+func TestUnmarshalImplicitSequence(t *testing.T) {
+	t.Run("short-form length", func(t *testing.T) {
+		type inner struct {
+			Value int
+		}
+		encoded, err := asn1.Marshal(inner{Value: 42})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tag, bare, consumed, err2 := berutil.DecodeTLVAt(encoded, 0)
+		if err2 != nil {
+			t.Fatal(err2)
+		}
+		if tag != 0x30 {
+			t.Fatalf("tag = 0x%02x, want 0x30", tag)
+		}
+		if consumed != len(encoded) {
+			t.Fatalf("%d trailing bytes", len(encoded)-consumed)
+		}
+		raw := asn1.RawValue{Class: 2, Tag: 0, IsCompound: true, Bytes: bare}
+
+		var result inner
+		if err := UnmarshalImplicitSequence(raw, &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.Value != 42 {
+			t.Fatalf("got %d, want 42", result.Value)
+		}
+	})
+
+	t.Run("long-form length", func(t *testing.T) {
+		type inner struct {
+			Value string
+		}
+		// 200-byte string pushes the SEQUENCE length past the 127-byte short-form boundary.
+		encoded, err := asn1.Marshal(inner{Value: strings.Repeat("x", 200)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tag, bare, consumed, err2 := berutil.DecodeTLVAt(encoded, 0)
+		if err2 != nil {
+			t.Fatal(err2)
+		}
+		if tag != 0x30 {
+			t.Fatalf("tag = 0x%02x, want 0x30", tag)
+		}
+		if consumed != len(encoded) {
+			t.Fatalf("%d trailing bytes", len(encoded)-consumed)
+		}
+		raw := asn1.RawValue{Class: 2, Tag: 0, IsCompound: true, Bytes: bare}
+
+		var result inner
+		if err := UnmarshalImplicitSequence(raw, &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.Value != strings.Repeat("x", 200) {
+			t.Fatalf("got wrong value: %q", result.Value)
+		}
+	})
+}
+
+func TestMarshalSequenceContent(t *testing.T) {
+	t.Run("short-form length", func(t *testing.T) {
+		type inner struct {
+			Value int
+		}
+		content, err := MarshalSequenceContent(inner{Value: 99})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Reconstruct SEQUENCE wrapper and decode.
+		wrapped := berutil.EncodeTLV(0x30, content)
+		var result inner
+		if _, err := asn1.Unmarshal(wrapped, &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.Value != 99 {
+			t.Fatalf("got %d, want 99", result.Value)
+		}
+	})
+
+	t.Run("long-form length", func(t *testing.T) {
+		type inner struct {
+			Value string
+		}
+		want := strings.Repeat("y", 200)
+		content, err := MarshalSequenceContent(inner{Value: want})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wrapped := berutil.EncodeTLV(0x30, content)
+		var result inner
+		if _, err := asn1.Unmarshal(wrapped, &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.Value != want {
+			t.Fatalf("got wrong value: %q", result.Value)
+		}
+	})
+}
+
+func TestUnmarshalImplicitSequencePrimitive(t *testing.T) {
+	raw := asn1.RawValue{Class: 2, Tag: 0, IsCompound: false, Bytes: []byte{1}}
+	var result int
+	if err := UnmarshalImplicitSequence(raw, &result); err == nil {
+		t.Fatal("expected error for primitive value")
+	}
+}
+
+func TestUnmarshalExplicit(t *testing.T) {
 	type inner struct {
 		Value int
 	}
-	val := inner{Value: 42}
-	encoded, _ := asn1.Marshal(val)
+	// For EXPLICIT wrapping, raw.Bytes starts with the full TLV of the inner
+	// type (0x30 + length + fields).
+	encoded, err := asn1.Marshal(inner{Value: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
 	raw := asn1.RawValue{Class: 2, Tag: 0, IsCompound: true, Bytes: encoded}
 
 	var result inner
-	err := UnmarshalInner(raw, &result)
-	if err != nil {
+	if err := UnmarshalExplicit(raw, &result); err != nil {
 		t.Fatal(err)
 	}
 	if result.Value != 42 {
@@ -154,24 +269,17 @@ func TestUnmarshalInner(t *testing.T) {
 	}
 }
 
-func TestUnmarshalInnerPrimitive(t *testing.T) {
-	raw := asn1.RawValue{Class: 2, Tag: 0, IsCompound: false, Bytes: []byte{1}}
-	var result int
-	err := UnmarshalInner(raw, &result)
-	if err == nil {
-		t.Fatal("expected error for primitive")
-	}
-}
-
 func TestUnmarshalFull(t *testing.T) {
 	val := 42
-	encoded, _ := asn1.Marshal(val)
+	encoded, err := asn1.Marshal(val)
+	if err != nil {
+		t.Fatal(err)
+	}
 	raw := asn1.RawValue{FullBytes: encoded}
 
 	var result int
-	err := UnmarshalFull(raw, &result)
-	if err != nil {
-		t.Fatal(err)
+	if err2 := UnmarshalFull(raw, &result); err2 != nil {
+		t.Fatal(err2)
 	}
 	if result != 42 {
 		t.Fatalf("got %d, want 42", result)

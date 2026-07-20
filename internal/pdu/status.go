@@ -33,12 +33,22 @@ func MarshalStatusRequest(invokeID codec.InvokeID, extendedDerivation bool) ([]b
 	return marshalConfirmedLegacy(invokeID, asn1util.TagServiceStatus, []byte{val})
 }
 
-// UnmarshalStatusResponse parses a Status response from the service
-// RawValue inside a ConfirmedResponsePdu.
+// MarshalStatusResponse encodes a Status response payload as bare SEQUENCE
+// fields. The surrounding context-specific tag is IMPLICIT (it replaces the
+// universal SEQUENCE tag), so no 0x30 wrapper is emitted.
+func MarshalStatusResponse(logical, physical int) ([]byte, error) {
+	return marshalBareSequence(statusResponseASN1{
+		VMDLogicalStatus:  logical,
+		VMDPhysicalStatus: physical,
+	})
+}
+
+// UnmarshalStatusResponse parses a Status response from the service RawValue
+// inside a ConfirmedResponsePDU. The context-specific tag is IMPLICIT, so
+// raw.Bytes contains the SEQUENCE fields directly without a 0x30 header.
 func UnmarshalStatusResponse(serviceData asn1.RawValue) (*StatusResponse, error) {
 	var resp statusResponseASN1
-	err := codec.UnmarshalInner(serviceData, &resp)
-	if err != nil {
+	if err := codec.UnmarshalImplicitSequence(serviceData, &resp); err != nil {
 		return nil, fmt.Errorf("pdu: unmarshal status response: %w", err)
 	}
 	return &StatusResponse{

@@ -145,7 +145,7 @@ func (s *mockServer) handleAssociation(ctx context.Context) {
 		},
 	}
 
-	initRespBytes, err := codec.MarshalMmsPdu(asn1util.TagInitiateResponse, initResp)
+	initRespBytes, err := codec.MarshalMmsPduBareSequence(asn1util.TagInitiateResponse, initResp)
 	if err != nil {
 		s.t.Fatalf("server: marshal initiate response: %v", err)
 	}
@@ -199,17 +199,7 @@ func (s *mockServer) handleDataRequest(ctx context.Context) (codec.InvokeID, pdu
 func (s *mockServer) sendIdentifyResponse(ctx context.Context, invokeID codec.InvokeID) {
 	s.t.Helper()
 
-	type identifyRespASN1 struct {
-		VendorName string `asn1:"tag:0,implicit,ia5"`
-		ModelName  string `asn1:"tag:1,implicit,ia5"`
-		Revision   string `asn1:"tag:2,implicit,ia5"`
-	}
-
-	respBody, err := asn1.Marshal(identifyRespASN1{
-		VendorName: s.vendor,
-		ModelName:  s.model,
-		Revision:   s.revision,
-	})
+	respBody, err := pdu.MarshalIdentifyResponse(s.vendor, s.model, s.revision)
 	if err != nil {
 		s.t.Fatalf("server: marshal identify body: %v", err)
 	}
@@ -224,15 +214,7 @@ func (s *mockServer) sendIdentifyResponse(ctx context.Context, invokeID codec.In
 func (s *mockServer) sendStatusResponse(ctx context.Context, invokeID codec.InvokeID) {
 	s.t.Helper()
 
-	type statusRespASN1 struct {
-		VMDLogicalStatus  int `asn1:"tag:0,implicit"`
-		VMDPhysicalStatus int `asn1:"tag:1,implicit"`
-	}
-
-	respBody, err := asn1.Marshal(statusRespASN1{
-		VMDLogicalStatus:  0, // state-changes-allowed
-		VMDPhysicalStatus: 0, // operational
-	})
+	respBody, err := pdu.MarshalStatusResponse(0, 0) // state-changes-allowed, operational
 	if err != nil {
 		s.t.Fatalf("server: marshal status body: %v", err)
 	}
@@ -504,7 +486,8 @@ func (s *mockServer) sendReadResponse(ctx context.Context, invokeID codec.Invoke
 		}
 		elements = append(elements, b...)
 	}
-	seqOf := berutil.EncodeTLV(0x30, elements)
+	// listOfAccessResult [1] IMPLICIT SEQUENCE OF — context tag replaces 0x30.
+	seqOf := berutil.EncodeTLV(0xa1, elements)
 
 	respPdu, err := codec.MarshalConfirmedResponse(invokeID, asn1util.TagNumRead, true, seqOf)
 	if err != nil {
@@ -645,7 +628,7 @@ func TestReadDataAccessError(t *testing.T) {
 	go func() {
 		invokeID, _, _ := srv.handleDataRequest(ctx)
 		srv.sendReadResponse(ctx, invokeID, []*pdu.DataValue{
-			{Tag: pdu.TagDataAccessError, ErrCode: 5},
+			{Tag: pdu.TagDataAccessError, ErrCode: int(DataAccessErrorObjectUndefined)},
 		})
 	}()
 
@@ -719,7 +702,7 @@ func TestWriteFailure(t *testing.T) {
 
 	go func() {
 		invokeID, _, _ := srv.handleDataRequest(ctx)
-		srv.sendWriteResponse(ctx, invokeID, false, 4)
+		srv.sendWriteResponse(ctx, invokeID, false, int(DataAccessErrorObjectAccessDenied))
 	}()
 
 	_, err = client.Write(ctx, WriteRequest{
@@ -737,6 +720,186 @@ func TestWriteFailure(t *testing.T) {
 	}
 	if dae.Code != DataAccessErrorObjectAccessDenied {
 		t.Errorf("error code = %s, want ObjectAccessDenied", dae.Code)
+	}
+
+	go func() {
+		srv.handleDataRequest(ctx)
+		srv.sendConcludeResponse(ctx)
+	}()
+	client.Close(ctx)
+}
+
+// TestRead_ObjectInvalidatedWireZeroIsError proves that wire value 0
+// (object-invalidated) is treated as a data-access error rather than success.
+// Before the DataAccessErrorCode fix, wire value 0 mapped to the None sentinel
+// and was silently ignored, causing the read to succeed with a nil Value.
+func TestRead_ObjectInvalidatedWireZeroIsError(t *testing.T) {
+	mt := newMockTransport()
+	srv := newMockServer(t, mt)
+	ctx := context.Background()
+
+	go srv.handleAssociation(ctx)
+
+	client, err := NewClient(ctx, mt, defaultDialOptions())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	go func() {
+		invokeID, _, _ := srv.handleDataRequest(ctx)
+		srv.sendReadResponse(ctx, invokeID, []*pdu.DataValue{
+			{Tag: pdu.TagDataAccessError, ErrCode: 0}, // wire 0 = object-invalidated
+		})
+	}()
+
+	_, err = client.Read(ctx, ReadRequest{DomainID: "D", ItemID: "V"})
+	if err == nil {
+		t.Fatal("expected error for wire value 0 (object-invalidated), got nil")
+	}
+	var dae *DataAccessError
+	if !errors.As(err, &dae) {
+		t.Fatalf("expected *DataAccessError, got %T: %v", err, err)
+	}
+	if dae.Code != DataAccessErrorObjectInvalidated {
+		t.Errorf("error code = %s, want ObjectInvalidated", dae.Code)
+	}
+
+	go func() {
+		srv.handleDataRequest(ctx)
+		srv.sendConcludeResponse(ctx)
+	}()
+	client.Close(ctx)
+}
+
+// TestReadMultiple_AccessResultInvariant verifies the AccessResult contract:
+//   - success: Value != nil, ErrorCode == DataAccessErrorNone
+//   - error:   Value == nil, ErrorCode != DataAccessErrorNone
+func TestReadMultiple_AccessResultInvariant(t *testing.T) {
+	mt := newMockTransport()
+	srv := newMockServer(t, mt)
+	ctx := context.Background()
+
+	go srv.handleAssociation(ctx)
+
+	client, err := NewClient(ctx, mt, defaultDialOptions())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	go func() {
+		invokeID, _, _ := srv.handleDataRequest(ctx)
+		srv.sendReadResponse(ctx, invokeID, []*pdu.DataValue{
+			{Tag: pdu.TagDataBoolean, Bool: true},
+			{Tag: pdu.TagDataAccessError, ErrCode: int(DataAccessErrorObjectAccessDenied)},
+		})
+	}()
+
+	results, err := client.ReadMultiple(ctx, []ObjectName{
+		{Scope: ObjectScopeDomain, Domain: "D", ItemID: "V1"},
+		{Scope: ObjectScopeDomain, Domain: "D", ItemID: "V2"},
+	})
+	if err != nil {
+		t.Fatalf("ReadMultiple: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("got %d results, want 2", len(results))
+	}
+
+	// Success result invariant.
+	r0 := results[0]
+	if r0.Value == nil {
+		t.Error("success result: Value is nil")
+	}
+	if r0.ErrorCode != DataAccessErrorNone {
+		t.Errorf("success result: ErrorCode = %v, want DataAccessErrorNone", r0.ErrorCode)
+	}
+
+	// Error result invariant.
+	r1 := results[1]
+	if r1.Value != nil {
+		t.Error("error result: Value should be nil")
+	}
+	if r1.ErrorCode == DataAccessErrorNone {
+		t.Error("error result: ErrorCode should not be DataAccessErrorNone")
+	}
+	if r1.ErrorCode != DataAccessErrorObjectAccessDenied {
+		t.Errorf("error result: ErrorCode = %v, want ObjectAccessDenied", r1.ErrorCode)
+	}
+
+	go func() {
+		srv.handleDataRequest(ctx)
+		srv.sendConcludeResponse(ctx)
+	}()
+	client.Close(ctx)
+}
+
+// TestWriteVariables_AccessResultInvariant verifies the WriteAccessResult contract:
+//   - success: Success == true,  ErrorCode == DataAccessErrorNone
+//   - error:   Success == false, ErrorCode != DataAccessErrorNone
+func TestWriteVariables_AccessResultInvariant(t *testing.T) {
+	mt := newMockTransport()
+	srv := newMockServer(t, mt)
+	ctx := context.Background()
+
+	go srv.handleAssociation(ctx)
+
+	client, err := NewClient(ctx, mt, defaultDialOptions())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	go func() {
+		invokeID, _, _ := srv.handleDataRequest(ctx)
+		srv.sendWriteResponse(ctx, invokeID, true, 0)
+	}()
+
+	results, err := client.WriteVariables(ctx,
+		[]VariableSpec{{Name: ObjectName{Scope: ObjectScopeDomain, Domain: "D", ItemID: "V1"}}},
+		[]*Value{NewBoolean(true)},
+	)
+	if err != nil {
+		t.Fatalf("WriteVariables (success): %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+
+	// Success result invariant.
+	ws := results[0]
+	if !ws.Success {
+		t.Error("expected Success=true")
+	}
+	if ws.ErrorCode != DataAccessErrorNone {
+		t.Errorf("success result: ErrorCode = %v, want DataAccessErrorNone", ws.ErrorCode)
+	}
+
+	// Now test error result.
+	go func() {
+		invokeID, _, _ := srv.handleDataRequest(ctx)
+		srv.sendWriteResponse(ctx, invokeID, false, int(DataAccessErrorObjectAccessDenied))
+	}()
+
+	results2, err := client.WriteVariables(ctx,
+		[]VariableSpec{{Name: ObjectName{Scope: ObjectScopeDomain, Domain: "D", ItemID: "V2"}}},
+		[]*Value{NewBoolean(false)},
+	)
+	if err != nil {
+		t.Fatalf("WriteVariables (failure): %v", err)
+	}
+	if len(results2) != 1 {
+		t.Fatalf("got %d results, want 1", len(results2))
+	}
+
+	// Error result invariant.
+	we := results2[0]
+	if we.Success {
+		t.Error("expected Success=false")
+	}
+	if we.ErrorCode == DataAccessErrorNone {
+		t.Error("error result: ErrorCode should not be DataAccessErrorNone")
+	}
+	if we.ErrorCode != DataAccessErrorObjectAccessDenied {
+		t.Errorf("error result: ErrorCode = %v, want ObjectAccessDenied", we.ErrorCode)
 	}
 
 	go func() {
@@ -1184,7 +1347,9 @@ func TestGetVariableAccessAttributesStructure(t *testing.T) {
 func (s *mockServer) sendDefineNamedVarListResponse(ctx context.Context, invokeID codec.InvokeID) {
 	s.t.Helper()
 
-	respPdu, err := codec.MarshalConfirmedResponse(invokeID, asn1util.TagNumDefineNamedVariableList, true, nil)
+	// DefineNamedVariableList-Response is a primitive NULL (constructed=false):
+	// wire encoding is 0x8b 0x00 inside the ConfirmedResponsePdu.
+	respPdu, err := codec.MarshalConfirmedResponse(invokeID, asn1util.TagNumDefineNamedVariableList, false, nil)
 	if err != nil {
 		s.t.Fatalf("server: marshal define response: %v", err)
 	}
@@ -1221,9 +1386,10 @@ func (s *mockServer) sendGetNamedVarListAttrsResponse(ctx context.Context, invok
 func (s *mockServer) sendDeleteNamedVarListResponse(ctx context.Context, invokeID codec.InvokeID, matched, deleted int) {
 	s.t.Helper()
 
-	matchedBytes := berutil.EncodeTLV(0x02, []byte{byte(matched)})
-	deletedBytes := berutil.EncodeTLV(0x02, []byte{byte(deleted)})
-	content := append(matchedBytes, deletedBytes...)
+	content, err := pdu.MarshalDeleteNVLResponse(matched, deleted)
+	if err != nil {
+		s.t.Fatalf("server: marshal delete NVL response: %v", err)
+	}
 
 	respPdu, err := codec.MarshalConfirmedResponse(invokeID, asn1util.TagNumDeleteNamedVariableList, true, content)
 	if err != nil {

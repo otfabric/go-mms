@@ -199,12 +199,13 @@ go-mms is **pre-1.0**. The API may change between minor versions.
   tests, 14 race/concurrency tests, 18 fuzz targets, 20 benchmarks.
 - **Hardened**: strict decoder validation, bounds checking on all PDU
   fields, resource limits on negotiated parameters.
-- **Interop-verified**: encoding validated against known-good BER patterns
-  from a C reference implementation.
+- **Interop-verified**: client and server behaviour tested bidirectionally
+  against a pinned libiec61850 adapter; see [INTEROP.md](INTEROP.md).
 
 ## Documentation
 
 - [`examples/`](examples/) — runnable client and server examples
+- [`INTEROP.md`](INTEROP.md) — interoperability tests and MMS compatibility matrix
 - [`COMPLIANCE.md`](COMPLIANCE.md) — service support matrix with test coverage
 - [`ERRORS.md`](ERRORS.md) — error taxonomy and handling guide
 - [pkg.go.dev](https://pkg.go.dev/github.com/otfabric/go-mms) — API reference

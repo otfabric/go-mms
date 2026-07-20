@@ -740,10 +740,10 @@ type ReadResult struct {
 // AccessResult represents the outcome for a single variable in a
 // multi-variable Read response.
 type AccessResult struct {
-	// Value holds the read data on success. Nil when ErrorCode is non-zero.
+	// Value holds the read data on success. Nil when ErrorCode is not DataAccessErrorNone.
 	Value *Value
-	// ErrorCode is non-zero when the server reported a per-variable data
-	// access error instead of returning a value.
+	// ErrorCode is DataAccessErrorNone on success. When Value is nil the server
+	// reported a per-variable data access error with this code.
 	ErrorCode DataAccessErrorCode
 }
 
@@ -765,7 +765,7 @@ func (c *Client) Read(ctx context.Context, req ReadRequest) (*ReadResult, error)
 		return nil, err
 	}
 	r := results[0]
-	if r.ErrorCode != 0 {
+	if r.Value == nil {
 		return nil, &DataAccessError{Code: r.ErrorCode}
 	}
 	return &ReadResult{Value: r.Value}, nil
@@ -824,13 +824,17 @@ func (c *Client) ReadMultiple(ctx context.Context, variables []ObjectName) ([]Ac
 	results := make([]AccessResult, len(dataValues))
 	for i, dv := range dataValues {
 		if dv.Tag == pdu.TagDataAccessError {
-			results[i] = AccessResult{ErrorCode: DataAccessErrorCode(dv.ErrCode)}
+			code, err := decodeDataAccessError(dv.ErrCode)
+			if err != nil {
+				return nil, fmt.Errorf("mms: read result [%d]: %w", i, err)
+			}
+			results[i] = AccessResult{ErrorCode: code}
 		} else {
 			val, err := dataValueToValue(dv)
 			if err != nil {
 				return nil, fmt.Errorf("mms: read result [%d]: %w", i, err)
 			}
-			results[i] = AccessResult{Value: val}
+			results[i] = AccessResult{Value: val, ErrorCode: DataAccessErrorNone}
 		}
 	}
 
@@ -908,7 +912,11 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 
 	item := items[0]
 	if !item.Success {
-		return nil, &DataAccessError{Code: DataAccessErrorCode(item.ErrCode)}
+		code, err := decodeDataAccessError(item.ErrCode)
+		if err != nil {
+			return nil, fmt.Errorf("mms: write: %w", err)
+		}
+		return nil, &DataAccessError{Code: code}
 	}
 
 	c.logger.Debug("mms: write",
@@ -976,13 +984,17 @@ func (c *Client) ReadVariables(ctx context.Context, variables []VariableSpec) ([
 	results := make([]AccessResult, len(dataValues))
 	for i, dv := range dataValues {
 		if dv.Tag == pdu.TagDataAccessError {
-			results[i] = AccessResult{ErrorCode: DataAccessErrorCode(dv.ErrCode)}
+			code, err := decodeDataAccessError(dv.ErrCode)
+			if err != nil {
+				return nil, fmt.Errorf("mms: read result [%d]: %w", i, err)
+			}
+			results[i] = AccessResult{ErrorCode: code}
 		} else {
 			val, err := dataValueToValue(dv)
 			if err != nil {
 				return nil, fmt.Errorf("mms: read result [%d]: %w", i, err)
 			}
-			results[i] = AccessResult{Value: val}
+			results[i] = AccessResult{Value: val, ErrorCode: DataAccessErrorNone}
 		}
 	}
 
@@ -1064,10 +1076,20 @@ func (c *Client) WriteVariables(ctx context.Context, variables []VariableSpec, v
 
 	results := make([]WriteAccessResult, len(items))
 	for i, item := range items {
+		var errCode DataAccessErrorCode
+		if !item.Success {
+			var decErr error
+			errCode, decErr = decodeDataAccessError(item.ErrCode)
+			if decErr != nil {
+				return nil, fmt.Errorf("mms: write result [%d]: %w", i, decErr)
+			}
+		} else {
+			errCode = DataAccessErrorNone
+		}
 		results[i] = WriteAccessResult{
 			Index:     i,
 			Success:   item.Success,
-			ErrorCode: DataAccessErrorCode(item.ErrCode),
+			ErrorCode: errCode,
 		}
 	}
 
@@ -1090,7 +1112,7 @@ func (c *Client) ReadComponent(ctx context.Context, name ObjectName, component s
 		return nil, err
 	}
 	r := results[0]
-	if r.ErrorCode != 0 {
+	if r.Value == nil {
 		return nil, &DataAccessError{Code: r.ErrorCode}
 	}
 	return &ReadResult{Value: r.Value}, nil
@@ -1125,7 +1147,7 @@ func (c *Client) ReadByIndex(ctx context.Context, name ObjectName, index int) (*
 		return nil, err
 	}
 	r := results[0]
-	if r.ErrorCode != 0 {
+	if r.Value == nil {
 		return nil, &DataAccessError{Code: r.ErrorCode}
 	}
 	return &ReadResult{Value: r.Value}, nil
@@ -1142,7 +1164,7 @@ func (c *Client) ReadArrayElement(ctx context.Context, name ObjectName, index in
 		return nil, err
 	}
 	r := results[0]
-	if r.ErrorCode != 0 {
+	if r.Value == nil {
 		return nil, &DataAccessError{Code: r.ErrorCode}
 	}
 	return &ReadResult{Value: r.Value}, nil
@@ -1173,7 +1195,7 @@ func (c *Client) ReadArrayRange(ctx context.Context, name ObjectName, start, cou
 		return nil, err
 	}
 	r := results[0]
-	if r.ErrorCode != 0 {
+	if r.Value == nil {
 		return nil, &DataAccessError{Code: r.ErrorCode}
 	}
 	return &ReadResult{Value: r.Value}, nil
@@ -1187,7 +1209,7 @@ func (c *Client) ReadObject(ctx context.Context, name ObjectName) (*ReadResult, 
 		return nil, err
 	}
 	r := results[0]
-	if r.ErrorCode != 0 {
+	if r.Value == nil {
 		return nil, &DataAccessError{Code: r.ErrorCode}
 	}
 	return &ReadResult{Value: r.Value}, nil
@@ -1241,7 +1263,11 @@ func (c *Client) WriteObject(ctx context.Context, name ObjectName, value *Value)
 	}
 
 	if !items[0].Success {
-		return nil, &DataAccessError{Code: DataAccessErrorCode(items[0].ErrCode)}
+		code, err := decodeDataAccessError(items[0].ErrCode)
+		if err != nil {
+			return nil, fmt.Errorf("mms: writeObject: %w", err)
+		}
+		return nil, &DataAccessError{Code: code}
 	}
 
 	c.logger.Debug("mms: writeObject",
@@ -1299,13 +1325,17 @@ func (c *Client) ReadNamedVariableList(ctx context.Context, listName ObjectName,
 	results := make([]AccessResult, len(dataValues))
 	for i, dv := range dataValues {
 		if dv.Tag == pdu.TagDataAccessError {
-			results[i] = AccessResult{ErrorCode: DataAccessErrorCode(dv.ErrCode)}
+			code, err := decodeDataAccessError(dv.ErrCode)
+			if err != nil {
+				return nil, fmt.Errorf("mms: read result [%d]: %w", i, err)
+			}
+			results[i] = AccessResult{ErrorCode: code}
 		} else {
 			val, err := dataValueToValue(dv)
 			if err != nil {
 				return nil, fmt.Errorf("mms: read NVL result [%d]: %w", i, err)
 			}
-			results[i] = AccessResult{Value: val}
+			results[i] = AccessResult{Value: val, ErrorCode: DataAccessErrorNone}
 		}
 	}
 
@@ -1374,10 +1404,20 @@ func (c *Client) WriteNamedVariableList(ctx context.Context, listName ObjectName
 
 	results := make([]WriteAccessResult, len(items))
 	for i, item := range items {
+		var errCode DataAccessErrorCode
+		if !item.Success {
+			var decErr error
+			errCode, decErr = decodeDataAccessError(item.ErrCode)
+			if decErr != nil {
+				return nil, fmt.Errorf("mms: write result [%d]: %w", i, decErr)
+			}
+		} else {
+			errCode = DataAccessErrorNone
+		}
 		results[i] = WriteAccessResult{
 			Index:     i,
 			Success:   item.Success,
-			ErrorCode: DataAccessErrorCode(item.ErrCode),
+			ErrorCode: errCode,
 		}
 	}
 
@@ -2177,7 +2217,11 @@ func dataValueToValue(dv *pdu.DataValue) (*Value, error) {
 	case pdu.TagDataBooleanArray:
 		return &Value{typ: ValueTypeBooleanArray, bytesVal: copyBytes(dv.Bytes), bitLen: dv.BitLen}, nil
 	case pdu.TagDataAccessError:
-		return &Value{typ: ValueTypeDataAccessError, accessErr: DataAccessErrorCode(dv.ErrCode)}, nil
+		code, err := decodeDataAccessError(dv.ErrCode)
+		if err != nil {
+			return nil, fmt.Errorf("mms: data value: %w", err)
+		}
+		return &Value{typ: ValueTypeDataAccessError, accessErr: code}, nil
 	default:
 		return nil, fmt.Errorf("unknown internal data tag 0x%02x", dv.Tag)
 	}

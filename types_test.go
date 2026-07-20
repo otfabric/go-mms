@@ -49,7 +49,14 @@ func TestDataAccessErrorCodeString(t *testing.T) {
 		want string
 	}{
 		{DataAccessErrorNone, "None"},
+		{DataAccessErrorObjectInvalidated, "ObjectInvalidated"},
+		{DataAccessErrorObjectAccessDenied, "ObjectAccessDenied"},
 		{DataAccessErrorObjectUndefined, "ObjectUndefined"},
+		{DataAccessErrorTypeUnsupported, "TypeUnsupported"},
+		{DataAccessErrorTypeInconsistent, "TypeInconsistent"},
+		{DataAccessErrorObjectAttributeInconsistent, "ObjectAttributeInconsistent"},
+		{DataAccessErrorObjectNonExistent, "ObjectNonExistent"},
+		{DataAccessErrorObjectValueInvalid, "ObjectValueInvalid"},
 		{DataAccessErrorCode(99), "DataAccessErrorCode(99)"},
 	}
 	for _, tt := range tests {

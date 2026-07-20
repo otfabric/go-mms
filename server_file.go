@@ -85,6 +85,14 @@ func serverConnFromCtx(ctx context.Context) *ServerConn {
 	return sc
 }
 
+// ServerConnFromContext extracts the server-side connection from the
+// request context. The connection is available in callbacks that receive
+// a context from an active MMS service request (e.g. variable read/write
+// handlers, write interceptors). Returns nil if no connection is present.
+func ServerConnFromContext(ctx context.Context) *ServerConn {
+	return serverConnFromCtx(ctx)
+}
+
 // --- File service handlers ---
 
 func (s *Server) handleFileOpen(ctx context.Context, body []byte) (int, bool, []byte, error) {

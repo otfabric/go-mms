@@ -1,4 +1,4 @@
-github.com/otfabric/go-cotp v0.1.5 h1:n8jcFnYsZb0pOlhPMKVy0dVpRz2+ROx6mI93eVPeOC8=
-github.com/otfabric/go-cotp v0.1.5/go.mod h1:cQkSlQjhA/Ay4Es+eYtMa3EmA/EJcnbiAnPpieN0s3k=
-github.com/otfabric/go-tpkt v0.1.3 h1:DuETc2jUAxKyyu1MJLiNuZ/5rVQ/1YwJ51YY8oGOhBM=
-github.com/otfabric/go-tpkt v0.1.3/go.mod h1:9d3Ydrkerj5OTQQ9KZ12rgkpR4lU/9ULoTOYlijGsLE=
+github.com/otfabric/go-cotp v1.0.1 h1:LK6ltK7DXQ9cvkS/03ndBpDI9BKsDsAS0318JywZR3A=
+github.com/otfabric/go-cotp v1.0.1/go.mod h1:fXjTaRsBIHzuGknDHds9lKn4BjwLHlxDS13BQHiSyT0=
+github.com/otfabric/go-tpkt v1.0.0 h1:k2otEq3BqZ3eZdutcLOCLIYUCYqUfdDffN35CPDC9l4=
+github.com/otfabric/go-tpkt v1.0.0/go.mod h1:9d3Ydrkerj5OTQQ9KZ12rgkpR4lU/9ULoTOYlijGsLE=

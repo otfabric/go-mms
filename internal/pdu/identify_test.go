@@ -52,15 +52,10 @@ func TestMarshalIdentifyRequest(t *testing.T) {
 }
 
 func TestIdentifyResponse_RoundTrip(t *testing.T) {
-	// Build a synthetic Identify response body.
-	respBody := identifyResponseASN1{
-		VendorName: "TestVendor",
-		ModelName:  "TestModel",
-		Revision:   "1.0.0",
-	}
-	bodyBytes, err := asn1.Marshal(respBody)
+	// Build a synthetic Identify response body as bare fields (IMPLICIT tag).
+	bodyBytes, err := MarshalIdentifyResponse("TestVendor", "TestModel", "1.0.0")
 	if err != nil {
-		t.Fatalf("marshal response body: %v", err)
+		t.Fatalf("MarshalIdentifyResponse: %v", err)
 	}
 
 	// Wrap as a ConfirmedResponsePdu.

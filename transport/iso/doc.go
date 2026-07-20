@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: MIT
 
-// Package iso provides TCP+TPKT+COTP transport integration for go-mms.
+// Package iso provides TCP+TP0 transport integration for go-mms.
 //
 // This package bridges the gap between raw TCP connections and the
 // mms.Transport interface used by the MMS client and server. It handles:
 //
 //   - TCP connection establishment and acceptance
-//   - TPKT framing (RFC 1006) via otfabric/go-tpkt
-//   - COTP (X.224 class 0) handshake via otfabric/go-cotp
+//   - Optional TLS wrapping
+//   - COTP class 0 (TP0) via otfabric/go-cotp (Connect/Accept, TSDU I/O)
 //   - TSAP selector configuration
+//
+// TPKT framing and the COTP handshake are owned by go-cotp; this package
+// maps [mms.Transport] Send/Receive onto WriteTSDU/ReadTSDU.
 //
 // # Client usage
 //
@@ -70,6 +73,6 @@
 // # Architecture
 //
 // The layering is: TCP → [TLS] → TPKT → COTP → Session → Presentation → ACSE → MMS.
-// This package owns the first three layers (plus optional TLS). go-mms
-// core owns the upper four.
+// This package owns TCP (+ optional TLS) and adapts go-cotp's TP0 Conn to
+// [mms.Transport]. go-mms core owns the upper four layers.
 package iso

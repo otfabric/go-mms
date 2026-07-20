@@ -39,7 +39,10 @@ func MarshalWriteRequest(invokeID codec.InvokeID, vars []ObjectNameWire, values 
 	if err != nil {
 		return nil, fmt.Errorf("pdu: write request: marshal data: %w", err)
 	}
-	dataList := berutil.EncodeTLV(tagSequence, dataContent)
+	// WriteRequest.listOfData [0] IMPLICIT SEQUENCE OF per the MMS ASN.1 definition.
+	// The surrounding context-specific tag is IMPLICIT and replaces the universal
+	// SEQUENCE tag, so tagWriteListOfData (0xa0) is used rather than 0x30.
+	dataList := berutil.EncodeTLV(tagWriteListOfData, dataContent)
 
 	payload := make([]byte, 0, len(varSpec)+len(dataList))
 	payload = append(payload, varSpec...)
