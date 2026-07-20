@@ -30,8 +30,10 @@ automation systems including IEC 61850.
 
 - **Pure Go, no CGO** — builds and cross-compiles with the standard toolchain.
 - **Client and server** — both sides of the protocol in one library.
-- **Full MMS service coverage** — variable access, named variable lists, file
-  services, journal services, information reports, and more.
+- **Comprehensive MMS coverage for IEC 61850-oriented applications** — variable
+  access, named variable lists, file services, journal services, information
+  reports, and more. Semaphore, Event, and Program Invocation services are
+  outside scope.
 - **Base layer for [go-iec61850](https://github.com/otfabric/go-iec61850)** —
   go-mms handles MMS; IEC 61850 abstractions live in a separate package.
 
@@ -193,7 +195,11 @@ The following are intentionally not part of go-mms:
 
 ## Status
 
-go-mms is **pre-1.0**. The API may change between minor versions.
+go-mms follows semantic versioning. The v1 API is stable; backward-incompatible
+public API changes are reserved for a future major release. Patch releases may
+correct protocol encoding or decoding defects without being considered breaking
+changes — a standards-correct wire fix can change observable behaviour while
+remaining API-compatible.
 
 - **Well-tested**: 630+ unit tests, 42+ integration tests, 200+ negative
   tests, 14 race/concurrency tests, 18 fuzz targets, 20 benchmarks.
@@ -201,6 +207,7 @@ go-mms is **pre-1.0**. The API may change between minor versions.
   fields, resource limits on negotiated parameters.
 - **Interop-verified**: client and server behaviour tested bidirectionally
   against a pinned libiec61850 adapter; see [INTEROP.md](INTEROP.md).
+  Testing against physical IEDs has not yet been formally established.
 
 ## Documentation
 
