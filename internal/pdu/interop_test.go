@@ -48,9 +48,9 @@ func TestInteropReadRequestEncoding(t *testing.T) {
 // TestInteropReadResponseDecoding verifies that a hand-crafted Read
 // response with an integer value decodes correctly.
 func TestInteropReadResponseDecoding(t *testing.T) {
-	// Build a Read response: SEQUENCE OF AccessResult with one integer value.
+	// Build a Read response: listOfAccessResult [1] IMPLICIT with one integer.
 	intData := berutil.EncodeTLV(0x85, []byte{0x00, 0x2a}) // integer 42
-	list := berutil.EncodeTLV(0x30, intData)
+	list := berutil.EncodeTLV(tagReadListOfAccessResult, intData)
 
 	raw := asn1.RawValue{Tag: 4, Class: 2, IsCompound: true, Bytes: list}
 	results, err := UnmarshalReadResponse(raw)

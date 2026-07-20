@@ -53,7 +53,7 @@ func testServer(t *testing.T) *mms.Server {
 		Write: func(_ context.Context, v *mms.Value) error {
 			f, ok := v.Float64()
 			if !ok {
-				return &mms.DataAccessError{Code: mms.DataAccessErrorTypeMismatch}
+				return &mms.DataAccessError{Code: mms.DataAccessErrorTypeUnsupported}
 			}
 			mu.Lock()
 			temperature = f

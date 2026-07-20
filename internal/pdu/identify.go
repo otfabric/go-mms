@@ -32,12 +32,24 @@ func MarshalIdentifyRequest(invokeID codec.InvokeID) ([]byte, error) {
 	return marshalConfirmedLegacy(invokeID, asn1util.TagServiceIdentify, nil)
 }
 
-// UnmarshalIdentifyResponse parses an Identify response from the
-// service RawValue inside a ConfirmedResponsePdu.
+// MarshalIdentifyResponse encodes an Identify response payload as bare SEQUENCE
+// fields. The surrounding context-specific tag is IMPLICIT (it replaces the
+// universal SEQUENCE tag), so no 0x30 wrapper is emitted.
+func MarshalIdentifyResponse(vendor, model, revision string) ([]byte, error) {
+	resp := identifyResponseASN1{
+		VendorName: vendor,
+		ModelName:  model,
+		Revision:   revision,
+	}
+	return marshalBareSequence(resp)
+}
+
+// UnmarshalIdentifyResponse parses an Identify response from the service
+// RawValue inside a ConfirmedResponsePDU. The context-specific tag is IMPLICIT,
+// so raw.Bytes contains the SEQUENCE fields directly without a 0x30 header.
 func UnmarshalIdentifyResponse(serviceData asn1.RawValue) (*IdentifyResponse, error) {
 	var resp identifyResponseASN1
-	err := codec.UnmarshalInner(serviceData, &resp)
-	if err != nil {
+	if err := codec.UnmarshalImplicitSequence(serviceData, &resp); err != nil {
 		return nil, fmt.Errorf("pdu: unmarshal identify response: %w", err)
 	}
 	return &IdentifyResponse{
@@ -45,4 +57,11 @@ func UnmarshalIdentifyResponse(serviceData asn1.RawValue) (*IdentifyResponse, er
 		ModelName:  resp.ModelName,
 		Revision:   resp.Revision,
 	}, nil
+}
+
+// marshalBareSequence marshals a struct into bare SEQUENCE fields by stripping
+// the 0x30 wrapper that encoding/asn1 adds. Delegates to codec.MarshalSequenceContent
+// so the stripping logic lives in one place.
+func marshalBareSequence(v any) ([]byte, error) {
+	return codec.MarshalSequenceContent(v)
 }
