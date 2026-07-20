@@ -1,5 +1,11 @@
 # go-mms Releases
 
+## v1.0.1
+
+**Added**: `Server.SetVariableRead(domain, itemID, fn)` — replaces the read handler of a previously registered domain-scoped variable at runtime. Intended for post-registration configuration such as installing control-model-specific read handlers on CO attributes (e.g. `SBO[CO]` for SBO-normal controls) after the server model has been fully built.
+
+---
+
 ## v1.0.0
 
 **Changed**: `DataAccessErrorCode` constants realigned to ISO 9506-2 wire values.

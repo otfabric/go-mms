@@ -453,6 +453,20 @@ func startGoMmsServer(t *testing.T) *goMmsServer {
 	go func() { _ = srv.ListenAndServe(ctx, ln) }()
 	t.Cleanup(cancel)
 
+	// Wait until the server goroutine is actually accepting TCP connections.
+	// Without this probe, a fast CI runner can start the Docker client before
+	// ListenAndServe has entered its accept loop, causing all operations to
+	// return "connection-lost" (COTP handshake times out).
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 200*time.Millisecond)
+		if err == nil {
+			c.Close()
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
 	return &goMmsServer{port: port}
 }
 
