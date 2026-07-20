@@ -158,7 +158,7 @@ func TestFault_TruncatedTPDU(t *testing.T) {
 	if err != nil {
 		t.Fatalf("net.Dial: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Send COTP Class 0 Connection Request (CR) — minimal valid packet.
 	// TPKT version=3, reserved=0, length=22 big-endian

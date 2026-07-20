@@ -17,7 +17,7 @@ func altAccessTestSetup(t *testing.T) *Client {
 		t.Fatal(err)
 	}
 
-	srv.RegisterVariable(Variable{
+	if err := srv.RegisterVariable(Variable{
 		Name:     ObjectName{Scope: ObjectScopeDomain, Domain: "dom", ItemID: "arr"},
 		TypeSpec: TypeSpec{Type: ValueTypeArray, Count: 5, Element: &TypeSpec{Type: ValueTypeInteger, Size: 32}},
 		Read: func(_ context.Context) (*Value, error) {
@@ -26,9 +26,11 @@ func altAccessTestSetup(t *testing.T) *Client {
 				NewInteger(40), NewInteger(50),
 			}), nil
 		},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
-	srv.RegisterVariable(Variable{
+	if err := srv.RegisterVariable(Variable{
 		Name: ObjectName{Scope: ObjectScopeDomain, Domain: "dom", ItemID: "struc"},
 		TypeSpec: TypeSpec{
 			Type: ValueTypeStructure,
@@ -43,11 +45,13 @@ func altAccessTestSetup(t *testing.T) *Client {
 				NewBoolean(true),
 			}), nil
 		},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	var mu sync.Mutex
 	var writtenValue *Value
-	srv.RegisterVariable(Variable{
+	if err := srv.RegisterVariable(Variable{
 		Name:     ObjectName{Scope: ObjectScopeDomain, Domain: "dom", ItemID: "wArr"},
 		TypeSpec: TypeSpec{Type: ValueTypeArray, Count: 3, Element: &TypeSpec{Type: ValueTypeInteger, Size: 32}},
 		Read: func(_ context.Context) (*Value, error) {
@@ -64,10 +68,12 @@ func altAccessTestSetup(t *testing.T) *Client {
 			writtenValue = v
 			return nil
 		},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	var wStruc *Value
-	srv.RegisterVariable(Variable{
+	if err := srv.RegisterVariable(Variable{
 		Name: ObjectName{Scope: ObjectScopeDomain, Domain: "dom", ItemID: "wStruc"},
 		TypeSpec: TypeSpec{
 			Type: ValueTypeStructure,
@@ -90,7 +96,9 @@ func altAccessTestSetup(t *testing.T) *Client {
 			wStruc = v
 			return nil
 		},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	client := connectClientServer(t, srv)
 	return client
@@ -113,7 +121,7 @@ func TestReadArrayElementEndToEnd(t *testing.T) {
 		t.Errorf("got %v/%v, want 30/true", i, ok)
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestReadArrayRangeEndToEnd(t *testing.T) {
@@ -144,7 +152,7 @@ func TestReadArrayRangeEndToEnd(t *testing.T) {
 		}
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestReadStructElementByIndexEndToEnd(t *testing.T) {
@@ -164,7 +172,7 @@ func TestReadStructElementByIndexEndToEnd(t *testing.T) {
 		t.Errorf("got %v/%v, want true", b, ok)
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestReadVariablesMultipleWithAccess(t *testing.T) {
@@ -201,7 +209,7 @@ func TestReadVariablesMultipleWithAccess(t *testing.T) {
 		t.Errorf("results[1] = %d/%v, want 50", v1, ok)
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestWriteArrayElementEndToEnd(t *testing.T) {
@@ -429,7 +437,7 @@ func TestReadArrayElementOutOfBounds(t *testing.T) {
 	}
 	t.Logf("out-of-bounds error: %v", err)
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestReadVariablesPlainNoAccess(t *testing.T) {
@@ -452,5 +460,5 @@ func TestReadVariablesPlainNoAccess(t *testing.T) {
 		t.Errorf("expected array with 5 elements, got %v/%d", ok, len(elems))
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }

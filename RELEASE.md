@@ -1,5 +1,39 @@
 # go-mms Releases
 
+## v1.0.4
+
+Documentation and code-quality hardening. No API changes, no behavior changes.
+
+### Dependencies
+
+- Bumped `github.com/otfabric/go-cotp` from **v1.0.1 → v1.0.2** (documentation and lint hygiene; no API or behavior changes).
+
+### Documentation — complete public API reference covering `Client`, `Server`, value constructors
+  and accessors, `TypeSpec`, `ObjectName`, access selectors, all error types, transport interfaces,
+  dial/server options, authentication, and deprecated symbol table.
+- Added link to `API.md` as the first entry in the `README.md` Documentation section.
+- Removed blanket `errcheck` and `staticcheck SA2002` exclusions from `.golangci.yml`; all
+  underlying code issues were fixed instead (see below).
+
+### Linting and code quality
+
+- **`golangci-lint` exclusion-free**: removed the blanket `errcheck` suppression for test files
+  and the dead `SA2002` test-file exclusion.
+- Fixed ~200 unchecked error returns across all test files:
+  - Cleanup calls (`client.Close`, `ln.Close`, `tr.Close`, goroutine `srv.ListenAndServe`, etc.)
+    now use explicit `_ = ...` or `defer func() { _ = ... }()` to document intentional dismissal.
+  - Setup calls (`srv.RegisterVariable`) in `altaccess_test.go` and `nvl_value_test.go` now check
+    errors with `t.Fatal`.
+- Fixed real `SA2002` issue in `concurrency_test.go`: `mockServer` methods called from goroutines
+  replaced `s.t.Fatalf` with `s.t.Errorf` + `return` (goroutine-safe test failure reporting).
+- Added `vuln` target (`govulncheck`) to `Makefile` and wired it into `make check`.
+
+No API changes. No breaking changes.
+
+Import path remains `github.com/otfabric/go-mms`.
+
+---
+
 ## v1.0.3
 
 **Added**: Transport fault injection tests (`transport/iso/fault_test.go`).

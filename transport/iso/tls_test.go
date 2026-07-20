@@ -117,7 +117,7 @@ func TestTLSDialAndListen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -135,13 +135,13 @@ func TestTLSDialAndListen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer clientConn.Close()
+	defer func() { _ = clientConn.Close() }()
 
 	wg.Wait()
 	if acceptErr != nil {
 		t.Fatalf("accept: %v", acceptErr)
 	}
-	defer serverConn.Close()
+	defer func() { _ = serverConn.Close() }()
 
 	msg := []byte("tls integration test")
 	if err := clientConn.Send(ctx, msg); err != nil {
@@ -176,7 +176,7 @@ func TestTLSConnectionState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -194,13 +194,13 @@ func TestTLSConnectionState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer clientConn.Close()
+	defer func() { _ = clientConn.Close() }()
 
 	wg.Wait()
 	if acceptErr != nil {
 		t.Fatalf("accept: %v", acceptErr)
 	}
-	defer serverConn.Close()
+	defer func() { _ = serverConn.Close() }()
 
 	tt, ok := serverConn.(mms.TLSTransport)
 	if !ok {
@@ -235,13 +235,13 @@ func TestTLSVerificationFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	go func() {
-		ln.Accept(ctx)
+		_, _ = ln.Accept(ctx)
 	}()
 
 	_, err = iso.DialTCP(ctx, ln.Addr().String(), iso.WithTLSConfig(clientTLS))
@@ -262,12 +262,12 @@ func TestTLSEndToEndMMS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	go srv.ListenAndServe(ctx, ln)
+	go func() { _ = srv.ListenAndServe(ctx, ln) }()
 
 	client, err := iso.Dial(ctx, ln.Addr().String(), iso.WithTLSConfig(&tls.Config{
 		RootCAs:    serverPool,
@@ -276,7 +276,7 @@ func TestTLSEndToEndMMS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer client.Close(ctx)
+	defer func() { _ = client.Close(ctx) }()
 
 	id, err := client.Identify(ctx)
 	if err != nil {
@@ -342,12 +342,12 @@ func TestTLSWithAuthenticator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	go srv.ListenAndServe(ctx, ln)
+	go func() { _ = srv.ListenAndServe(ctx, ln) }()
 
 	client, err := iso.Dial(ctx, ln.Addr().String(), iso.WithTLSConfig(&tls.Config{
 		RootCAs:      serverPool,
@@ -357,7 +357,7 @@ func TestTLSWithAuthenticator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer client.Close(ctx)
+	defer func() { _ = client.Close(ctx) }()
 
 	id, err := client.Identify(ctx)
 	if err != nil {
@@ -403,12 +403,12 @@ func TestTLSAuthenticatorReject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	go srv.ListenAndServe(ctx, ln)
+	go func() { _ = srv.ListenAndServe(ctx, ln) }()
 
 	_, err = iso.Dial(ctx, ln.Addr().String(), iso.WithTLSConfig(&tls.Config{
 		RootCAs:    serverPool,
@@ -438,18 +438,18 @@ func TestPlaintextRemoteAddr(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	go srv.ListenAndServe(ctx, ln)
+	go func() { _ = srv.ListenAndServe(ctx, ln) }()
 
 	client, err := iso.Dial(ctx, ln.Addr().String())
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer client.Close(ctx)
+	defer func() { _ = client.Close(ctx) }()
 
 	if _, err := client.Identify(ctx); err != nil {
 		t.Fatal(err)
@@ -476,7 +476,7 @@ func TestPlaintextAndTLSCoexist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer plainLn.Close()
+	defer func() { _ = plainLn.Close() }()
 
 	tlsLn, err := iso.Listen("127.0.0.1:0", iso.WithTLSConfig(&tls.Config{
 		Certificates: []tls.Certificate{serverCert},
@@ -484,19 +484,19 @@ func TestPlaintextAndTLSCoexist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tlsLn.Close()
+	defer func() { _ = tlsLn.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	go srv.ListenAndServe(ctx, plainLn)
-	go srv.ListenAndServe(ctx, tlsLn)
+	go func() { _ = srv.ListenAndServe(ctx, plainLn) }()
+	go func() { _ = srv.ListenAndServe(ctx, tlsLn) }()
 
 	plainClient, err := iso.Dial(ctx, plainLn.Addr().String())
 	if err != nil {
 		t.Fatalf("plain dial: %v", err)
 	}
-	defer plainClient.Close(ctx)
+	defer func() { _ = plainClient.Close(ctx) }()
 
 	tlsClient, err := iso.Dial(ctx, tlsLn.Addr().String(), iso.WithTLSConfig(&tls.Config{
 		RootCAs:    serverPool,
@@ -505,7 +505,7 @@ func TestPlaintextAndTLSCoexist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tls dial: %v", err)
 	}
-	defer tlsClient.Close(ctx)
+	defer func() { _ = tlsClient.Close(ctx) }()
 
 	plainID, err := plainClient.Identify(ctx)
 	if err != nil {

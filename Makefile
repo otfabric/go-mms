@@ -4,7 +4,7 @@ GO       ?= go
 PKGS     := ./...
 FUZZTIME ?= 15s
 
-.PHONY: help test test-race test-verbose vet lint fmt fuzz fuzz-ber fuzz-pdu bench tidy check clean coverage coverage-html coverage-clean interop ai-print-all ai-print-test ai-print ai-diff ai-digest ai-context
+.PHONY: help test test-race test-verbose vet lint fmt fuzz fuzz-ber fuzz-pdu bench tidy check clean coverage coverage-html coverage-clean interop ai-print-all ai-print-test ai-print ai-diff ai-digest ai-context vuln
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "%-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -26,6 +26,10 @@ vet: ## Run go vet
 
 lint: ## Run golangci-lint (install: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
 	golangci-lint run $(PKGS)
+
+vuln: ## Run govulncheck
+	@echo "Running govulncheck"
+	@govulncheck $(PKGS)
 
 fmt: ## Format all Go source files
 	@gofmt -w .
@@ -91,7 +95,7 @@ tidy: ## Tidy and verify module files
 	$(GO) mod tidy
 	$(GO) mod verify
 
-check: fmt tidy vet lint test test-race coverage ## Run all pre-commit checks
+check: fmt tidy vet lint vuln test test-race coverage ## Run all pre-commit checks
 
 clean: coverage-clean ## Clean test cache and coverage artifacts
 	$(GO) clean -testcache

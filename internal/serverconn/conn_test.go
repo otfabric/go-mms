@@ -73,8 +73,8 @@ func TestServiceErrorError(t *testing.T) {
 
 func TestNewConn(t *testing.T) {
 	client, server := loopbackPair()
-	defer client.Close()
-	defer server.Close()
+	defer func() { _ = client.Close() }()
+	defer func() { _ = server.Close() }()
 
 	handler := func(_ context.Context, _ codec.InvokeID, _ int, _ []byte) (int, bool, []byte, error) {
 		return 0, false, nil, nil
@@ -92,7 +92,7 @@ func TestNewConn(t *testing.T) {
 
 func TestRejectAssociation(t *testing.T) {
 	client, server := loopbackPair()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	handler := func(_ context.Context, _ codec.InvokeID, _ int, _ []byte) (int, bool, []byte, error) {
 		return 0, false, nil, nil
@@ -121,7 +121,7 @@ func TestRejectAssociation(t *testing.T) {
 
 func TestAcceptAssociationWithoutReceive(t *testing.T) {
 	_, server := loopbackPair()
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 
 	handler := func(_ context.Context, _ codec.InvokeID, _ int, _ []byte) (int, bool, []byte, error) {
 		return 0, false, nil, nil
@@ -315,7 +315,7 @@ func TestServiceErrorHandling(t *testing.T) {
 
 func TestSendUnconfirmed(t *testing.T) {
 	client, server := loopbackPair()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	handler := func(_ context.Context, _ codec.InvokeID, _ int, _ []byte) (int, bool, []byte, error) {
 		return 0, false, nil, nil

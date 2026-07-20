@@ -142,7 +142,7 @@ func TestPendingCount(t *testing.T) {
 	}
 
 	id1, _, _ := tr.Allocate()
-	tr.Allocate()
+	_, _, _ = tr.Allocate()
 	if tr.PendingCount() != 2 {
 		t.Errorf("PendingCount = %d, want 2", tr.PendingCount())
 	}

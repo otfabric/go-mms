@@ -83,18 +83,18 @@ func TestTCPIdentify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	go srv.ListenAndServe(ctx, ln)
+	go func() { _ = srv.ListenAndServe(ctx, ln) }()
 
 	client, err := iso.Dial(ctx, ln.Addr().String())
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer client.Close(ctx)
+	defer func() { _ = client.Close(ctx) }()
 
 	id, err := client.Identify(ctx)
 	if err != nil {
@@ -114,18 +114,18 @@ func TestTCPStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	go srv.ListenAndServe(ctx, ln)
+	go func() { _ = srv.ListenAndServe(ctx, ln) }()
 
 	client, err := iso.Dial(ctx, ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer func() { _ = client.Close(ctx) }()
 
 	status, err := client.Status(ctx)
 	if err != nil {
@@ -145,18 +145,18 @@ func TestTCPReadWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	go srv.ListenAndServe(ctx, ln)
+	go func() { _ = srv.ListenAndServe(ctx, ln) }()
 
 	client, err := iso.Dial(ctx, ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer func() { _ = client.Close(ctx) }()
 
 	rr, err := client.Read(ctx, mms.ReadRequest{
 		DomainID: "testDomain",
@@ -205,18 +205,18 @@ func TestTCPGetNameList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	go srv.ListenAndServe(ctx, ln)
+	go func() { _ = srv.ListenAndServe(ctx, ln) }()
 
 	client, err := iso.Dial(ctx, ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer func() { _ = client.Close(ctx) }()
 
 	result, err := client.GetNameList(ctx, mms.NameListRequest{
 		ObjectClass: mms.ObjectClassDomain,
@@ -248,18 +248,18 @@ func TestTCPMultipleSequentialServices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	go srv.ListenAndServe(ctx, ln)
+	go func() { _ = srv.ListenAndServe(ctx, ln) }()
 
 	client, err := iso.Dial(ctx, ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer func() { _ = client.Close(ctx) }()
 
 	if _, err := client.Identify(ctx); err != nil {
 		t.Fatalf("identify: %v", err)
@@ -287,12 +287,12 @@ func TestTCPConcurrentClients(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	go srv.ListenAndServe(ctx, ln)
+	go func() { _ = srv.ListenAndServe(ctx, ln) }()
 
 	const numClients = 3
 	var wg sync.WaitGroup
@@ -307,7 +307,7 @@ func TestTCPConcurrentClients(t *testing.T) {
 				errs <- err
 				return
 			}
-			defer c.Close(ctx)
+			defer func() { _ = c.Close(ctx) }()
 
 			id, err := c.Identify(ctx)
 			if err != nil {
@@ -343,18 +343,18 @@ func TestTCPNVLLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	go srv.ListenAndServe(ctx, ln)
+	go func() { _ = srv.ListenAndServe(ctx, ln) }()
 
 	client, err := iso.Dial(ctx, ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer func() { _ = client.Close(ctx) }()
 
 	err = client.DefineNamedVariableList(ctx, mms.DefineNamedVariableListRequest{
 		ListName: mms.ObjectName{Scope: mms.ObjectScopeDomain, Domain: "testDomain", ItemID: "myList"},
@@ -396,12 +396,12 @@ func TestTCPConclude(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	go srv.ListenAndServe(ctx, ln)
+	go func() { _ = srv.ListenAndServe(ctx, ln) }()
 
 	client, err := iso.Dial(ctx, ln.Addr().String())
 	if err != nil {
@@ -425,12 +425,12 @@ func TestTCPWithTSAPSelectors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	go srv.ListenAndServe(ctx, ln)
+	go func() { _ = srv.ListenAndServe(ctx, ln) }()
 
 	client, err := iso.Dial(ctx, ln.Addr().String(),
 		iso.WithCallingTSelector([]byte{0x00, 0x02}),
@@ -439,7 +439,7 @@ func TestTCPWithTSAPSelectors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer func() { _ = client.Close(ctx) }()
 
 	id, err := client.Identify(ctx)
 	if err != nil {

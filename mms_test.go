@@ -104,29 +104,35 @@ func (s *mockServer) handleAssociation(ctx context.Context) {
 	s.t.Helper()
 	data, err := s.transport.receiveFromClient(ctx)
 	if err != nil {
-		s.t.Fatalf("server: receive association: %v", err)
+		s.t.Errorf("server: receive association: %v", err)
+		return
 	}
 
 	// Parse session CONNECT → presentation CP → ACSE AARQ → MMS Initiate
 	spdu, err := session.Parse(data)
 	if err != nil {
-		s.t.Fatalf("server: parse session: %v", err)
+		s.t.Errorf("server: parse session: %v", err)
+		return
 	}
 	if spdu.Type != session.SpduConnect {
-		s.t.Fatalf("server: expected CONNECT, got %s", spdu.Type)
+		s.t.Errorf("server: expected CONNECT, got %s", spdu.Type)
+		return
 	}
 
 	ppdu, err := presentation.Parse(spdu.UserData)
 	if err != nil {
-		s.t.Fatalf("server: parse presentation: %v", err)
+		s.t.Errorf("server: parse presentation: %v", err)
+		return
 	}
 
 	apdu, err := acse.Parse(ppdu.UserData)
 	if err != nil {
-		s.t.Fatalf("server: parse ACSE: %v", err)
+		s.t.Errorf("server: parse ACSE: %v", err)
+		return
 	}
 	if apdu.Type != acse.ApduAARQ {
-		s.t.Fatalf("server: expected AARQ, got %s", apdu.Type)
+		s.t.Errorf("server: expected AARQ, got %s", apdu.Type)
+		return
 	}
 
 	// Build Initiate Response
@@ -147,7 +153,8 @@ func (s *mockServer) handleAssociation(ctx context.Context) {
 
 	initRespBytes, err := codec.MarshalMmsPduBareSequence(asn1util.TagInitiateResponse, initResp)
 	if err != nil {
-		s.t.Fatalf("server: marshal initiate response: %v", err)
+		s.t.Errorf("server: marshal initiate response: %v", err)
+		return
 	}
 
 	// Build Session ACCEPT → Presentation CPA → ACSE AARE → MMS
@@ -162,17 +169,20 @@ func (s *mockServer) handleDataRequest(ctx context.Context) (codec.InvokeID, pdu
 	s.t.Helper()
 	data, err := s.transport.receiveFromClient(ctx)
 	if err != nil {
-		s.t.Fatalf("server: receive data: %v", err)
+		s.t.Errorf("server: receive data: %v", err)
+		return 0, 0, nil
 	}
 
 	mmsPayload, err := isostack.DecodeDataResponse(data)
 	if err != nil {
-		s.t.Fatalf("server: decode data: %v", err)
+		s.t.Errorf("server: decode data: %v", err)
+		return 0, 0, nil
 	}
 
 	kind, content, err := pdu.DecodePdu(mmsPayload)
 	if err != nil {
-		s.t.Fatalf("server: decode PDU: %v", err)
+		s.t.Errorf("server: decode PDU: %v", err)
+		return 0, 0, nil
 	}
 
 	if kind == pdu.PduConcludeRequest {
@@ -180,17 +190,20 @@ func (s *mockServer) handleDataRequest(ctx context.Context) (codec.InvokeID, pdu
 	}
 
 	if kind != pdu.PduConfirmedRequest {
-		s.t.Fatalf("server: expected ConfirmedRequest, got %s", kind)
+		s.t.Errorf("server: expected ConfirmedRequest, got %s", kind)
+		return 0, 0, nil
 	}
 
 	invokeID, serviceRaw, err := codec.UnmarshalConfirmedRequest(content)
 	if err != nil {
-		s.t.Fatalf("server: unmarshal confirmed request: %v", err)
+		s.t.Errorf("server: unmarshal confirmed request: %v", err)
+		return 0, 0, nil
 	}
 
 	svcKind := pdu.ClassifyServiceTag(serviceRaw.Tag)
 	if svcKind == pdu.ServiceUnknown {
-		s.t.Fatalf("server: unknown service tag %d", serviceRaw.Tag)
+		s.t.Errorf("server: unknown service tag %d", serviceRaw.Tag)
+		return 0, 0, nil
 	}
 
 	return invokeID, svcKind, content
@@ -201,12 +214,14 @@ func (s *mockServer) sendIdentifyResponse(ctx context.Context, invokeID codec.In
 
 	respBody, err := pdu.MarshalIdentifyResponse(s.vendor, s.model, s.revision)
 	if err != nil {
-		s.t.Fatalf("server: marshal identify body: %v", err)
+		s.t.Errorf("server: marshal identify body: %v", err)
+		return
 	}
 
 	respPdu, err := codec.MarshalConfirmedResponse(invokeID, asn1util.TagNumIdentify, true, respBody)
 	if err != nil {
-		s.t.Fatalf("server: marshal identify response: %v", err)
+		s.t.Errorf("server: marshal identify response: %v", err)
+		return
 	}
 	s.sendDataResponse(ctx, respPdu)
 }
@@ -216,12 +231,14 @@ func (s *mockServer) sendStatusResponse(ctx context.Context, invokeID codec.Invo
 
 	respBody, err := pdu.MarshalStatusResponse(0, 0) // state-changes-allowed, operational
 	if err != nil {
-		s.t.Fatalf("server: marshal status body: %v", err)
+		s.t.Errorf("server: marshal status body: %v", err)
+		return
 	}
 
 	respPdu, err := codec.MarshalConfirmedResponse(invokeID, asn1util.TagNumStatus, true, respBody)
 	if err != nil {
-		s.t.Fatalf("server: marshal status response: %v", err)
+		s.t.Errorf("server: marshal status response: %v", err)
+		return
 	}
 	s.sendDataResponse(ctx, respPdu)
 }
@@ -320,7 +337,7 @@ func TestIdentify(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestStatus(t *testing.T) {
@@ -359,7 +376,7 @@ func TestStatus(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestCloseAlreadyClosed(t *testing.T) {
@@ -379,7 +396,7 @@ func TestCloseAlreadyClosed(t *testing.T) {
 		srv.sendConcludeResponse(ctx)
 	}()
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 
 	err = client.Close(ctx)
 	if err != nil {
@@ -415,7 +432,7 @@ func TestIdentifyOnClosedClient(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 
 	_, err = client.Identify(ctx)
 	if !errors.Is(err, ErrClosed) {
@@ -472,7 +489,7 @@ func TestConfirmedError(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func (s *mockServer) sendReadResponse(ctx context.Context, invokeID codec.InvokeID, dataValues []*pdu.DataValue) {
@@ -482,7 +499,8 @@ func (s *mockServer) sendReadResponse(ctx context.Context, invokeID codec.Invoke
 	for _, dv := range dataValues {
 		b, err := pdu.MarshalData(dv)
 		if err != nil {
-			s.t.Fatalf("server: marshal data: %v", err)
+			s.t.Errorf("server: marshal data: %v", err)
+			return
 		}
 		elements = append(elements, b...)
 	}
@@ -491,7 +509,8 @@ func (s *mockServer) sendReadResponse(ctx context.Context, invokeID codec.Invoke
 
 	respPdu, err := codec.MarshalConfirmedResponse(invokeID, asn1util.TagNumRead, true, seqOf)
 	if err != nil {
-		s.t.Fatalf("server: marshal read response: %v", err)
+		s.t.Errorf("server: marshal read response: %v", err)
+		return
 	}
 	s.sendDataResponse(ctx, respPdu)
 }
@@ -508,7 +527,8 @@ func (s *mockServer) sendWriteResponse(ctx context.Context, invokeID codec.Invok
 
 	respPdu, err := codec.MarshalConfirmedResponse(invokeID, asn1util.TagNumWrite, true, content)
 	if err != nil {
-		s.t.Fatalf("server: marshal write response: %v", err)
+		s.t.Errorf("server: marshal write response: %v", err)
+		return
 	}
 	s.sendDataResponse(ctx, respPdu)
 }
@@ -554,7 +574,7 @@ func TestReadSingleVariable(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestReadMultipleVariables(t *testing.T) {
@@ -610,7 +630,7 @@ func TestReadMultipleVariables(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestReadDataAccessError(t *testing.T) {
@@ -649,7 +669,7 @@ func TestReadDataAccessError(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestWriteSingleVariable(t *testing.T) {
@@ -685,7 +705,7 @@ func TestWriteSingleVariable(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestWriteFailure(t *testing.T) {
@@ -726,7 +746,7 @@ func TestWriteFailure(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 // TestRead_ObjectInvalidatedWireZeroIsError proves that wire value 0
@@ -768,7 +788,7 @@ func TestRead_ObjectInvalidatedWireZeroIsError(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 // TestReadMultiple_AccessResultInvariant verifies the AccessResult contract:
@@ -830,7 +850,7 @@ func TestReadMultiple_AccessResultInvariant(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 // TestWriteVariables_AccessResultInvariant verifies the WriteAccessResult contract:
@@ -906,7 +926,7 @@ func TestWriteVariables_AccessResultInvariant(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestReadStructuredValue(t *testing.T) {
@@ -958,7 +978,7 @@ func TestReadStructuredValue(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestReadValidation(t *testing.T) {
@@ -986,7 +1006,7 @@ func TestReadValidation(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestWriteValidation(t *testing.T) {
@@ -1022,7 +1042,7 @@ func TestWriteValidation(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestReadResultCountMismatch(t *testing.T) {
@@ -1060,7 +1080,7 @@ func TestReadResultCountMismatch(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestDataAccessErrorSentinel(t *testing.T) {
@@ -1092,7 +1112,8 @@ func (s *mockServer) sendGetNameListResponse(ctx context.Context, invokeID codec
 
 	respPdu, err := codec.MarshalConfirmedResponse(invokeID, asn1util.TagNumGetNameList, true, content)
 	if err != nil {
-		s.t.Fatalf("server: marshal getnamelist response: %v", err)
+		s.t.Errorf("server: marshal getnamelist response: %v", err)
+		return
 	}
 	s.sendDataResponse(ctx, respPdu)
 }
@@ -1138,7 +1159,7 @@ func TestGetNameListVMD(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestGetNameListDomainSpecific(t *testing.T) {
@@ -1174,7 +1195,7 @@ func TestGetNameListDomainSpecific(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestGetNameListContinuation(t *testing.T) {
@@ -1221,7 +1242,7 @@ func TestGetNameListContinuation(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 // --- GetVariableAccessAttributes tests ---
@@ -1240,7 +1261,8 @@ func (s *mockServer) sendGetVarAccessResponse(ctx context.Context, invokeID code
 
 	respPdu, err := codec.MarshalConfirmedResponse(invokeID, asn1util.TagNumGetVariableAccessAttributes, true, content)
 	if err != nil {
-		s.t.Fatalf("server: marshal getvaraccess response: %v", err)
+		s.t.Errorf("server: marshal getvaraccess response: %v", err)
+		return
 	}
 	s.sendDataResponse(ctx, respPdu)
 }
@@ -1286,7 +1308,7 @@ func TestGetVariableAccessAttributesInteger(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestGetVariableAccessAttributesStructure(t *testing.T) {
@@ -1339,7 +1361,7 @@ func TestGetVariableAccessAttributesStructure(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 // --- Named Variable List tests ---
@@ -1351,7 +1373,8 @@ func (s *mockServer) sendDefineNamedVarListResponse(ctx context.Context, invokeI
 	// wire encoding is 0x8b 0x00 inside the ConfirmedResponsePdu.
 	respPdu, err := codec.MarshalConfirmedResponse(invokeID, asn1util.TagNumDefineNamedVariableList, false, nil)
 	if err != nil {
-		s.t.Fatalf("server: marshal define response: %v", err)
+		s.t.Errorf("server: marshal define response: %v", err)
+		return
 	}
 	s.sendDataResponse(ctx, respPdu)
 }
@@ -1378,7 +1401,8 @@ func (s *mockServer) sendGetNamedVarListAttrsResponse(ctx context.Context, invok
 
 	respPdu, err := codec.MarshalConfirmedResponse(invokeID, asn1util.TagNumGetNamedVariableListAttrs, true, content)
 	if err != nil {
-		s.t.Fatalf("server: marshal get attrs response: %v", err)
+		s.t.Errorf("server: marshal get attrs response: %v", err)
+		return
 	}
 	s.sendDataResponse(ctx, respPdu)
 }
@@ -1388,12 +1412,14 @@ func (s *mockServer) sendDeleteNamedVarListResponse(ctx context.Context, invokeI
 
 	content, err := pdu.MarshalDeleteNVLResponse(matched, deleted)
 	if err != nil {
-		s.t.Fatalf("server: marshal delete NVL response: %v", err)
+		s.t.Errorf("server: marshal delete NVL response: %v", err)
+		return
 	}
 
 	respPdu, err := codec.MarshalConfirmedResponse(invokeID, asn1util.TagNumDeleteNamedVariableList, true, content)
 	if err != nil {
-		s.t.Fatalf("server: marshal delete response: %v", err)
+		s.t.Errorf("server: marshal delete response: %v", err)
+		return
 	}
 	s.sendDataResponse(ctx, respPdu)
 }
@@ -1433,7 +1459,7 @@ func TestDefineNamedVariableList(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestGetNamedVariableListAttributes(t *testing.T) {
@@ -1480,7 +1506,7 @@ func TestGetNamedVariableListAttributes(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestDeleteNamedVariableList(t *testing.T) {
@@ -1520,7 +1546,7 @@ func TestDeleteNamedVariableList(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestNamedVariableListLifecycle(t *testing.T) {
@@ -1593,7 +1619,7 @@ func TestNamedVariableListLifecycle(t *testing.T) {
 		t.Errorf("deleted = %d, want 1", delResult.NumberDeleted)
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestDefineNamedVariableListValidation(t *testing.T) {
@@ -1628,7 +1654,7 @@ func TestDefineNamedVariableListValidation(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestDeleteNamedVariableListValidation(t *testing.T) {
@@ -1666,7 +1692,7 @@ func TestDeleteNamedVariableListValidation(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestGetNameListValidation(t *testing.T) {
@@ -1702,7 +1728,7 @@ func TestGetNameListValidation(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestDefineNamedVariableListDeepValidation(t *testing.T) {
@@ -1739,7 +1765,7 @@ func TestDefineNamedVariableListDeepValidation(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestGetNameListAllStalledPagination(t *testing.T) {
@@ -1781,7 +1807,7 @@ func TestGetNameListAllStalledPagination(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestEncodeObjectNameInvalidScope(t *testing.T) {
@@ -1865,7 +1891,7 @@ func TestReadMultipleValidation(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestGetVariableAccessAttributesValidation(t *testing.T) {
@@ -1894,7 +1920,7 @@ func TestGetVariableAccessAttributesValidation(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestGetNameListObjectClassValidation(t *testing.T) {
@@ -1929,7 +1955,7 @@ func TestGetNameListObjectClassValidation(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestGetNamedVariableListAttributesValidation(t *testing.T) {
@@ -1953,7 +1979,7 @@ func TestGetNamedVariableListAttributesValidation(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestValueTypeNamedType(t *testing.T) {
@@ -1993,5 +2019,5 @@ func TestDeleteNamedVariableListUnknownScope(t *testing.T) {
 		srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
