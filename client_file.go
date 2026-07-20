@@ -176,9 +176,10 @@ func (c *Client) FileRename(ctx context.Context, currentName, newName string) er
 	return nil
 }
 
-// ObtainFile requests the remote MMS server to copy a file from
-// sourceFile to destinationFile. This is a two-party file transfer
-// where the server fetches the source file.
+// ObtainFile requests the remote MMS server to copy sourceFile to
+// destinationFile. The server delegates the operation to its
+// [FileProvider]; it does not perform the MMS segmented role-reversal
+// protocol (FileOpen/FileRead/FileClose back to the client).
 func (c *Client) ObtainFile(ctx context.Context, sourceFile, destinationFile string) error {
 	invokeID := c.nextInvokeID()
 

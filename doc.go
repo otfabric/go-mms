@@ -97,11 +97,12 @@
 // # Concurrency
 //
 // A [Client] is safe for concurrent use from multiple goroutines.
-// Service calls are serialized internally via a send mutex — only
-// one confirmed request send is in flight at a time per client.
-// A background reader goroutine dispatches confirmed responses by
-// invoke ID and delivers unconfirmed PDUs (InformationReport) to
-// the registered handler.
+// Transport writes are serialized so encoded PDUs cannot interleave.
+// After a request is sent, multiple confirmed requests may be
+// outstanding concurrently, subject to the negotiated
+// outstanding-request limit. A background reader goroutine correlates
+// confirmed responses by invoke ID and independently dispatches
+// unconfirmed PDUs (InformationReport) to the registered handler.
 //
 // A [Server] is safe for concurrent use. Each [Server.Serve] call
 // handles one association; multiple connections are served in parallel
