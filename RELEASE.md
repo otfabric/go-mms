@@ -1,5 +1,21 @@
 # go-mms Releases
 
+## v1.0.3
+
+**Added**: Transport fault injection tests (`transport/iso/fault_test.go`).
+
+Five new tests covering real-world transport failure scenarios:
+
+- `TestFault_MidResponseDisconnect` — server closes TCP mid-response; client Read returns an error quickly rather than hanging indefinitely.
+- `TestFault_TruncatedTPDU` — client sends a TPKT header announcing 100 bytes but delivers only 3 then closes; server recovers without panic or deadlock.
+- `TestFault_IdleConnectionClosure` — server closes an idle connection; next client operation detects the dead peer.
+- `TestFault_ConnectToClosedPort` — `iso.Dial` returns an error on connection refused rather than hanging.
+- `TestFault_ConcurrentRequestAfterDisconnect` — 8 concurrent goroutines all receive errors after confirmed disconnect; none hang indefinitely.
+
+**Race detector**: `go test -race ./...` passes cleanly.
+
+---
+
 ## v1.0.2
 
 **Fixed**: `Server.handleWrite` now propagates specific `DataAccessError` codes from write handlers.

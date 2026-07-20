@@ -28,7 +28,7 @@
 | FileDirectory | ✅ | ✅ | `Client.FileDirectory`, `FileDirectoryAll` | ✅ | ✅ | ✅ | ❌ | ❌ | Pagination with `ContinueAfter`; `FileDirectoryAll` convenience with stall detection |
 | FileDelete | ✅ | ✅ | `Client.FileDelete` | ✅ | ✅ | ✅ | ❌ | ❌ | Maps `fs.ErrNotExist` → file-non-existent |
 | FileRename | ✅ | ✅ | `Client.FileRename` | ✅ | ✅ | ✅ | ❌ | ❌ | Collision tests included |
-| ObtainFile | ✅ | ✅ | `Client.ObtainFile` | ✅ | ✅ | ✅ | ❌ | ❌ | Two-party file transfer |
+| ObtainFile | ✅ | ✅ | `Client.ObtainFile` | ✅ | ✅ | ✅ | ❌ | ❌ | Server delegates to `FileProvider`; MMS segmented role-reversal (server→client FileOpen/FileRead/FileClose) is not implemented — see `KNOWN_LIMITATIONS.md` |
 | ReadJournal | ✅ | ✅ | `Client.ReadJournalTimeRange`, `ReadJournalStartAfter` | ✅ | ✅ | ✅ | ❌ | ❌ | Time-range and start-after cursors; pagination with `MoreFollows`; `JournalProvider` interface |
 | Reject PDU | ✅ | ✅ | Handled in `Client.processConfirmedPDU` | ✅ | ✅ | ✅ | ✅ | ❌ | Client decodes and surfaces as `ProtocolError`; server sends Reject for malformed requests |
 | ConfirmedError | ✅ | ✅ | `ServiceError`, `ErrorClass`, `ErrorCode` | ✅ | ✅ | ✅ | ✅ | ❌ | Client decodes into `*ServiceError`; server generates via `serverconn.ServiceError`; trailing-byte strictness |
