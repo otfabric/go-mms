@@ -4,6 +4,7 @@ package pdu
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/otfabric/go-mms/internal/berutil"
 )
@@ -165,8 +166,12 @@ func UnmarshalReadRequestFull(data []byte) ([]VariableSpecWire, error) {
 	return req.Variables, nil
 }
 
-// UnmarshalReadRequestParsed parses a Read request into the full
-// wire representation, supporting both listOfVariable and variableListName.
+// UnmarshalReadRequestParsed parses a Read request into the full wire
+// representation, supporting both listOfVariable and variableListName.
+//
+// ReadRequest.variableAccessSpecification is tagged [1] EXPLICIT in the MMS
+// ASN.1 definition, so the VariableAccessSpecification CHOICE is wrapped in an
+// outer tagReadVarAccessSpec (0xa1) context tag inside the Read body.
 func UnmarshalReadRequestParsed(data []byte) (*ReadRequestWire, error) {
 	offset := 0
 	result := &ReadRequestWire{}
@@ -184,35 +189,48 @@ func UnmarshalReadRequestParsed(data []byte) (*ReadRequestWire, error) {
 	}
 
 	if offset >= len(data) {
-		return nil, fmt.Errorf("read request: missing variable access specification")
+		return nil, fmt.Errorf("read request: missing variableAccessSpecification")
 	}
-	tag, content, n, err := berutil.DecodeTLVAt(data, offset)
-	if err != nil {
-		return nil, fmt.Errorf("read request: varAccessSpec: %w", err)
-	}
-	offset += n
 
+	// variableAccessSpecification [1] EXPLICIT outer tag
+	outerTag, outerContent, outerN, err := berutil.DecodeTLVAt(data, offset)
+	if err != nil {
+		return nil, fmt.Errorf("read request: variableAccessSpecification: %w", err)
+	}
+	offset += outerN
+	if outerTag != tagReadVarAccessSpec {
+		return nil, fmt.Errorf("read request: expected variableAccessSpecification [1] (0xa1), got 0x%02x", outerTag)
+	}
 	if offset != len(data) {
 		return nil, fmt.Errorf("read request: %d trailing bytes", len(data)-offset)
 	}
 
-	switch tag {
+	// VariableAccessSpecification CHOICE inside the [1] EXPLICIT wrapper
+	innerTag, innerContent, innerN, err := berutil.DecodeTLVAt(outerContent, 0)
+	if err != nil {
+		return nil, fmt.Errorf("read request: variableAccessSpecification choice: %w", err)
+	}
+	if innerN != len(outerContent) {
+		return nil, fmt.Errorf("read request: %d trailing bytes in variableAccessSpecification", len(outerContent)-innerN)
+	}
+
+	switch innerTag {
 	case tagListOfVar:
-		specs, err := decodeVarSpecListFull(content)
+		specs, err := decodeVarSpecListFull(innerContent)
 		if err != nil {
 			return nil, err
 		}
 		result.Variables = specs
 		return result, nil
 	case tagVarListName:
-		name, err := DecodeObjectName(content)
+		name, err := DecodeObjectName(innerContent)
 		if err != nil {
 			return nil, fmt.Errorf("read request: variableListName: %w", err)
 		}
 		result.ListName = &name
 		return result, nil
 	default:
-		return nil, fmt.Errorf("read request: expected listOfVariable [0] or variableListName [1], got 0x%02x", tag)
+		return nil, fmt.Errorf("read request: expected listOfVariable [0] (0xa0) or variableListName [1] (0xa1), got 0x%02x", innerTag)
 	}
 }
 
@@ -238,31 +256,41 @@ func decodeVarSpecListFull(data []byte) ([]VariableSpecWire, error) {
 }
 
 func decodeVariableSpecWire(data []byte) (VariableSpecWire, error) {
-	name, consumed, err := DecodeObjectNameAt(data, 0)
+	// VariableSpecification.name [0] EXPLICIT ObjectName (ISO 9506-2 clause 15.4)
+	offset := 0
+	tag, content, n, err := berutil.DecodeTLVAt(data, offset)
+	if err != nil {
+		return VariableSpecWire{}, fmt.Errorf("variableSpec: %w", err)
+	}
+	offset += n
+	if tag != 0xa0 {
+		return VariableSpecWire{}, fmt.Errorf("variableSpec: expected name [0] (0xa0), got 0x%02x", tag)
+	}
+	name, err := DecodeObjectName(content)
 	if err != nil {
 		return VariableSpecWire{}, err
 	}
 
 	spec := VariableSpecWire{Name: name}
 
-	if consumed < len(data) {
-		tag, content, n, err := berutil.DecodeTLVAt(data, consumed)
+	if offset < len(data) {
+		tag2, content2, n2, err := berutil.DecodeTLVAt(data, offset)
 		if err != nil {
 			return VariableSpecWire{}, fmt.Errorf("alternate access: %w", err)
 		}
-		consumed += n
-		if tag != tagAltAccessWrapper {
-			return VariableSpecWire{}, fmt.Errorf("expected alternateAccess [5] (0xa5), got 0x%02x", tag)
+		offset += n2
+		if tag2 != tagAltAccessWrapper {
+			return VariableSpecWire{}, fmt.Errorf("expected alternateAccess [5] (0xa5), got 0x%02x", tag2)
 		}
-		selectors, err := decodeAlternateAccess(content)
+		selectors, err := decodeAlternateAccess(content2)
 		if err != nil {
 			return VariableSpecWire{}, fmt.Errorf("alternate access: %w", err)
 		}
 		spec.AlternateAccess = selectors
 	}
 
-	if consumed != len(data) {
-		return VariableSpecWire{}, fmt.Errorf("%d trailing bytes after variable spec", len(data)-consumed)
+	if offset != len(data) {
+		return VariableSpecWire{}, fmt.Errorf("%d trailing bytes after variable spec", len(data)-offset)
 	}
 
 	return spec, nil
@@ -335,7 +363,9 @@ func UnmarshalWriteRequestParsed(data []byte) (*WriteRequestWire, error) {
 		return nil, fmt.Errorf("write request: expected listOfVariable [0] or variableListName [1], got 0x%02x", tag)
 	}
 
-	// listOfData: SEQUENCE OF Data
+	// listOfData [0] IMPLICIT SEQUENCE OF per the MMS ASN.1 definition.
+	// The surrounding context-specific tag is IMPLICIT and replaces the universal
+	// SEQUENCE tag, so only tagWriteListOfData (0xa0) is accepted here.
 	if offset >= len(data) {
 		return nil, fmt.Errorf("write request: missing data list")
 	}
@@ -344,8 +374,8 @@ func UnmarshalWriteRequestParsed(data []byte) (*WriteRequestWire, error) {
 		return nil, fmt.Errorf("write request: dataList: %w", err)
 	}
 	offset += n
-	if tag != tagSequence {
-		return nil, fmt.Errorf("write request: expected SEQUENCE OF (0x30), got 0x%02x", tag)
+	if tag != tagWriteListOfData {
+		return nil, fmt.Errorf("write request: expected listOfData [0] (0xa0), got 0x%02x", tag)
 	}
 	if offset != len(data) {
 		return nil, fmt.Errorf("write request: %d trailing bytes", len(data)-offset)
@@ -406,8 +436,11 @@ func MarshalGetNameListResponse(names []string, moreFollows bool) ([]byte, error
 //
 //	ReadResponse ::= SEQUENCE {
 //	  variableAccessSpecification  -- skipped (optional)
-//	  listOfAccessResult   SEQUENCE OF AccessResult
+//	  listOfAccessResult [1] IMPLICIT SEQUENCE OF AccessResult
 //	}
+//
+// The surrounding context-specific tag is IMPLICIT and replaces the universal
+// SEQUENCE tag, so tagReadListOfAccessResult (0xa1) is used.
 func MarshalReadResponse(results []*AccessResult) ([]byte, error) {
 	var inner []byte
 	for _, r := range results {
@@ -422,16 +455,19 @@ func MarshalReadResponse(results []*AccessResult) ([]byte, error) {
 			inner = append(inner, encoded...)
 		}
 	}
-	return berutil.EncodeTLV(tagSequence, inner), nil // wrap in SEQUENCE OF
+	return berutil.EncodeTLV(tagReadListOfAccessResult, inner), nil
 }
 
 // MarshalReadResponseWithSpec encodes a Read response body that includes
 // the variableAccessSpecification (for specificationWithResult=true).
 //
 //	ReadResponse ::= SEQUENCE {
-//	  variableAccessSpecification VariableAccessSpecification OPTIONAL
-//	  listOfAccessResult          SEQUENCE OF AccessResult
+//	  variableAccessSpecification [0] EXPLICIT VariableAccessSpecification OPTIONAL
+//	  listOfAccessResult          [1] IMPLICIT SEQUENCE OF AccessResult
 //	}
+//
+// The outer [0] EXPLICIT wrapper for variableAccessSpecification is required
+// by the MMS ASN.1 definition (see ReadResponse.c in mms-extended.asn).
 func MarshalReadResponseWithSpec(listName *ObjectNameWire, specs []VariableSpecWire, results []*AccessResult) ([]byte, error) {
 	var body []byte
 
@@ -440,7 +476,10 @@ func MarshalReadResponseWithSpec(listName *ObjectNameWire, specs []VariableSpecW
 		if err != nil {
 			return nil, fmt.Errorf("read response: variableListName: %w", err)
 		}
-		body = append(body, berutil.EncodeTLV(tagVarListName, nameBytes)...)
+		// variableListName [1] EXPLICIT within VariableAccessSpecification CHOICE,
+		// wrapped in [0] EXPLICIT outer tag for ReadResponse.variableAccessSpecification.
+		varListName := berutil.EncodeTLV(tagVarListName, nameBytes)  // 0xa1
+		body = append(body, berutil.EncodeTLV(0xa0, varListName)...) // 0xa0 outer
 	} else if len(specs) > 0 {
 		var varEntries []byte
 		for i, s := range specs {
@@ -460,7 +499,10 @@ func MarshalReadResponseWithSpec(listName *ObjectNameWire, specs []VariableSpecW
 			}
 			varEntries = append(varEntries, berutil.EncodeTLV(tagSequence, seqContent)...)
 		}
-		body = append(body, berutil.EncodeTLV(tagListOfVar, varEntries)...)
+		// listOfVariable [0] IMPLICIT within VariableAccessSpecification,
+		// wrapped in [0] EXPLICIT outer tag for ReadResponse.variableAccessSpecification.
+		listOfVar := berutil.EncodeTLV(tagListOfVar, varEntries)   // 0xa0 (listOfVar is [0] IMPLICIT)
+		body = append(body, berutil.EncodeTLV(0xa0, listOfVar)...) // 0xa0 outer
 	}
 
 	var inner []byte
@@ -475,7 +517,7 @@ func MarshalReadResponseWithSpec(listName *ObjectNameWire, specs []VariableSpecW
 			inner = append(inner, encoded...)
 		}
 	}
-	body = append(body, berutil.EncodeTLV(tagSequence, inner)...)
+	body = append(body, berutil.EncodeTLV(tagReadListOfAccessResult, inner)...)
 
 	return body, nil
 }
@@ -486,13 +528,22 @@ func MarshalReadResponseWithSpec(listName *ObjectNameWire, specs []VariableSpecW
 //	  failure [0] IMPLICIT DataAccessError
 //	  success [1] IMPLICIT NULL
 //	}
-func MarshalWriteResponse(results []int) ([]byte, error) {
+//
+// WriteResult separates the success/failure flag from the error code so that
+// MarshalWriteResponse never uses an integer sentinel that could overlap with a
+// real MMS data-access-error wire value.
+type WriteResult struct {
+	Success bool
+	Code    int // MMS wire error value when !Success; ignored when Success
+}
+
+func MarshalWriteResponse(results []WriteResult) ([]byte, error) {
 	var encoded []byte
-	for _, code := range results {
-		if code == 0 {
+	for _, r := range results {
+		if r.Success {
 			encoded = append(encoded, berutil.EncodeTLV(tagWriteSuccess, nil)...) // [1] IMPLICIT NULL
 		} else {
-			encoded = append(encoded, berutil.EncodeTLV(tagWriteFailure, encodeSmallInt(code))...) // [0] IMPLICIT DataAccessError
+			encoded = append(encoded, berutil.EncodeTLV(tagWriteFailure, encodeSmallInt(r.Code))...) // [0] IMPLICIT DataAccessError
 		}
 	}
 	return encoded, nil
@@ -791,9 +842,26 @@ func UnmarshalDeleteNVLRequest(data []byte) (*DeleteNVLRequest, error) {
 }
 
 // MarshalDeleteNVLResponse builds a DeleteNamedVariableList response.
+//
+// ISO 9506-2 DeleteNamedVariableList-Response:
+//
+//	DeleteNamedVariableList-Response ::= SEQUENCE {
+//	  numberMatched [0] IMPLICIT Unsigned32,
+//	  numberDeleted [1] IMPLICIT Unsigned32
+//	}
 func MarshalDeleteNVLResponse(numberMatched, numberDeleted int) ([]byte, error) {
+	if numberMatched < 0 || numberDeleted < 0 {
+		return nil, fmt.Errorf("MarshalDeleteNVLResponse: counts must be non-negative (got %d, %d)", numberMatched, numberDeleted)
+	}
+	if uint64(numberMatched) > uint64(math.MaxUint32) || uint64(numberDeleted) > uint64(math.MaxUint32) {
+		return nil, fmt.Errorf("MarshalDeleteNVLResponse: count exceeds Unsigned32 range")
+	}
+	const (
+		tagNumberMatched byte = 0x80 // [0] IMPLICIT Unsigned32
+		tagNumberDeleted byte = 0x81 // [1] IMPLICIT Unsigned32
+	)
 	var content []byte
-	content = berutil.AppendTLV(content, 0x02, encodeSmallInt(numberMatched))
-	content = berutil.AppendTLV(content, 0x02, encodeSmallInt(numberDeleted))
+	content = berutil.AppendTLV(content, tagNumberMatched, berutil.EncodeUint32(uint32(numberMatched)))
+	content = berutil.AppendTLV(content, tagNumberDeleted, berutil.EncodeUint32(uint32(numberDeleted)))
 	return content, nil
 }

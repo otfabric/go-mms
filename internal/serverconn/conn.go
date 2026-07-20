@@ -7,7 +7,6 @@ package serverconn
 
 import (
 	"context"
-	"encoding/asn1"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -97,16 +96,12 @@ func (c *Conn) ReceiveAssociation(ctx context.Context) (acse.AuthInfo, error) {
 		return noAuth, fmt.Errorf("serverconn: expected InitiateRequest, got %s", kind)
 	}
 
-	var initReq pdu.InitiateRequest
-	rest, err := asn1.Unmarshal(initContent, &initReq)
+	initReq, err := pdu.UnmarshalInitiateRequest(initContent)
 	if err != nil {
-		return noAuth, fmt.Errorf("serverconn: unmarshal initiate request: %w", err)
-	}
-	if len(rest) != 0 {
-		return noAuth, fmt.Errorf("serverconn: initiate request: %d trailing bytes", len(rest))
+		return noAuth, fmt.Errorf("serverconn: %w", err)
 	}
 
-	c.pendingInitReq = &initReq
+	c.pendingInitReq = initReq
 	return assocReq.Auth, nil
 }
 
@@ -133,7 +128,7 @@ func (c *Conn) AcceptAssociation(ctx context.Context) error {
 		},
 	}
 
-	initRespBytes, err := codec.MarshalMmsPdu(asn1util.TagInitiateResponse, initResp)
+	initRespBytes, err := codec.MarshalMmsPduBareSequence(asn1util.TagInitiateResponse, initResp)
 	if err != nil {
 		return fmt.Errorf("serverconn: marshal initiate response: %w", err)
 	}

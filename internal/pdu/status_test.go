@@ -58,19 +58,18 @@ func TestStatusResponseRoundTrip(t *testing.T) {
 }
 
 func TestUnmarshalStatusResponse(t *testing.T) {
-	s := statusResponseASN1{VMDLogicalStatus: 1, VMDPhysicalStatus: 2}
-	seqBytes, err := asn1.Marshal(s)
+	// Build bare SEQUENCE fields (IMPLICIT tag — no 0x30 wrapper).
+	bareFields, err := MarshalStatusResponse(1, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// UnmarshalInner does asn1.Unmarshal(raw.Bytes, target), so raw.Bytes
-	// must contain the full SEQUENCE TLV.
+	// UnmarshalImplicitSequence wraps raw.Bytes in 0x30 before decoding.
 	raw := asn1.RawValue{
 		Class:      asn1.ClassContextSpecific,
 		Tag:        0,
 		IsCompound: true,
-		Bytes:      seqBytes,
+		Bytes:      bareFields,
 	}
 
 	resp, err := UnmarshalStatusResponse(raw)

@@ -6,6 +6,8 @@ import (
 	"encoding/asn1"
 	"encoding/hex"
 	"testing"
+
+	"github.com/otfabric/go-mms/internal/berutil"
 )
 
 func TestMarshalInitiateRequest_RoundTrip(t *testing.T) {
@@ -30,9 +32,10 @@ func TestMarshalInitiateRequest_RoundTrip(t *testing.T) {
 		t.Fatalf("kind = %v, want InitiateRequest", kind)
 	}
 
-	// Parse content back into struct to verify round-trip.
+	// InitiateRequestPDU is IMPLICIT, so content contains bare SEQUENCE fields.
+	// Reconstruct the 0x30 wrapper that encoding/asn1 needs to parse the struct.
 	var decoded InitiateRequest
-	_, err = asn1.Unmarshal(content, &decoded)
+	_, err = asn1.Unmarshal(berutil.EncodeTLV(0x30, content), &decoded)
 	if err != nil {
 		t.Fatalf("asn1.Unmarshal content: %v", err)
 	}
@@ -60,8 +63,8 @@ func TestMarshalInitiateRequest_RoundTrip(t *testing.T) {
 }
 
 func TestUnmarshalInitiateResponse(t *testing.T) {
-	// Build a synthetic InitiateResponse, marshal it, wrap it as a PDU,
-	// then decode to verify the full round-trip.
+	// Build a synthetic InitiateResponse, encode it as bare SEQUENCE fields
+	// (IMPLICIT tag — no 0x30 wrapper), then decode to verify the round-trip.
 	resp := InitiateResponse{
 		LocalDetailCalled:                  32000,
 		NegotiatedMaxServOutstandingCall:   5,
@@ -77,9 +80,10 @@ func TestUnmarshalInitiateResponse(t *testing.T) {
 		},
 	}
 
-	content, err := asn1.Marshal(resp)
+	// Encode using bare sequence (same form MarshalMmsPduBareSequence produces).
+	content, err := marshalBareSequence(resp)
 	if err != nil {
-		t.Fatalf("asn1.Marshal response: %v", err)
+		t.Fatalf("marshalBareSequence response: %v", err)
 	}
 
 	decoded, err := UnmarshalInitiateResponse(content)

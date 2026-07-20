@@ -102,8 +102,9 @@ func TestMarshalDeleteNamedVarListRequest(t *testing.T) {
 }
 
 func TestUnmarshalDeleteNamedVarListResponse(t *testing.T) {
-	matched := berutil.EncodeTLV(0x02, []byte{0x01}) // 1
-	deleted := berutil.EncodeTLV(0x02, []byte{0x01}) // 1
+	// Wire format: numberMatched [0] IMPLICIT = 0x80, numberDeleted [1] IMPLICIT = 0x81
+	matched := berutil.EncodeTLV(0x80, []byte{0x01}) // 1
+	deleted := berutil.EncodeTLV(0x81, []byte{0x01}) // 1
 
 	content := append(matched, deleted...)
 	serviceData := asn1.RawValue{

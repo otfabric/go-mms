@@ -21,13 +21,24 @@ type ObjectNameWire struct {
 	ItemID   string
 }
 
-// BER tags used in Read request/response encoding.
+// BER tags used in Read/Write request and response encoding.
 const (
 	tagVisibleString byte = 0x1a // UNIVERSAL 26
 	tagInteger       byte = 0x02 // UNIVERSAL 2
 	tagSequence      byte = 0x30 // UNIVERSAL 16, constructed
-	tagListOfVar     byte = 0xa0 // [0] CONSTRUCTED (listOfVariable)
-	tagVarListName   byte = 0xa1 // [1] CONSTRUCTED (variableListName)
+
+	// VariableAccessSpecification CHOICE alternatives (ISO 9506-2 §15.3).
+	tagListOfVar   byte = 0xa0 // listOfVariable      [0] CONSTRUCTED
+	tagVarListName byte = 0xa1 // variableListName    [1] CONSTRUCTED
+
+	// ReadRequest.variableAccessSpecification [1] EXPLICIT (MMS ASN.1 definition).
+	tagReadVarAccessSpec byte = 0xa1
+
+	// ReadResponse.listOfAccessResult [1] IMPLICIT SEQUENCE OF (MMS ASN.1 definition).
+	tagReadListOfAccessResult byte = 0xa1
+
+	// WriteRequest.listOfData [0] IMPLICIT SEQUENCE OF (MMS ASN.1 definition).
+	tagWriteListOfData byte = 0xa0
 )
 
 // EncodeObjectName encodes an ObjectName for the wire.
@@ -119,17 +130,29 @@ func decodeDomainSpecificName(data []byte) (ObjectNameWire, error) {
 
 // MarshalReadRequest builds a complete ConfirmedRequestPdu for the
 // MMS Read service with a list of domain-specific variables.
+//
+// ReadRequest.variableAccessSpecification is tagged [1] EXPLICIT in the MMS
+// ASN.1 definition, so the VariableAccessSpecification CHOICE value is wrapped
+// in an outer tagReadVarAccessSpec (0xa1) context tag.
 func MarshalReadRequest(invokeID codec.InvokeID, vars []ObjectNameWire) ([]byte, error) {
 	varSpec, err := encodeListOfVariable(vars)
 	if err != nil {
 		return nil, fmt.Errorf("pdu: read request: %w", err)
 	}
-	return marshalConfirmedLegacy(invokeID, asn1util.TagServiceRead, varSpec)
+	return marshalConfirmedLegacy(invokeID, asn1util.TagServiceRead,
+		berutil.EncodeTLV(tagReadVarAccessSpec, varSpec))
 }
 
 // UnmarshalReadResponse parses a Read response from the service
 // RawValue inside a ConfirmedResponsePdu. Returns the list of
 // AccessResult values (each is either a Data value or a DataAccessError).
+//
+// ReadResponse fields per the MMS ASN.1 definition:
+//   - variableAccessSpecification [0] EXPLICIT (optional)
+//   - listOfAccessResult [1] IMPLICIT SEQUENCE OF (tagReadListOfAccessResult = 0xa1)
+//
+// The surrounding context-specific tag is IMPLICIT and therefore replaces
+// the universal SEQUENCE tag.
 func UnmarshalReadResponse(serviceData asn1.RawValue) ([]*DataValue, error) {
 	content := serviceData.Bytes
 	if len(content) == 0 {
@@ -138,7 +161,7 @@ func UnmarshalReadResponse(serviceData asn1.RawValue) ([]*DataValue, error) {
 
 	offset := 0
 
-	// Skip optional variableAccessSpecification [0]
+	// Skip optional variableAccessSpecification [0] EXPLICIT
 	if offset < len(content) && content[offset] == tagListOfVar {
 		_, _, n, err := berutil.DecodeTLVAt(content, offset)
 		if err != nil {
@@ -147,7 +170,7 @@ func UnmarshalReadResponse(serviceData asn1.RawValue) ([]*DataValue, error) {
 		offset += n
 	}
 
-	// Parse listOfAccessResult SEQUENCE OF
+	// listOfAccessResult [1] IMPLICIT SEQUENCE OF
 	if offset >= len(content) {
 		return nil, fmt.Errorf("pdu: read response: missing access result list")
 	}
@@ -157,8 +180,8 @@ func UnmarshalReadResponse(serviceData asn1.RawValue) ([]*DataValue, error) {
 		return nil, fmt.Errorf("pdu: read response: list: %w", err)
 	}
 	offset += n
-	if tag != tagSequence {
-		return nil, fmt.Errorf("pdu: read response: expected SEQUENCE OF (0x30), got 0x%02x", tag)
+	if tag != tagReadListOfAccessResult {
+		return nil, fmt.Errorf("pdu: read response: expected listOfAccessResult [1] (0xa1), got 0x%02x", tag)
 	}
 
 	if offset != len(content) {
@@ -175,7 +198,9 @@ func encodeListOfVariable(vars []ObjectNameWire) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("variable [%d]: %w", i, err)
 		}
-		seq := berutil.EncodeTLV(tagSequence, nameBytes)
+		// VariableSpecification.name [0] EXPLICIT ObjectName (ISO 9506-2 §15.4)
+		varSpec := berutil.EncodeTLV(tagVarSpecName, nameBytes)
+		seq := berutil.EncodeTLV(tagSequence, varSpec)
 		inner = append(inner, seq...)
 	}
 	return berutil.EncodeTLV(tagListOfVar, inner), nil
@@ -188,7 +213,8 @@ func MarshalReadRequestWithAccess(invokeID codec.InvokeID, vars []VariableSpecWi
 	if err != nil {
 		return nil, fmt.Errorf("pdu: read request: %w", err)
 	}
-	return marshalConfirmedLegacy(invokeID, asn1util.TagServiceRead, varSpec)
+	return marshalConfirmedLegacy(invokeID, asn1util.TagServiceRead,
+		berutil.EncodeTLV(tagReadVarAccessSpec, varSpec))
 }
 
 // MarshalWriteRequestWithAccess builds a ConfirmedRequestPdu for the
@@ -207,7 +233,8 @@ func MarshalWriteRequestWithAccess(invokeID codec.InvokeID, vars []VariableSpecW
 	if err != nil {
 		return nil, fmt.Errorf("pdu: write request: marshal data: %w", err)
 	}
-	dataList := berutil.EncodeTLV(tagSequence, dataContent)
+	// WriteRequest.listOfData [0] IMPLICIT SEQUENCE OF (MMS ASN.1 definition)
+	dataList := berutil.EncodeTLV(tagWriteListOfData, dataContent)
 
 	payload := make([]byte, 0, len(varSpec)+len(dataList))
 	payload = append(payload, varSpec...)
@@ -224,8 +251,9 @@ func encodeListOfVariableWithAccess(vars []VariableSpecWire) ([]byte, error) {
 			return nil, fmt.Errorf("variable [%d]: %w", i, err)
 		}
 
+		// VariableSpecification.name [0] EXPLICIT ObjectName (ISO 9506-2 §15.4)
 		var seqContent []byte
-		seqContent = append(seqContent, nameBytes...)
+		seqContent = append(seqContent, berutil.EncodeTLV(tagVarSpecName, nameBytes)...)
 
 		if len(v.AlternateAccess) > 0 {
 			aaBytes, err := encodeAlternateAccess(v.AlternateAccess)
@@ -248,7 +276,8 @@ func MarshalReadRequestByListName(invokeID codec.InvokeID, listName ObjectNameWi
 		return nil, fmt.Errorf("pdu: read by list name: %w", err)
 	}
 	varSpec := berutil.EncodeTLV(tagVarListName, nameBytes)
-	return marshalConfirmedLegacy(invokeID, asn1util.TagServiceRead, varSpec)
+	return marshalConfirmedLegacy(invokeID, asn1util.TagServiceRead,
+		berutil.EncodeTLV(tagReadVarAccessSpec, varSpec))
 }
 
 // MarshalReadRequestByListNameWithSpec builds a ConfirmedRequestPdu for
@@ -262,7 +291,8 @@ func MarshalReadRequestByListNameWithSpec(invokeID codec.InvokeID, listName Obje
 	if err != nil {
 		return nil, fmt.Errorf("pdu: read by list name: %w", err)
 	}
-	payload = append(payload, berutil.EncodeTLV(tagVarListName, nameBytes)...)
+	varSpec := berutil.EncodeTLV(tagVarListName, nameBytes)
+	payload = append(payload, berutil.EncodeTLV(tagReadVarAccessSpec, varSpec)...)
 	return marshalConfirmedLegacy(invokeID, asn1util.TagServiceRead, payload)
 }
 
@@ -279,7 +309,8 @@ func MarshalWriteRequestByListName(invokeID codec.InvokeID, listName ObjectNameW
 	if err != nil {
 		return nil, fmt.Errorf("pdu: write by list name: marshal data: %w", err)
 	}
-	dataList := berutil.EncodeTLV(tagSequence, dataContent)
+	// WriteRequest.listOfData [0] IMPLICIT SEQUENCE OF (MMS ASN.1 definition)
+	dataList := berutil.EncodeTLV(tagWriteListOfData, dataContent)
 
 	payload := make([]byte, 0, len(varSpec)+len(dataList))
 	payload = append(payload, varSpec...)

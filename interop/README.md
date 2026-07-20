@@ -1,62 +1,38 @@
-# Go↔C Interop Harness
+# go-mms interoperability tests
 
-This directory contains scripts and test programs for verifying go-mms
-against the C reference implementation (libIEC61850).
+This package contains interoperability tests for `go-mms` against independent MMS implementations provided by [mms-interop](https://github.com/otfabric/mms-interop).
 
-## C source layout
+## Test directions
 
-The `../sources/mms/` tree contains the MMS-layer source extracted from
-[libIEC61850](https://github.com/mz-automation/libIEC61850). It includes
-the ISO stack (COTP, session, presentation, ACSE) and the MMS client/server
-codec, but does **not** include the full library build system or example
-programs.
+| File | Go role | Adapter counterpart |
+|------|---------|---------------------|
+| `libiec61850_client_test.go` | MMS client | `libiec61850-mms-server` |
+| `libiec61850_server_test.go` | MMS server | `libiec61850-mms-client` |
 
-To run interop tests you need the complete libIEC61850 checkout so that
-the `server_example_basic_io` binary can be built.
+Tests start adapter containers, wait for the readiness event, exercise the `go-mms` API, and assert results. No pre-running containers are required.
 
-## Prerequisites
-
-- Go 1.23+
-- GCC or Clang
-- CMake 3.10+
-- A full libIEC61850 clone (see below)
-
-## Building the C server
+## Running
 
 ```bash
-# Clone the full libIEC61850 repo (if not already present)
-git clone https://github.com/mz-automation/libIEC61850.git /tmp/libIEC61850
+# Build the adapter images first (in mms-interop)
+cd ../mms-interop && make build
 
-# Build
-cd /tmp/libIEC61850
-mkdir -p build && cd build
-cmake ..
-make -j$(nproc)
+# Run all interop tests
+LIBIEC61850_IMAGE=mms-interop-libiec61850:local make interop
+
+# Or using a published image
+LIBIEC61850_IMAGE=ghcr.io/otfabric/mms-interop-libiec61850:v0.1.0 make interop
 ```
 
-The server example binary will be at:
+## Environment variables
 
-```
-/tmp/libIEC61850/build/examples/server_example_basic_io/server_example_basic_io
-```
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LIBIEC61850_IMAGE` | Docker image for the libiec61850 adapter | `mms-interop-libiec61850:local` |
+| `MMS_SERVER_BINARY` | Path to `libiec61850-mms-server` binary (skips Docker) | — |
+| `MMS_CLIENT_BINARY` | Path to `libiec61850-mms-client` binary (skips Docker) | — |
+| `MMS_FIXTURE` | Path to the fixture JSON file | `testdata/interop.json` |
 
-## Running interop tests
+## Fixture
 
-```bash
-# Start C server (set INTEROP_SERVER_BIN if using a non-default path)
-./interop/start_c_server.sh
-
-# Run Go client tests against it
-go test -tags interop -v ./interop/...
-
-# Stop C server
-./interop/stop_c_server.sh
-```
-
-## Custom server address
-
-Set `MMS_INTEROP_ADDR` to override the default `localhost:102`:
-
-```bash
-MMS_INTEROP_ADDR=192.168.1.100:102 go test -tags interop -v ./interop/...
-```
+`testdata/interop.json` defines the MMS domain, variable types and initial values that both the adapter server and the `go-mms` server fixture expose. It is versioned alongside the pinned adapter image.
