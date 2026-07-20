@@ -187,6 +187,22 @@ func (s *Server) RegisterVariable(v Variable) error {
 	return s.registry.RegisterVariable(entry)
 }
 
+// SetVariableRead replaces the read handler of a previously registered
+// domain-scoped variable. This is intended for post-registration
+// configuration, such as installing control-model-specific read handlers
+// on CO attributes after the server model has been fully built.
+//
+// Returns an error if no domain-scoped variable with the given domain
+// and itemID exists.
+func (s *Server) SetVariableRead(domain, itemID string, fn func(context.Context) (*Value, error)) error {
+	entry, ok := s.registry.LookupVariable(int(ObjectScopeDomain), domain, itemID)
+	if !ok {
+		return fmt.Errorf("mms: SetVariableRead: variable %s/%s not found", domain, itemID)
+	}
+	entry.ReadFunc = fn
+	return nil
+}
+
 // RegisterNamedVariableList adds a static named variable list to the
 // server's MMS object model. The list's domain (if domain-scoped) must
 // already be registered via [Server.RegisterDomain].
