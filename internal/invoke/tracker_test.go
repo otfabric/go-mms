@@ -285,3 +285,78 @@ func TestAllocateWithIDConcurrent(t *testing.T) {
 
 	wg.Wait()
 }
+
+// TestInvokeIDWraparound verifies that the tracker skips ID 0 when the
+// uint32 counter wraps from 0xFFFFFFFF back to 0.
+func TestInvokeIDWraparound(t *testing.T) {
+	tr := NewTracker(0)
+	// Force nextID to the maximum uint32 value minus 1 so the next Allocate
+	// will wrap through 0 and land on 1.
+	tr.mu.Lock()
+	tr.nextID = 0xFFFFFFFE
+	tr.mu.Unlock()
+
+	id1, _, _ := tr.Allocate()
+	if id1 != 0xFFFFFFFF {
+		t.Fatalf("expected 0xFFFFFFFF, got %d", id1)
+	}
+	tr.Cancel(id1, nil)
+
+	// Wrap: nextID increments to 0x100000000 → truncated to 0 → skipped → 1.
+	id2, _, _ := tr.Allocate()
+	if id2 == 0 {
+		t.Fatal("invoke ID 0 must never be issued")
+	}
+	if id2 != 1 {
+		t.Fatalf("expected 1 after wraparound, got %d", id2)
+	}
+	tr.Cancel(id2, nil)
+}
+
+// TestOutOfOrderResponses verifies that the tracker correctly delivers
+// responses to the right caller when responses arrive in an order
+// different from the requests.
+func TestOutOfOrderResponses(t *testing.T) {
+	tr := NewTracker(0)
+
+	id1, ch1, _ := tr.Allocate()
+	id2, ch2, _ := tr.Allocate()
+	id3, ch3, _ := tr.Allocate()
+
+	// Respond in reverse order.
+	tr.Complete(id3, Response{Kind: 3})
+	tr.Complete(id1, Response{Kind: 1})
+	tr.Complete(id2, Response{Kind: 2})
+
+	r3 := <-ch3
+	r1 := <-ch1
+	r2 := <-ch2
+
+	if r1.Kind != 1 || r2.Kind != 2 || r3.Kind != 3 {
+		t.Errorf("out-of-order delivery mismatch: r1.Kind=%d r2.Kind=%d r3.Kind=%d", r1.Kind, r2.Kind, r3.Kind)
+	}
+}
+
+// TestResponseForUnknownInvokeID verifies that Complete returns false
+// for an ID that was never allocated (or already completed).
+func TestResponseForUnknownInvokeID(t *testing.T) {
+	tr := NewTracker(0)
+	delivered := tr.Complete(9999, Response{Kind: 42})
+	if delivered {
+		t.Error("Complete should return false for an unknown invoke ID")
+	}
+}
+
+// TestLateResponseAfterCancel verifies that a response arriving after
+// the caller timed out and cancelled does not panic or block.
+func TestLateResponseAfterCancel(t *testing.T) {
+	tr := NewTracker(0)
+	id, _, _ := tr.Allocate()
+	// Caller times out and cancels.
+	tr.Cancel(id, fmt.Errorf("timeout"))
+	// Late server response arrives — must not panic or deadlock.
+	delivered := tr.Complete(id, Response{Kind: 1})
+	if delivered {
+		t.Error("Complete after Cancel should return false")
+	}
+}

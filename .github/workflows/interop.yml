@@ -33,7 +33,7 @@ jobs:
 
       - name: Run interop suite
         env:
-          LIBIEC61850_IMAGE: ghcr.io/otfabric/mms-interop-libiec61850@sha256:29bca666d5cc42b19ccd2feca51397bde67123366eb2be07984dc9cf91411a23
+          LIBIEC61850_IMAGE: ghcr.io/otfabric/mms-interop-libiec61850@sha256:bbe651eea580acc3335de0d3587ccff1f4161126474234e446fb4f8bedea1e89
         run: make interop
 
       - name: Collect Docker diagnostics

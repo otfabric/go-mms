@@ -1,5 +1,22 @@
 # go-mms Releases
 
+## v1.0.2
+
+**Fixed**: `Server.handleWrite` now propagates specific `DataAccessError` codes from write handlers.
+
+Previously, any error returned by a variable write handler that was not a `*DataAccessError` was mapped to `TemporarilyUnavailable`. A `*DataAccessError` with a non-`None` code was also silently coerced to the same value. Write handlers (e.g. those installed by `go-iec61850`'s `ReportEngine.HandleRCBWrite` or `RegisterControl`) can now return precise codes such as `DataAccessErrorObjectAccessDenied` or `DataAccessErrorTypeUnsupported`, which are carried verbatim to the client in the `WriteResponse`.
+
+**Added**: Invoke-ID edge-case tests in `internal/invoke/tracker_test.go`.
+
+New unit tests covering correctness at the boundary of the `Tracker` protocol:
+- `TestInvokeIDWraparound` — ID counter wraps from `0xFFFFFFFF` through `0` (skipped) to `1`; ID `0` is never issued.
+- `TestOutOfOrderResponses` — responses completed in reverse allocation order are each delivered to their correct channel.
+- `TestResponseForUnknownInvokeID` — `Complete` on an unknown ID is a no-op, not a panic.
+- `TestLateResponseAfterCancel` — a `Complete` that races with `Cancel` is safely discarded.
+- `TestConcurrentAllocate` — 100 goroutines allocate concurrently; all receive unique, non-zero IDs.
+
+---
+
 ## v1.0.1
 
 **Added**: `Server.SetVariableRead(domain, itemID, fn)` — replaces the read handler of a previously registered domain-scoped variable at runtime. Intended for post-registration configuration such as installing control-model-specific read handlers on CO attributes (e.g. `SBO[CO]` for SBO-normal controls) after the server model has been fully built.

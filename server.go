@@ -1083,7 +1083,12 @@ func (s *Server) handleWrite(ctx context.Context, body []byte) (int, bool, []byt
 		}
 
 		if err := writeFn(ctx, val); err != nil {
-			results = append(results, pdu.WriteResult{Code: wireErrCode(wireErrTempUnavail)})
+			var dae *DataAccessError
+			if errors.As(err, &dae) && dae.Code != DataAccessErrorNone {
+				results = append(results, pdu.WriteResult{Code: wireErrCode(dae.Code)})
+			} else {
+				results = append(results, pdu.WriteResult{Code: wireErrCode(wireErrTempUnavail)})
+			}
 			continue
 		}
 		results = append(results, pdu.WriteResult{Success: true})
