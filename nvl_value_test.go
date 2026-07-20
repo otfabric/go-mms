@@ -23,7 +23,7 @@ func nvlValueTestSetup(t *testing.T) *Client {
 	var valid = true
 	var mu sync.Mutex
 
-	srv.RegisterVariable(Variable{
+	if err := srv.RegisterVariable(Variable{
 		Name:     ObjectName{Scope: ObjectScopeDomain, Domain: "dom", ItemID: "temp"},
 		TypeSpec: TypeSpec{Type: ValueTypeFloat, FormatWidth: 64, ExponentWidth: 11},
 		Read: func(_ context.Context) (*Value, error) {
@@ -41,9 +41,11 @@ func nvlValueTestSetup(t *testing.T) *Client {
 			temp = f
 			return nil
 		},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
-	srv.RegisterVariable(Variable{
+	if err := srv.RegisterVariable(Variable{
 		Name:     ObjectName{Scope: ObjectScopeDomain, Domain: "dom", ItemID: "valid"},
 		TypeSpec: TypeSpec{Type: ValueTypeBoolean},
 		Read: func(_ context.Context) (*Value, error) {
@@ -61,7 +63,9 @@ func nvlValueTestSetup(t *testing.T) *Client {
 			valid = b
 			return nil
 		},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	client := connectClientServer(t, srv)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -107,7 +111,7 @@ func TestReadNamedVariableListEndToEnd(t *testing.T) {
 		t.Errorf("results[1] = %v/%v, want true", b, ok)
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestWriteNamedVariableListEndToEnd(t *testing.T) {
@@ -146,7 +150,7 @@ func TestWriteNamedVariableListEndToEnd(t *testing.T) {
 		t.Errorf("after write: results[1] = %v/%v, want false", b, ok)
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestReadObjectEndToEnd(t *testing.T) {
@@ -166,7 +170,7 @@ func TestReadObjectEndToEnd(t *testing.T) {
 		t.Errorf("got %v/%v, want 21.5", f, ok)
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestWriteObjectEndToEnd(t *testing.T) {
@@ -193,7 +197,7 @@ func TestWriteObjectEndToEnd(t *testing.T) {
 		t.Errorf("after write: got %v/%v, want 99.9", f, ok)
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestReadNVLUnknownList(t *testing.T) {
@@ -216,7 +220,7 @@ func TestReadNVLUnknownList(t *testing.T) {
 		t.Errorf("error class = %s, want Access (object-non-existent)", svcErr.Class)
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestWriteNVLUnknownList(t *testing.T) {
@@ -239,5 +243,5 @@ func TestWriteNVLUnknownList(t *testing.T) {
 		t.Errorf("error class = %s, want Access (object-non-existent)", svcErr.Class)
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }

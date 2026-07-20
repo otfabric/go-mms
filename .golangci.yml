@@ -13,26 +13,12 @@ linters:
     - exhaustive     # exhaustive switch on enums
   settings:
     exhaustive:
-      default-signifies-exhaustive: true  # a default: case satisfies exhaustiveness
-  exclusions:
-    paths:
-      - sources
-    rules:
-      - linters:
-          - errcheck
-        path: _test\.go$
-      - linters:
-          - staticcheck
-        text: "SA2002"
-        path: _test\.go$
+      default-signifies-exhaustive: true
 
 formatters:
   enable:
     - gofmt          # formatting
     - goimports      # import grouping / formatting
-  exclusions:
-    paths:
-      - examples
 
 issues:
   max-issues-per-linter: 0

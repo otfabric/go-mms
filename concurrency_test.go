@@ -60,7 +60,7 @@ func TestConcurrentReads(t *testing.T) {
 		t.Errorf("concurrent read error: %v", err)
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 // TestContextCancellationDuringRead verifies that cancelling the context
@@ -216,7 +216,7 @@ func TestOperationsAfterClose(t *testing.T) {
 		srv.sendConcludeResponse(ctx)
 	}()
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 
 	_, err = client.Read(ctx, ReadRequest{DomainID: "D", ItemID: "V"})
 	if err == nil {

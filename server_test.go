@@ -240,7 +240,7 @@ func waitForConnections(t *testing.T, srv *Server, want int, timeout time.Durati
 func TestServerIdentify(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -263,7 +263,7 @@ func TestServerIdentify(t *testing.T) {
 func TestServerStatus(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -283,7 +283,7 @@ func TestServerStatus(t *testing.T) {
 func TestServerGetNameListDomains(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -306,7 +306,7 @@ func TestServerGetNameListDomains(t *testing.T) {
 func TestServerGetNameListVariables(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -333,7 +333,7 @@ func TestServerGetNameListVariables(t *testing.T) {
 func TestServerGetVariableAccessAttributes(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -357,7 +357,7 @@ func TestServerGetVariableAccessAttributes(t *testing.T) {
 func TestServerRead(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -381,7 +381,7 @@ func TestServerRead(t *testing.T) {
 func TestServerReadInteger(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -405,7 +405,7 @@ func TestServerReadInteger(t *testing.T) {
 func TestServerWrite(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -455,7 +455,7 @@ func TestServerConclude(t *testing.T) {
 func TestServerMultipleSequentialRequests(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -528,7 +528,7 @@ func TestServerConcurrentClients(t *testing.T) {
 			defer wg.Done()
 
 			client := connectClientServer(t, srv)
-			defer client.Close(context.Background())
+			defer func() { _ = client.Close(context.Background()) }()
 
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -565,7 +565,7 @@ func TestServerConcurrentClients(t *testing.T) {
 func TestServerReadNonExistentVariable(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -588,7 +588,7 @@ func TestServerReadNonExistentVariable(t *testing.T) {
 func TestServerWriteReadOnly(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -610,7 +610,7 @@ func TestServerWriteReadOnly(t *testing.T) {
 func TestServerGetNameListUnsupportedObjectClass(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -628,7 +628,7 @@ func TestServerGetNameListUnsupportedObjectClass(t *testing.T) {
 func TestServerGetNameListDomainScopeForDomains(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -647,7 +647,7 @@ func TestServerGetNameListDomainScopeForDomains(t *testing.T) {
 func TestServerReadNonExistentDomain(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -670,7 +670,7 @@ func TestServerReadNonExistentDomain(t *testing.T) {
 func TestServerGetVarAccessNonExistent(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -701,7 +701,7 @@ func TestServerStatusExtendedDerivation(t *testing.T) {
 	})
 
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -757,7 +757,7 @@ func TestServerNoIdentifyHandler(t *testing.T) {
 	})
 
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -776,7 +776,7 @@ func TestServerNoStatusHandler(t *testing.T) {
 	})
 
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -793,7 +793,7 @@ func TestServerNoStatusHandler(t *testing.T) {
 func TestServerDefineAndGetNVLAttributes(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -833,7 +833,7 @@ func TestServerDefineAndGetNVLAttributes(t *testing.T) {
 func TestServerDeleteNVL(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -870,7 +870,7 @@ func TestServerDeleteNVL(t *testing.T) {
 func TestServerGetNameListNVL(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -914,7 +914,7 @@ func TestServerGetNameListNVL(t *testing.T) {
 func TestServerDefineNVLDuplicate(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -941,7 +941,7 @@ func TestServerDefineNVLDuplicate(t *testing.T) {
 func TestServerDeleteNonExistentNVL(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -963,7 +963,7 @@ func TestServerDeleteNonExistentNVL(t *testing.T) {
 func TestServerNVLFullLifecycle(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1094,7 +1094,7 @@ func TestServerInformationReport(t *testing.T) {
 		t.Fatal("timeout waiting for InformationReport")
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestServerInformationReportNamedList(t *testing.T) {
@@ -1135,7 +1135,7 @@ func TestServerInformationReportNamedList(t *testing.T) {
 		t.Fatal("timeout waiting for InformationReport")
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestServerBroadcast(t *testing.T) {
@@ -1197,8 +1197,8 @@ func TestServerBroadcast(t *testing.T) {
 		}
 	}
 
-	client1.Close(tctx)
-	client2.Close(tctx)
+	_ = client1.Close(tctx)
+	_ = client2.Close(tctx)
 }
 
 func TestInfoReportConcurrentWithConfirmed(t *testing.T) {
@@ -1264,7 +1264,7 @@ done:
 		t.Errorf("received %d reports, want 5", reportCount)
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestInfoReportNoHandler(t *testing.T) {
@@ -1294,7 +1294,7 @@ func TestInfoReportNoHandler(t *testing.T) {
 		t.Errorf("vendor = %q, want TestVendor", ident.Vendor)
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestServerConnRemovedAfterClose(t *testing.T) {
@@ -1305,7 +1305,7 @@ func TestServerConnRemovedAfterClose(t *testing.T) {
 
 	waitForConnections(t, srv, 1, 2*time.Second)
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 
 	waitForConnections(t, srv, 0, 2*time.Second)
 }
@@ -1347,7 +1347,7 @@ func TestInfoReportHandlerPanicDoesNotKillClient(t *testing.T) {
 		t.Errorf("vendor = %q, want TestVendor", ident.Vendor)
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestInfoReportRequestValidation(t *testing.T) {
@@ -1391,7 +1391,7 @@ func TestInfoReportRequestValidation(t *testing.T) {
 		})
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestServerConnSendAfterClose(t *testing.T) {
@@ -1403,7 +1403,7 @@ func TestServerConnSendAfterClose(t *testing.T) {
 	waitForConnections(t, srv, 1, 2*time.Second)
 	sc := srv.Connections()[0]
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 	waitForConnections(t, srv, 0, 2*time.Second)
 
 	err := sc.SendInformationReport(ctx, &InformationReportRequest{
@@ -1484,7 +1484,7 @@ func TestAuthenticatorPasswordAccept(t *testing.T) {
 		t.Errorf("auth token = %v, want operator-1", sc.AuthToken())
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestAuthenticatorRejectsConnection(t *testing.T) {
@@ -1556,7 +1556,7 @@ func TestAuthenticatorNoAuthAcceptsAll(t *testing.T) {
 		t.Errorf("vendor = %q, want TestVendor", id.Vendor)
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestAuthenticatorNoneNilFields(t *testing.T) {
@@ -1597,7 +1597,7 @@ func TestAuthenticatorNoneNilFields(t *testing.T) {
 		t.Errorf("MechanismOID should be nil, got %v", gotAuth.MechanismOID)
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestAuthenticatorPasswordWithAPTitle(t *testing.T) {
@@ -1666,7 +1666,7 @@ func TestAuthenticatorPasswordWithAPTitle(t *testing.T) {
 		t.Errorf("AuthToken = %v, want session-42", sc.AuthToken())
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestAuthenticatorRejectsViaError(t *testing.T) {
@@ -1716,7 +1716,7 @@ func TestAuthenticatorTokenNilWhenNoAuthenticator(t *testing.T) {
 		t.Errorf("AuthToken should be nil, got %v", sc.AuthToken())
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestAuthContextDefensiveCopyPassword(t *testing.T) {
@@ -1757,7 +1757,7 @@ func TestAuthContextDefensiveCopyPassword(t *testing.T) {
 	if string(gotAuth.Password) != "original" {
 		t.Errorf("AuthContext.Password mutated: got %q, want %q", gotAuth.Password, "original")
 	}
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestAuthContextDefensiveCopyAPTitle(t *testing.T) {
@@ -1819,7 +1819,7 @@ func TestAuthContextDefensiveCopyAPTitle(t *testing.T) {
 		t.Errorf("AEQualifier = %d, want 7", original)
 	}
 
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestAuthRemoteAddrOnPlaintextISO(t *testing.T) {
@@ -1849,7 +1849,7 @@ func TestAuthRemoteAddrOnPlaintextISO(t *testing.T) {
 	if gotAuth.RemoteAddr != nil {
 		t.Errorf("RemoteAddr should be nil for chanTransport, got %v", gotAuth.RemoteAddr)
 	}
-	client.Close(ctx)
+	_ = client.Close(ctx)
 }
 
 func TestBuildAuthContextUnknownACSEPlusTLS(t *testing.T) {
@@ -2117,7 +2117,7 @@ func TestClientAbort(t *testing.T) {
 func TestClientNegotiated(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	np := client.Negotiated()
 	if np.MaxPDUSize == 0 {
@@ -2158,7 +2158,7 @@ func TestObjectScopeToWire(t *testing.T) {
 func TestHandleReject(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	rejectContent := codec.MarshalRejectPDU(1, 1, 0)
 	_, rejectInner, err := codec.UnwrapPdu(rejectContent)
@@ -2181,7 +2181,7 @@ func TestHandleReject(t *testing.T) {
 func TestConcurrentClientRequests(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	var wg sync.WaitGroup
 	const goroutines = 20
@@ -2206,7 +2206,7 @@ func TestConcurrentClientRequests(t *testing.T) {
 func TestConcurrentReadWrite(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	var wg sync.WaitGroup
 	const goroutines = 10
@@ -2671,7 +2671,7 @@ func TestServerAssocVarGetVarAccessEndToEnd(t *testing.T) {
 func TestServerDeleteAllDomainNVLs(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -2727,7 +2727,7 @@ func TestServerDeleteAllDomainNVLs(t *testing.T) {
 func TestServerDeleteAllDomainNVLsEmptyDomain(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -2741,7 +2741,7 @@ func TestServerDeleteAllDomainNVLsEmptyDomain(t *testing.T) {
 func TestServerDeleteAllVMDNVLs(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -2795,7 +2795,7 @@ func TestServerDeleteAllVMDNVLs(t *testing.T) {
 func TestServerDeleteAllDomainNVLsNonDeletable(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

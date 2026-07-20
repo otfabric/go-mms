@@ -156,7 +156,7 @@ func main() {
 }
 ```
 
-See [`_examples/`](_examples/) for complete runnable examples.
+See [`examples/`](examples/) for complete runnable examples.
 
 ## Architecture
 
@@ -212,10 +212,11 @@ remaining API-compatible.
 ## Documentation
 
 - [`examples/`](examples/) — runnable client and server examples
+- [`API.md`](API.md) — complete public API reference (types, methods, constants)
 - [`INTEROP.md`](INTEROP.md) — interoperability tests and MMS compatibility matrix
 - [`COMPLIANCE.md`](COMPLIANCE.md) — service support matrix with test coverage
 - [`ERRORS.md`](ERRORS.md) — error taxonomy and handling guide
-- [pkg.go.dev](https://pkg.go.dev/github.com/otfabric/go-mms) — API reference
+- [pkg.go.dev](https://pkg.go.dev/github.com/otfabric/go-mms) — generated API reference
 
 ## License
 

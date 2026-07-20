@@ -49,7 +49,7 @@ func TestDoubleCloseConcurrent(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		go func() {
 			defer wg.Done()
-			client.Close(context.Background())
+			_ = client.Close(context.Background())
 		}()
 	}
 
@@ -69,7 +69,7 @@ func TestDoubleCloseConcurrent(t *testing.T) {
 func TestContextCancellationDuringRequest(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
-	defer client.Close(context.Background())
+	defer func() { _ = client.Close(context.Background()) }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 

@@ -21,8 +21,8 @@ import (
 
 func TestCOTPTransportRoundTrip(t *testing.T) {
 	clientConn, serverConn := tcpLoopbackTransport(t)
-	defer clientConn.Close()
-	defer serverConn.Close()
+	defer func() { _ = clientConn.Close() }()
+	defer func() { _ = serverConn.Close() }()
 
 	ctx := context.Background()
 	msg := []byte("hello from client")
@@ -58,7 +58,7 @@ func TestDialTCPAndListen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -79,13 +79,13 @@ func TestDialTCPAndListen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer clientConn.Close()
+	defer func() { _ = clientConn.Close() }()
 
 	wg.Wait()
 	if acceptErr != nil {
 		t.Fatalf("accept: %v", acceptErr)
 	}
-	defer serverConn.Close()
+	defer func() { _ = serverConn.Close() }()
 
 	msg := []byte("integration test data")
 	if err := clientConn.Send(ctx, msg); err != nil {
@@ -102,7 +102,7 @@ func TestDialTCPAndListen(t *testing.T) {
 
 func TestTransportCloseIdempotent(t *testing.T) {
 	clientConn, serverConn := tcpLoopbackTransport(t)
-	defer serverConn.Close()
+	defer func() { _ = serverConn.Close() }()
 
 	if err := clientConn.Close(); err != nil {
 		t.Fatalf("first close: %v", err)
@@ -114,9 +114,9 @@ func TestTransportCloseIdempotent(t *testing.T) {
 
 func TestTransportSendAfterClose(t *testing.T) {
 	clientConn, serverConn := tcpLoopbackTransport(t)
-	defer serverConn.Close()
+	defer func() { _ = serverConn.Close() }()
 
-	clientConn.Close()
+	_ = clientConn.Close()
 	err := clientConn.Send(context.Background(), []byte("data"))
 	if err == nil {
 		t.Fatal("expected error on send after close")
@@ -131,16 +131,16 @@ func TestTransportSendAfterClose(t *testing.T) {
 // not deadlock.
 func TestSendAfterCloseNoDeadlock(t *testing.T) {
 	clientConn, serverConn := tcpLoopbackTransport(t)
-	defer serverConn.Close()
+	defer func() { _ = serverConn.Close() }()
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		ctx := context.Background()
-		clientConn.Send(ctx, []byte("before close"))
-		clientConn.Close()
-		clientConn.Send(ctx, []byte("after close"))
-		clientConn.Close()
+		_ = clientConn.Send(ctx, []byte("before close"))
+		_ = clientConn.Close()
+		_ = clientConn.Send(ctx, []byte("after close"))
+		_ = clientConn.Close()
 	}()
 
 	select {
@@ -152,9 +152,9 @@ func TestSendAfterCloseNoDeadlock(t *testing.T) {
 
 func TestReceiveAfterClose(t *testing.T) {
 	clientConn, serverConn := tcpLoopbackTransport(t)
-	defer serverConn.Close()
+	defer func() { _ = serverConn.Close() }()
 
-	clientConn.Close()
+	_ = clientConn.Close()
 	_, err := clientConn.Receive(context.Background())
 	if err == nil {
 		t.Fatal("expected error on receive after close")
@@ -166,7 +166,7 @@ func TestReceiveAfterClose(t *testing.T) {
 
 func TestConcurrentCloseSend(t *testing.T) {
 	clientConn, serverConn := tcpLoopbackTransport(t)
-	defer serverConn.Close()
+	defer func() { _ = serverConn.Close() }()
 
 	ctx := context.Background()
 	var wg sync.WaitGroup
@@ -175,13 +175,13 @@ func TestConcurrentCloseSend(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		time.Sleep(10 * time.Millisecond)
-		clientConn.Close()
+		_ = clientConn.Close()
 	}()
 
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 100; i++ {
-			clientConn.Send(ctx, []byte("data"))
+			_ = clientConn.Send(ctx, []byte("data"))
 		}
 	}()
 
@@ -197,7 +197,7 @@ func TestConcurrentCloseSend(t *testing.T) {
 
 func TestConcurrentCloseReceive(t *testing.T) {
 	clientConn, serverConn := tcpLoopbackTransport(t)
-	defer serverConn.Close()
+	defer func() { _ = serverConn.Close() }()
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -205,14 +205,14 @@ func TestConcurrentCloseReceive(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		time.Sleep(50 * time.Millisecond)
-		clientConn.Close()
+		_ = clientConn.Close()
 	}()
 
 	go func() {
 		defer wg.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		clientConn.Receive(ctx)
+		_, _ = clientConn.Receive(ctx)
 	}()
 
 	done := make(chan struct{})
@@ -230,7 +230,7 @@ func TestAcceptContextCancel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
@@ -252,14 +252,14 @@ func TestAcceptContextCancel(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		ln.Accept(ctx2)
+		_, _ = ln.Accept(ctx2)
 	}()
 
 	conn, err := net.DialTimeout("tcp", ln.Addr().String(), 500*time.Millisecond)
 	if err != nil {
 		t.Fatalf("dial after cancel should succeed (listener alive): %v", err)
 	}
-	conn.Close()
+	_ = conn.Close()
 
 	wg.Wait()
 }
@@ -280,7 +280,7 @@ func TestListenerCloseWhileBlocked(t *testing.T) {
 	}()
 
 	time.Sleep(100 * time.Millisecond)
-	ln.Close()
+	_ = ln.Close()
 
 	select {
 	case err := <-done:
@@ -299,7 +299,7 @@ func TestNewListener(t *testing.T) {
 	}
 
 	ln := iso.NewListener(tcpLn)
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	if ln.Addr() == nil {
 		t.Fatal("Addr() returned nil")
@@ -318,7 +318,7 @@ func TestHandshakeWrongTPDUType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -336,21 +336,21 @@ func TestHandshakeWrongTPDUType(t *testing.T) {
 	}
 	dt := &cotp.DT{EOT: true, UserData: []byte("fake")}
 	writePeerTPDU(t, badConn, mustMarshalTPDU(t, dt))
-	badConn.Close()
+	_ = badConn.Close()
 
 	// Second: good client connection — Accept should succeed.
 	goodConn, err := iso.DialTCP(ctx, ln.Addr().String())
 	if err != nil {
 		t.Fatalf("good dial after bad client should succeed: %v", err)
 	}
-	defer goodConn.Close()
+	defer func() { _ = goodConn.Close() }()
 
 	select {
 	case tr := <-accepted:
 		if tr == nil {
 			t.Fatal("Accept returned nil transport for good client")
 		}
-		tr.Close()
+		_ = tr.Close()
 	case <-time.After(5 * time.Second):
 		t.Fatal("Accept did not return after bad+good client sequence")
 	}
@@ -365,7 +365,7 @@ func TestHandshakeTSAPSelectorMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -398,14 +398,14 @@ func TestHandshakeTSAPSelectorMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("good dial after TSAP mismatch should succeed: %v", err)
 	}
-	defer goodConn.Close()
+	defer func() { _ = goodConn.Close() }()
 
 	select {
 	case tr := <-accepted:
 		if tr == nil {
 			t.Fatal("Accept returned nil transport for good client")
 		}
-		tr.Close()
+		_ = tr.Close()
 	case <-time.After(5 * time.Second):
 		t.Fatal("Accept did not return after mismatch+good client")
 	}
@@ -416,14 +416,14 @@ func TestClientHandshakeReceivesDR(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tcpLn.Close()
+	defer func() { _ = tcpLn.Close() }()
 
 	go func() {
 		conn, err := tcpLn.Accept()
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		crFrame, err := readPeerTPDU(conn)
 		if err != nil {
@@ -470,14 +470,14 @@ func TestClientHandshakeCCRefMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tcpLn.Close()
+	defer func() { _ = tcpLn.Close() }()
 
 	go func() {
 		conn, err := tcpLn.Accept()
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		crFrame, err := readPeerTPDU(conn)
 		if err != nil {
@@ -517,14 +517,14 @@ func TestClientHandshakeCCWrongClass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tcpLn.Close()
+	defer func() { _ = tcpLn.Close() }()
 
 	go func() {
 		conn, err := tcpLn.Accept()
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		crFrame, err := readPeerTPDU(conn)
 		if err != nil {
@@ -566,7 +566,7 @@ func TestServerHandshakeCRWrongClass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -604,21 +604,21 @@ func TestServerHandshakeCRWrongClass(t *testing.T) {
 	if cotp.DisconnectReason(decoded.DR.Reason) != cotp.ReasonNegotiationFailed {
 		t.Errorf("DR reason = %d, want %d", decoded.DR.Reason, cotp.ReasonNegotiationFailed)
 	}
-	conn.Close()
+	_ = conn.Close()
 
 	// Good client: listener should still be alive.
 	goodConn, err := iso.DialTCP(ctx, ln.Addr().String())
 	if err != nil {
 		t.Fatalf("good dial after bad class should succeed: %v", err)
 	}
-	defer goodConn.Close()
+	defer func() { _ = goodConn.Close() }()
 
 	select {
 	case tr := <-accepted:
 		if tr == nil {
 			t.Fatal("Accept returned nil transport for good client")
 		}
-		tr.Close()
+		_ = tr.Close()
 	case <-time.After(5 * time.Second):
 		t.Fatal("Accept did not return after bad+good client")
 	}
@@ -633,7 +633,7 @@ func tcpLoopbackTransport(t *testing.T) (client mms.Transport, server mms.Transp
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -654,7 +654,7 @@ func tcpLoopbackTransport(t *testing.T) (client mms.Transport, server mms.Transp
 
 	wg.Wait()
 	if acceptErr != nil {
-		clientConn.Close()
+		_ = clientConn.Close()
 		t.Fatalf("accept: %v", acceptErr)
 	}
 
