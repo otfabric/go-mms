@@ -1,5 +1,17 @@
 # go-mms Releases
 
+## v1.0.5
+
+**Fix**: 32-bit / linux armv7 builds failed because `fmt.Errorf` arguments used the untyped constant `math.MaxUint32` (does not fit in 32-bit `int`). Cast to `uint32` in `internal/pdu` file open/directory size error messages.
+
+- Added Makefile `test-armv7` (compile `./internal/pdu` for `GOOS=linux GOARCH=arm GOARM=7`) and wired it into `make check`.
+
+No API changes. No breaking changes.
+
+Import path remains `github.com/otfabric/go-mms`.
+
+---
+
 ## v1.0.4
 
 Documentation and code-quality hardening. No API changes, no behavior changes.
