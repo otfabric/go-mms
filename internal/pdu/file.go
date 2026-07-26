@@ -309,7 +309,7 @@ func UnmarshalObtainFileRequest(data []byte) (*ObtainFileRequest, error) {
 //	}
 func MarshalFileOpenResponse(frsmID int32, size int64, lastModified time.Time) ([]byte, error) {
 	if size < 0 || size > math.MaxUint32 {
-		return nil, fmt.Errorf("pdu: file size %d exceeds MMS Unsigned32 range [0, %d]", size, math.MaxUint32)
+		return nil, fmt.Errorf("pdu: file size %d exceeds MMS Unsigned32 range [0, %d]", size, uint32(math.MaxUint32))
 	}
 	frsmBytes := berutil.EncodeTLV(0x80, berutil.EncodeInt(int(frsmID)))
 
@@ -357,7 +357,7 @@ func MarshalFileDirectoryResponse(entries []FileDirectoryEntry, moreFollows bool
 	var entriesBytes []byte
 	for _, e := range entries {
 		if e.Size < 0 || e.Size > math.MaxUint32 {
-			return nil, fmt.Errorf("pdu: file %q size %d exceeds MMS Unsigned32 range [0, %d]", e.FileName, e.Size, math.MaxUint32)
+			return nil, fmt.Errorf("pdu: file %q size %d exceeds MMS Unsigned32 range [0, %d]", e.FileName, e.Size, uint32(math.MaxUint32))
 		}
 		nameBytes := berutil.EncodeTLV(0xa0, encodeFileNameInner(e.FileName))
 

@@ -4,7 +4,7 @@ GO       ?= go
 PKGS     := ./...
 FUZZTIME ?= 15s
 
-.PHONY: help test test-race test-verbose vet lint fmt fuzz fuzz-ber fuzz-pdu bench tidy check clean coverage coverage-html coverage-clean interop ai-print-all ai-print-test ai-print ai-diff ai-digest ai-context vuln
+.PHONY: help test test-race test-verbose vet lint fmt fuzz fuzz-ber fuzz-pdu bench tidy check clean coverage coverage-html coverage-clean interop test-armv7 ai-print-all ai-print-test ai-print ai-diff ai-digest ai-context vuln
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "%-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -95,7 +95,13 @@ tidy: ## Tidy and verify module files
 	$(GO) mod tidy
 	$(GO) mod verify
 
-check: fmt tidy vet lint vuln test test-race coverage ## Run all pre-commit checks
+test-armv7: ## Compile internal/pdu for linux/armv7 (catches 32-bit int overflows)
+	@echo "Compiling ./internal/pdu for GOOS=linux GOARCH=arm GOARM=7"
+	@tmp=$$(mktemp); \
+	GOOS=linux GOARCH=arm GOARM=7 $(GO) test -c -o "$$tmp" ./internal/pdu/; \
+	rm -f "$$tmp"
+
+check: fmt tidy vet lint vuln test test-race coverage test-armv7 ## Run all pre-commit checks
 
 clean: coverage-clean ## Clean test cache and coverage artifacts
 	$(GO) clean -testcache
