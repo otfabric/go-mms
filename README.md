@@ -213,9 +213,12 @@ remaining API-compatible.
 
 - [`examples/`](examples/) — runnable client and server examples
 - [`API.md`](API.md) — complete public API reference (types, methods, constants)
+- [`ERRORS.md`](ERRORS.md) — error taxonomy and handling guide
+- [`OBSERVABILITY.md`](OBSERVABILITY.md) — slog logging; MMS vs ISO logger separation
+- [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) · [`LIMITS.md`](LIMITS.md) — concurrency / outstanding-request behaviour and bounds
 - [`INTEROP.md`](INTEROP.md) — interoperability tests and MMS compatibility matrix
 - [`COMPLIANCE.md`](COMPLIANCE.md) — service support matrix with test coverage
-- [`ERRORS.md`](ERRORS.md) — error taxonomy and handling guide
+- [`RELEASE.md`](RELEASE.md) — changelog
 - [pkg.go.dev](https://pkg.go.dev/github.com/otfabric/go-mms) — generated API reference
 
 ## License

@@ -302,3 +302,62 @@ func TestParseRefuseEmpty(t *testing.T) {
 		t.Fatalf("got type %s, want REFUSE", result.Type)
 	}
 }
+
+func TestPGILengthHelpers(t *testing.T) {
+	if got := pgiLength(0); got != 2 {
+		t.Fatalf("pgiLength(0)=%d", got)
+	}
+	if got := pgiLength(0xfe); got != 2+0xfe {
+		t.Fatalf("pgiLength(0xfe)=%d", got)
+	}
+	if got := pgiLength(0xff); got != 4+0xff {
+		t.Fatalf("pgiLength(0xff)=%d want extended", got)
+	}
+	if got := pgiLength(300); got != 4+300 {
+		t.Fatalf("pgiLength(300)=%d", got)
+	}
+
+	short := appendPGI(nil, 0x05, []byte{1, 2, 3})
+	if len(short) != 5 || short[0] != 0x05 || short[1] != 3 {
+		t.Fatalf("short PGI=%x", short)
+	}
+
+	content := make([]byte, 0xff)
+	for i := range content {
+		content[i] = byte(i)
+	}
+	ext := appendPGI([]byte{0xaa}, 0x01, content)
+	if ext[0] != 0xaa || ext[1] != 0x01 || ext[2] != 0xff {
+		t.Fatalf("extended header=%x", ext[:5])
+	}
+	if int(ext[3])<<8|int(ext[4]) != 0xff {
+		t.Fatalf("extended len bytes=%x", ext[3:5])
+	}
+	if len(ext) != 1+4+0xff {
+		t.Fatalf("extended total len=%d", len(ext))
+	}
+
+	// Round-trip decodePGILength against both forms.
+	n, consumed, err := decodePGILength(short[1:])
+	if err != nil || n != 3 || consumed != 1 {
+		t.Fatalf("decode short: n=%d consumed=%d err=%v", n, consumed, err)
+	}
+	n, consumed, err = decodePGILength(ext[2:])
+	if err != nil || n != 0xff || consumed != 3 {
+		t.Fatalf("decode ext: n=%d consumed=%d err=%v", n, consumed, err)
+	}
+
+	if _, _, err := decodePGILength(nil); err == nil {
+		t.Fatal("expected missing length error")
+	}
+	if _, _, err := decodePGILength([]byte{0xff}); err == nil {
+		t.Fatal("expected truncated extended length")
+	}
+	if _, _, err := decodePGILength([]byte{0xff, 0x01}); err == nil {
+		t.Fatal("expected truncated extended length (1 byte)")
+	}
+	n, consumed, err = decodePGILength([]byte{0xff, 0x01, 0x2c}) // 300
+	if err != nil || n != 300 || consumed != 3 {
+		t.Fatalf("decode 300: n=%d consumed=%d err=%v", n, consumed, err)
+	}
+}

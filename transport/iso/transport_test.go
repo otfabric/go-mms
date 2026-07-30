@@ -661,18 +661,33 @@ func tcpLoopbackTransport(t *testing.T) (client mms.Transport, server mms.Transp
 	return clientConn, serverConn
 }
 
-func TestWithClientDialOptions(t *testing.T) {
-	opt := iso.WithClientDialOptions(mms.DialOptions{})
-	if opt == nil {
-		t.Fatal("nil option func")
+func TestWithLogger_ListenAccept(t *testing.T) {
+	ln, err := iso.Listen("127.0.0.1:0", iso.WithLogger(slog.Default()))
+	if err != nil {
+		t.Fatal(err)
 	}
-}
+	defer func() { _ = ln.Close() }()
 
-func TestWithLogger(t *testing.T) {
-	opt := iso.WithLogger(slog.Default())
-	if opt == nil {
-		t.Fatal("nil option func")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		tr, err := ln.Accept(ctx)
+		if err == nil {
+			_ = tr.Close()
+		}
+	}()
+
+	c, err := iso.DialTCP(ctx, ln.Addr().String())
+	if err != nil {
+		wg.Wait()
+		t.Fatalf("DialTCP: %v", err)
 	}
+	_ = c.Close()
+	wg.Wait()
 }
 
 // --- raw TPKT helpers for adversarial peers (no go-tpkt dependency) ---

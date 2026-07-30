@@ -24,10 +24,12 @@ import (
 // Close is idempotent: calling it multiple times is safe and subsequent
 // calls return nil.
 //
-// Concurrency: the Client serializes confirmed service sends internally
-// via a request mutex (one send at a time). A background reader loop
-// dispatches confirmed responses by invoke ID and delivers unconfirmed
-// PDUs (InformationReport) to registered handlers.
+// Concurrency: the Client serializes transport writes (one PDU write at
+// a time). Concurrent callers may have multiple confirmed requests
+// outstanding; a background reader correlates responses by invoke ID
+// and delivers unconfirmed PDUs (InformationReport) to registered
+// handlers. Negotiated outstanding-request limits are not enforced at
+// runtime (see package doc Concurrency).
 type Client struct {
 	mu     sync.Mutex
 	closed bool

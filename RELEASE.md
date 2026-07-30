@@ -1,5 +1,82 @@
 # go-mms Releases
 
+## v1.0.6
+
+**Date:** 2026-07-30
+**Previous release:** v1.0.5
+
+## Summary
+
+Documentation clarification for logger configuration and outstanding-request /
+concurrency behaviour, a go-cotp bump, a small ReadJournal empty-name guard,
+and a large unit-test coverage pass (non-example ~**94%**). No public API
+surface changes.
+
+## Changes
+
+### Changed
+
+- **Logger docs** (OBSERVABILITY.md, DialOptions/ServerOptions godoc) — MMS
+  (`DialOptions.Logger` / `ServerOptions.Logger`) and ISO (`iso.WithLogger`)
+  are independent; neither inherits from the other. Fixed `iso.Listen` example
+  signature (`Listen(addr, opts...)`).
+- **Outstanding / concurrency docs** (`doc.go`, Client godoc, LIMITS.md,
+  KNOWN_LIMITATIONS.md, RACE_NOTES.md, API.md) — write serialization vs
+  multi-outstanding wait clarified; negotiated MaxOutstanding* defaults are
+  **5** (not 8); values are proposed/negotiated and exposed but **not**
+  enforced as a runtime pending-request limit. Removed incorrect
+  “one in flight / pipelining unsupported” claims.
+- **API.md DialOptions** — aligned with `options.go` (`RawHook`, ISO field
+  names, `Authenticate` on server).
+- **README** — documentation links cleaned up.
+- **ReadJournal** — reject empty journal identifier when marshaling
+  time-range / start-after requests (`encodeJournalName`).
+
+### Dependencies
+
+- **go-cotp** — `v1.0.2` → **v1.0.3** (docs-only upstream release).
+
+### Build / tooling
+
+- **Makefile** — exports `GOWORK=off`.
+
+### Tests
+
+Broad coverage lift across client, server, and internal packages (non-example
+module coverage ~**94%**). Notable additions:
+
+- **Client** — reader loop / dispatch / info-report conversion; `Read` /
+  `Write` / `ReadVariables` / `WriteVariables` / convenience accessors;
+  NVL / GetNameList / GetVariableAccessAttributes / Define·Get·Delete NVL
+  (including DeleteAllDomain/VMD) protocol-mismatch, closed-client, and
+  validation edges; wire helpers (`typeSpecFromWire`, `valueToDataValue`,
+  scopes).
+- **Server** — `ListenAndServe`, Identify/Status/GetNameList/Read/Write/NVL
+  and file-service handler edges; alternate-access read/write/patch helpers
+  at full coverage.
+- **ISO / stack** — `iso.WithClientDialOptions` / `WithLogger` / `RemoteAddr` /
+  `isClosed`; isostack associate/data/release decode errors (session,
+  presentation, context, APDU type); presentation parse edges; session PGI
+  length helpers.
+- **ACSE / BER / ASN.1** — AARE/AARQ/EXTERNAL/RLRQ/ABRT and OID marshal
+  edges; berutil / asn1util long-form length and high tag-number encodings.
+- **PDU / codec** — initiate/status/cancel/choice/mmspdu classify paths;
+  Read/Write (list-of-variable, alternate access, list-name) marshal error
+  matrix; ReadJournal request/response parse edges; TypeSpec / NVL /
+  alternate-access decode; `server_helpers` request/response
+  marshal+unmarshal error matrix (fully covered).
+- **servermodel / serverconn** — stale NVL order cleanup; abort/cancel
+  handling.
+
+### Unchanged
+
+- Silent-by-default `slog` / discard handler behaviour.
+- Invoke tracker and sendMu implementation (docs corrected to match code).
+
+Import path remains `github.com/otfabric/go-mms`.
+
+---
+
 ## v1.0.5
 
 **Fix**: 32-bit / linux armv7 builds failed because `fmt.Errorf` arguments used the untyped constant `math.MaxUint32` (does not fit in 32-bit `int`). Cast to `uint32` in `internal/pdu` file open/directory size error messages.

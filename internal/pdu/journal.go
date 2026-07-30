@@ -89,6 +89,9 @@ func MarshalReadJournalStartAfter(invokeID codec.InvokeID, domain, journal strin
 }
 
 func encodeJournalName(domain, journal string) ([]byte, error) {
+	if journal == "" {
+		return nil, fmt.Errorf("pdu: journal name: empty journal identifier")
+	}
 	name, err := EncodeObjectName(ObjectNameWire{
 		Scope:    ScopeDomain,
 		DomainID: domain,

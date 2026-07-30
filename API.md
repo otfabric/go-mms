@@ -430,11 +430,11 @@ these interfaces over the full ISO/OSI upper-layer stack.
 
 ```go
 type DialOptions struct {
-    Logger          *slog.Logger
-    Transport       TransportOptions
-    ISO             ISOOptions
-    MMS             MMSOptions
-    Auth            Authenticator
+    Transport TransportOptions
+    ISO       ISOOptions
+    MMS       MMSOptions
+    Logger    *slog.Logger // nil → silent discard; does not set iso.WithLogger
+    RawHook   func(direction string, raw []byte)
 }
 ```
 
@@ -442,12 +442,15 @@ type DialOptions struct {
 
 ```go
 type ISOOptions struct {
-    CalledAPTitle   APTitle
-    CalledAEQualifier int
-    CallingAPTitle  APTitle
-    CallingAEQualifier int
-    CalledSelector  []byte
-    CallingSelector []byte
+    LocalAPTitle       APTitle
+    RemoteAPTitle      APTitle
+    LocalAEQualifier   int
+    RemoteAEQualifier  int
+    LocalPSelector     []byte
+    RemotePSelector    []byte
+    LocalSSelector     []byte
+    RemoteSSelector    []byte
+    Password           []byte // ACSE password in AARQ; use TLS in production
 }
 ```
 
@@ -455,9 +458,10 @@ type ISOOptions struct {
 
 ```go
 type MMSOptions struct {
-    MaxPDUSize          int    // default 65000
-    MaxOutstandingCalling int  // default 8
-    MaxOutstandingCalled  int  // default 8
+    MaxPDUSize                int // default 65000
+    MaxOutstandingCalling     int // default 5 (proposed; not runtime-enforced)
+    MaxOutstandingCalled      int // default 5 (proposed; not runtime-enforced)
+    DataStructureNestingLevel int // default 10
 }
 ```
 
@@ -465,11 +469,11 @@ type MMSOptions struct {
 
 ```go
 type ServerOptions struct {
-    Logger        *slog.Logger
-    MMS           ServerMMSOptions
-    FileProvider  FileProvider
+    MMS             ServerMMSOptions
+    Logger          *slog.Logger // nil → silent discard; does not set iso.WithLogger
+    Authenticate    Authenticator
+    FileProvider    FileProvider
     JournalProvider JournalProvider
-    Auth          Authenticator
 }
 ```
 

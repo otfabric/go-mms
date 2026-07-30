@@ -200,6 +200,73 @@ func TestUnmarshalImplicitSequence(t *testing.T) {
 	})
 }
 
+func TestMarshalMmsPduBareSequence(t *testing.T) {
+	type sample struct {
+		N int `asn1:"tag:0,implicit"`
+	}
+	pdu, err := MarshalMmsPduBareSequence(0xa8, sample{N: 42})
+	if err != nil {
+		t.Fatalf("MarshalMmsPduBareSequence: %v", err)
+	}
+	if pdu[0] != 0xa8 {
+		t.Fatalf("outer tag = 0x%02x, want 0xa8", pdu[0])
+	}
+	tag, content, err := UnwrapPdu(pdu)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tag != 0xa8 {
+		t.Fatalf("Unwrap tag = 0x%02x", tag)
+	}
+	// IMPLICIT: content is bare SEQUENCE fields (context [0] INTEGER), not 0x30.
+	if len(content) == 0 || content[0] == 0x30 {
+		t.Fatalf("content should be bare fields, got %x", content)
+	}
+
+	if _, err := MarshalMmsPduBareSequence(0xa8, make(chan int)); err == nil {
+		t.Fatal("expected error for non-marshalable payload")
+	}
+}
+
+func TestMarshalCancelError(t *testing.T) {
+	data := MarshalCancelError(7, 1, 2)
+	if len(data) == 0 {
+		t.Fatal("empty")
+	}
+	// WrapConstructed(8) → context 8 constructed = 0xa8.
+	if data[0] != 0xa8 {
+		t.Fatalf("tag = 0x%02x, want 0xa8", data[0])
+	}
+	tag, content, err := UnwrapPdu(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tag != 0xa8 {
+		t.Fatalf("Unwrap tag = 0x%02x", tag)
+	}
+	if len(content) == 0 || content[0] != 0x80 {
+		t.Fatalf("content should start with [0] invokeID, got %x", content)
+	}
+}
+
+func TestMarshalCancelResponse(t *testing.T) {
+	data := MarshalCancelResponse(99)
+	if len(data) == 0 {
+		t.Fatal("empty")
+	}
+	// WrapPrimitive(7) → context 7 primitive = 0x87.
+	if data[0] != 0x87 {
+		t.Fatalf("tag = 0x%02x, want 0x87", data[0])
+	}
+	tag, err := PduType(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tag != 0x87 {
+		t.Fatalf("PduType = 0x%02x, want 0x87", tag)
+	}
+}
+
 func TestMarshalSequenceContent(t *testing.T) {
 	t.Run("short-form length", func(t *testing.T) {
 		type inner struct {

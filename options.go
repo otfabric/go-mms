@@ -16,9 +16,11 @@ type DialOptions struct {
 	ISO       ISOOptions
 	MMS       MMSOptions
 
-	// Logger, when non-nil, enables structured logging. When nil (default),
-	// no logging is emitted. The logger is used for connection lifecycle
-	// events at Info level and request/response summaries at Debug level.
+	// Logger, when non-nil, enables structured MMS logging. When nil
+	// (default), a discard handler is used (zero overhead). Lifecycle
+	// events at Info; request/response summaries at Debug.
+	// Does not configure transport/iso logging — use iso.WithLogger
+	// separately (see OBSERVABILITY.md).
 	Logger *slog.Logger
 
 	// RawHook, when non-nil, is called for every raw ISO upper-layer
@@ -74,12 +76,15 @@ type MMSOptions struct {
 	MaxPDUSize int
 
 	// MaxOutstandingCalling is the maximum number of outstanding
-	// requests this client proposes. Zero means use the library default (5).
+	// requests this client proposes during Initiate. Zero means use the
+	// library default (5). The negotiated value is exposed via
+	// Client.Negotiated() but is not enforced as a runtime pending-request
+	// limit today.
 	MaxOutstandingCalling int
 
 	// MaxOutstandingCalled is the maximum number of outstanding
-	// requests the server is expected to support. Zero means use the
-	// library default (5).
+	// requests the peer is expected to support. Zero means use the
+	// library default (5). Negotiated only; not a runtime client cap.
 	MaxOutstandingCalled int
 
 	// DataStructureNestingLevel is the proposed maximum nesting level

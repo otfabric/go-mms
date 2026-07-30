@@ -46,12 +46,14 @@ These limits apply to recursive decoding of `DataValue` and `TypeSpec` trees. Th
 | Unsigned INTEGER | 4 bytes (32-bit) | `internal/berutil/berutil.go` | Maximum unsigned integer size |
 | Indefinite length | Rejected | `internal/berutil/berutil.go` | BER indefinite length form not supported |
 
-## Invoke tracker
+## Invoke tracker / outstanding requests
 
-| Limit | Configured by | Default |
-|-------|---------------|---------|
-| Client outstanding requests | Negotiated `maxOutCalling` | No hard limit if 0 |
-| Server outstanding requests | Negotiated `maxOutCalled` | Per `maxPending` option |
+| Limit | Configured by | Enforced? |
+|-------|---------------|-----------|
+| Client outstanding requests | Proposed via `DialOptions.MMS.MaxOutstandingCalling` (default 5); negotiated value in `Client.Negotiated()` | **Not enforced** at runtime (tracker created with no pending cap) |
+| Server outstanding requests | Proposed via `ServerMMSOptions.MaxOutstandingCalled` (default 5); negotiated per association | Server handles confirmed requests **serially** per connection (natural bound of 1 in-flight handler); negotiated value is not a separate pending queue cap |
+
+Canonical concurrency wording: package `doc.go` (Concurrency) and [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md).
 
 ## Limits not enforced (by design)
 
