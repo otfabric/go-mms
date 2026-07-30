@@ -2,7 +2,10 @@
 
 package servermodel
 
-import "testing"
+import (
+	"sort"
+	"testing"
+)
 
 func TestRegistryDomainLifecycle(t *testing.T) {
 	r := NewRegistry()
@@ -475,5 +478,49 @@ func TestDeleteAllVMDNVLsEmpty(t *testing.T) {
 	matched, deleted := r.DeleteAllVMDNVLs()
 	if matched != 0 || deleted != 0 {
 		t.Errorf("got (%d, %d), want (0, 0)", matched, deleted)
+	}
+}
+
+func TestDeleteAllNVLs_StaleOrderEntries(t *testing.T) {
+	r := NewRegistry()
+	if err := r.RegisterDomain("dom"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.DefineNVL(&NVLEntry{ItemID: "keep", Scope: 1, Domain: "dom", Deletable: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.DefineNVL(&NVLEntry{ItemID: "vmdKeep", Scope: 0, Deletable: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Inject stale names into the sorted order slices (present in order, absent from map).
+	r.mu.Lock()
+	r.nvlOrder["dom"] = append(r.nvlOrder["dom"], "ghost")
+	sort.Strings(r.nvlOrder["dom"])
+	r.vmdNVLOrder = append(r.vmdNVLOrder, "vmdGhost")
+	sort.Strings(r.vmdNVLOrder)
+	r.mu.Unlock()
+
+	matched, deleted := r.DeleteAllDomainNVLs("dom")
+	if matched != 1 || deleted != 1 {
+		t.Fatalf("domain: matched=%d deleted=%d want 1/1", matched, deleted)
+	}
+	matched, deleted = r.DeleteAllVMDNVLs()
+	if matched != 1 || deleted != 1 {
+		t.Fatalf("vmd: matched=%d deleted=%d want 1/1", matched, deleted)
+	}
+}
+
+func TestRemoveFromSorted(t *testing.T) {
+	got := removeFromSorted([]string{"a", "b", "c"}, "b")
+	if len(got) != 2 || got[0] != "a" || got[1] != "c" {
+		t.Fatalf("remove middle: %v", got)
+	}
+	same := []string{"a", "b"}
+	if got := removeFromSorted(same, "missing"); len(got) != 2 || got[0] != "a" {
+		t.Fatalf("missing name: %v", got)
+	}
+	if got := removeFromSorted(nil, "x"); got != nil {
+		t.Fatalf("nil input: %v", got)
 	}
 }

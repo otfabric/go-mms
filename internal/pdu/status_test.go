@@ -91,3 +91,24 @@ func TestUnmarshalStatusResponseBadInput(t *testing.T) {
 		t.Fatal("expected error for invalid ASN.1 content")
 	}
 }
+
+func TestMarshalUnsolicitedStatus(t *testing.T) {
+	data, err := MarshalUnsolicitedStatus(1, 2)
+	if err != nil {
+		t.Fatalf("MarshalUnsolicitedStatus: %v", err)
+	}
+	if len(data) == 0 || data[0] != 0xa3 {
+		t.Fatalf("outer tag = %v, want UnconfirmedPDU 0xa3", data)
+	}
+	kind, content, err := DecodePdu(data)
+	if err != nil {
+		t.Fatalf("DecodePdu: %v", err)
+	}
+	if kind != PduUnconfirmed {
+		t.Fatalf("kind = %s, want Unconfirmed", kind)
+	}
+	// Inner CHOICE [1] UnsolicitedStatus = 0xa1.
+	if len(content) == 0 || content[0] != 0xa1 {
+		t.Fatalf("inner tag = %v, want 0xa1 UnsolicitedStatus", content)
+	}
+}

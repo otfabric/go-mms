@@ -68,7 +68,8 @@ server logs a warning and skips them.
 |-----------|---------|
 | Cancel-only context | Transport-level reads check `ctx.Err()` only after `ReadFrame` returns. Cancellation without a deadline may not unblock until data arrives or the connection is closed. Use `context.WithTimeout` or `context.WithDeadline` for prompt cancellation. |
 | ListenAndServe shutdown | When the server context is cancelled, the accept loop exits, but existing connections are not forcibly closed. They end naturally when their next transport read fails (e.g., the client disconnects or context propagation reaches them). |
-| Confirmed request serialization | Client sends are serialized via a send mutex — only one confirmed request can be in flight per client at a time. Concurrent callers queue behind this mutex. |
+| Client write serialization | Transport writes are serialized via a send mutex so PDUs do not interleave. Concurrent callers may still have multiple confirmed requests outstanding (wait for response happens outside the write lock); responses are correlated by invoke ID. |
+| Negotiated outstanding not enforced | `MaxOutstandingCalling` / `MaxOutstandingCalled` are negotiated and exposed via `Client.Negotiated()` / server association state, but the client invoke tracker is not capped by those values today. Limit concurrency in the caller if needed. |
 | Server request handling | Confirmed requests within a single server connection are handled serially. Concurrent request handling per-connection is not supported. |
 | Server Abort PDU | The server does not proactively send an MMS Abort PDU. It detects client disconnects and handles ISO Release/Conclude, but has no API to initiate an abort. |
 | RawHook availability | Raw wire hooks (`RawHook`) are only available on the client side via `DialOptions`. The server does not expose a raw hook for wire-level inspection. |
@@ -116,4 +117,4 @@ These are deliberate design boundaries, not implementation gaps.
 - **ASN.1 code generation** — PDU encoding/decoding is hand-rolled for control and performance. No ASN.1 schema compiler or code generator is used or provided.
 - **Protocol performance optimization** — No zero-copy I/O, buffer pooling, or arena allocation. The library prioritizes correctness and clarity over raw throughput.
 - **Backwards compatibility with non-MMS variants** — The library targets ISO 9506 MMS as used in IEC 61850 environments. Non-standard MMS extensions or vendor-specific protocol variants are not accommodated.
-- **Multiple concurrent outstanding requests** — The client serializes confirmed request sends. Pipelining multiple requests before the first response arrives is not supported (the invoke tracker supports it, but the send mutex prevents it).
+- **Runtime enforcement of negotiated outstanding limits** — Initiate proposes and negotiates max outstanding calling/called; those values are stored and logged but not used to reject excess in-flight client requests. See Behavioral Limitations above and [LIMITS.md](LIMITS.md).

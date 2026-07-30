@@ -123,3 +123,56 @@ func TestInitiateRequest_FieldTagValues(t *testing.T) {
 		t.Errorf("ClassifyPdu = %v, want InitiateRequest", kind)
 	}
 }
+
+func TestUnmarshalInitiateRequest_BareAndWrapped(t *testing.T) {
+	req := DefaultInitiateRequest(48000, 3, 4, 8)
+	pdu, err := MarshalInitiateRequest(req)
+	if err != nil {
+		t.Fatalf("MarshalInitiateRequest: %v", err)
+	}
+	_, content, err := DecodePdu(pdu)
+	if err != nil {
+		t.Fatalf("DecodePdu: %v", err)
+	}
+
+	// Bare IMPLICIT fields (no 0x30).
+	decoded, err := UnmarshalInitiateRequest(content)
+	if err != nil {
+		t.Fatalf("UnmarshalInitiateRequest bare: %v", err)
+	}
+	if decoded.LocalDetailCalling != 48000 {
+		t.Errorf("LocalDetailCalling = %d, want 48000", decoded.LocalDetailCalling)
+	}
+	if decoded.ProposedMaxServOutstandingCall != 3 || decoded.ProposedMaxServOutstandingCalled != 4 {
+		t.Errorf("outstanding = %d/%d, want 3/4",
+			decoded.ProposedMaxServOutstandingCall, decoded.ProposedMaxServOutstandingCalled)
+	}
+
+	// Explicit inner SEQUENCE (libiec61850-style).
+	wrapped := berutil.EncodeTLV(0x30, content)
+	decoded2, err := UnmarshalInitiateRequest(wrapped)
+	if err != nil {
+		t.Fatalf("UnmarshalInitiateRequest wrapped: %v", err)
+	}
+	if decoded2.LocalDetailCalling != 48000 {
+		t.Errorf("wrapped LocalDetailCalling = %d, want 48000", decoded2.LocalDetailCalling)
+	}
+}
+
+func TestUnmarshalInitiateRequest_Errors(t *testing.T) {
+	if _, err := UnmarshalInitiateRequest([]byte{0xff}); err == nil {
+		t.Fatal("expected error for invalid ASN.1")
+	}
+	// Complete SEQUENCE TLV followed by trailing bytes (wrapSequenceIfNeeded
+	// leaves an existing 0x30 wrapper as-is, so rest is non-empty).
+	req := DefaultInitiateRequest(1000, 1, 1, 1)
+	bare, err := marshalBareSequence(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq := berutil.EncodeTLV(0x30, bare)
+	junk := append(append([]byte{}, seq...), 0x05, 0x00)
+	if _, err := UnmarshalInitiateRequest(junk); err == nil {
+		t.Fatal("expected trailing-bytes error")
+	}
+}

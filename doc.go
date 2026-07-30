@@ -97,12 +97,19 @@
 // # Concurrency
 //
 // A [Client] is safe for concurrent use from multiple goroutines.
-// Transport writes are serialized so encoded PDUs cannot interleave.
-// After a request is sent, multiple confirmed requests may be
-// outstanding concurrently, subject to the negotiated
-// outstanding-request limit. A background reader goroutine correlates
-// confirmed responses by invoke ID and independently dispatches
-// unconfirmed PDUs (InformationReport) to the registered handler.
+// Transport writes are serialized (sendMu) so encoded PDUs cannot
+// interleave. Concurrent callers may still have multiple confirmed
+// requests outstanding: after a send completes, the caller waits for
+// its response while other goroutines may send. A background reader
+// correlates confirmed responses by invoke ID and independently
+// dispatches unconfirmed PDUs (InformationReport) to the registered
+// handler.
+//
+// Negotiated MaxOutstandingCalling / MaxOutstandingCalled (see
+// [Client.Negotiated]) are proposed during Initiate and exposed for
+// inspection, but are not enforced as a runtime pending-request limit
+// today. Callers that need back-pressure should limit concurrency
+// themselves. Details: LIMITS.md, KNOWN_LIMITATIONS.md, RACE_NOTES.md.
 //
 // A [Server] is safe for concurrent use. Each [Server.Serve] call
 // handles one association; multiple connections are served in parallel

@@ -5,6 +5,8 @@ package presentation
 import (
 	"bytes"
 	"testing"
+
+	"github.com/otfabric/go-mms/internal/berutil"
 )
 
 func TestEncodeParseCPRoundTrip(t *testing.T) {
@@ -200,5 +202,124 @@ func TestPpduKindString(t *testing.T) {
 		if got := tt.k.String(); got != tt.want {
 			t.Errorf("PpduKind(%d).String() = %q, want %q", int(tt.k), got, tt.want)
 		}
+	}
+}
+
+func TestParseCPorCPA_Edges(t *testing.T) {
+	// Truncated field inside CP SET.
+	bad := berutil.EncodeTLV(0x31, []byte{0xa0, 0x05})
+	if _, err := parseCPorCPA(bad); err == nil {
+		t.Fatal("expected truncated CP field error")
+	}
+
+	// Unknown top-level field is skipped (interop).
+	mode := berutil.EncodeTLV(0xa0, []byte{0x80, 0x01, 0x01})
+	unknown := berutil.EncodeTLV(0xa9, []byte{0x01})
+	normal := berutil.EncodeTLV(0xa2, berutil.EncodeTLV(0xa4, nil)) // context-def list only
+	ok := berutil.EncodeTLV(0x31, append(append(mode, unknown...), normal...))
+	parsed, err := parseCPorCPA(ok)
+	if err != nil || parsed.Kind != PpduCP {
+		t.Fatalf("skip unknown: %+v err=%v", parsed, err)
+	}
+
+	// Normal-mode parse error propagates (truncated inside 0xa2).
+	badNormal := berutil.EncodeTLV(0x31, berutil.EncodeTLV(0xa2, []byte{0x81, 0x05}))
+	if _, err := parseCPorCPA(badNormal); err == nil {
+		t.Fatal("expected normal-mode field error")
+	}
+}
+
+func TestParseNormalMode_Edges(t *testing.T) {
+	result := &ParsedPPDU{Kind: PpduCP}
+	var def, res bool
+
+	if err := parseNormalMode([]byte{0xff}, result, &def, &res); err == nil {
+		t.Fatal("expected TLV error")
+	}
+
+	// Selectors + unknown + context lists, no user-data → success.
+	body := append(
+		berutil.EncodeTLV(0x81, []byte{0x01}),
+		berutil.EncodeTLV(0x82, []byte{0x02})...,
+	)
+	body = append(body, berutil.EncodeTLV(0x83, []byte{0x03})...)
+	body = append(body, berutil.EncodeTLV(0xa9, []byte{0x00})...) // unknown skip
+	body = append(body, berutil.EncodeTLV(0xa4, nil)...)
+	body = append(body, berutil.EncodeTLV(0xa5, nil)...)
+	if err := parseNormalMode(body, result, &def, &res); err != nil {
+		t.Fatal(err)
+	}
+	if !def || !res {
+		t.Fatalf("def=%v res=%v", def, res)
+	}
+
+	// User-data path with transfer-syntax OID skipped.
+	pdvInner := append(
+		berutil.EncodeTLV(0x02, []byte{0x03}),                // context-id
+		berutil.EncodeTLV(0x06, []byte{0x2a, 0x86, 0x48})..., // transfer-syntax OID
+	)
+	pdvInner = append(pdvInner, berutil.EncodeTLV(0xa0, []byte{0xab})...)
+	pdv := berutil.EncodeTLV(0x30, pdvInner)
+	userData := berutil.EncodeTLV(0x61, pdv)
+	result = &ParsedPPDU{}
+	def, res = false, false
+	if err := parseNormalMode(userData, result, &def, &res); err != nil {
+		t.Fatal(err)
+	}
+	if result.ContextID != 3 || !bytes.Equal(result.UserData, []byte{0xab}) {
+		t.Fatalf("%+v", result)
+	}
+}
+
+func TestParseUserDataAndPdvList_Edges(t *testing.T) {
+	// Outer decode ok, pdv-list fails.
+	bad := berutil.EncodeTLV(0x61, []byte{0xff})
+	if _, err := parseUserData(bad); err == nil {
+		t.Fatal("expected pdv-list error via user-data")
+	}
+
+	result := &ParsedPPDU{}
+	if err := parsePdvList([]byte{0xff}, result); err == nil {
+		t.Fatal("pdv outer")
+	}
+
+	// Truncated field inside SEQUENCE.
+	trunc := berutil.EncodeTLV(0x30, []byte{0x02, 0x05})
+	if err := parsePdvList(trunc, result); err == nil {
+		t.Fatal("truncated field")
+	}
+
+	// Bad INTEGER for context-id (empty content).
+	badInt := berutil.EncodeTLV(0x30, berutil.EncodeTLV(0x02, nil))
+	if err := parsePdvList(badInt, result); err == nil {
+		t.Fatal("bad context-id integer")
+	}
+
+	// Missing context-id.
+	onlyData := berutil.EncodeTLV(0x30, berutil.EncodeTLV(0xa0, []byte{0x01}))
+	if err := parsePdvList(onlyData, result); err == nil {
+		t.Fatal("missing context-id")
+	}
+
+	// Success with transfer-syntax + data.
+	inner := append(
+		berutil.EncodeTLV(0x06, []byte{0x51}),
+		berutil.EncodeTLV(0x02, []byte{0x01})...,
+	)
+	inner = append(inner, berutil.EncodeTLV(0xa0, []byte{0x11, 0x22})...)
+	ok := berutil.EncodeTLV(0x30, inner)
+	result = &ParsedPPDU{}
+	if err := parsePdvList(ok, result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ContextID != 1 || !bytes.Equal(result.UserData, []byte{0x11, 0x22}) {
+		t.Fatalf("%+v", result)
+	}
+
+	// User-data success path wrapping the same.
+	ud := berutil.EncodeTLV(0x61, ok)
+	parsed, err := parseUserData(ud)
+	if err != nil || parsed.ContextID != 1 {
+		t.Fatalf("%+v err=%v", parsed, err)
 	}
 }

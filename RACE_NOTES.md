@@ -8,10 +8,10 @@ All tests pass clean under `go test -race -count=5 ./...`. No data races detecte
 
 ### Client
 
-- **sendMu**: Serializes outbound writes (`sendRaw`). Multiple goroutines can call client methods concurrently; sends are serialized.
+- **sendMu**: Serializes outbound writes (`sendRaw`) so PDU bytes do not interleave. Wait-for-response is outside this lock, so concurrent callers may have multiple confirmed requests outstanding.
 - **mu**: Protects `closed` state and `readerCancel`/`readerDone`.
-- **invoke tracker**: Thread-safe map of pending request channels. `Allocate`, `Complete`, `Cancel`, and `CancelAll` are internally synchronized.
-- **readerLoop**: Single goroutine dispatches incoming PDUs. Confirmed responses are routed via the tracker. Unconfirmed reports are dispatched to the report handler.
+- **invoke tracker**: Thread-safe map of pending request channels. `Allocate`, `Complete`, `Cancel`, and `CancelAll` are internally synchronized. Created with no `maxPending` cap; negotiated MaxOutstanding* is not enforced here.
+- **readerLoop**: Single goroutine dispatches incoming PDUs. Confirmed responses are routed by invoke ID. Unconfirmed reports are dispatched to the report handler.
 
 ### Server
 

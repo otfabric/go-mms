@@ -8,7 +8,12 @@ import (
 
 // ServerOptions configures the MMS server.
 type ServerOptions struct {
-	MMS    ServerMMSOptions
+	MMS ServerMMSOptions
+
+	// Logger, when non-nil, enables structured MMS/server logging.
+	// When nil (default), a discard handler is used. Does not configure
+	// transport/iso logging — use iso.WithLogger on the listener
+	// separately (see OBSERVABILITY.md).
 	Logger *slog.Logger
 
 	// Authenticate is called during association establishment to
@@ -35,12 +40,14 @@ type ServerMMSOptions struct {
 	// Zero means use the library default (65000).
 	MaxPDUSize int
 
-	// MaxOutstandingCalling is the maximum number of outstanding
-	// requests the server accepts from the client. Zero means 5.
+	// MaxOutstandingCalling is proposed during Initiate as the max
+	// outstanding requests the server accepts from the client.
+	// Zero means 5. Negotiated; not a separate pending-queue cap
+	// (confirmed requests are handled serially per connection).
 	MaxOutstandingCalling int
 
-	// MaxOutstandingCalled is the maximum outstanding requests the
-	// server can issue. Zero means 5.
+	// MaxOutstandingCalled is proposed as the max outstanding
+	// requests the server can issue. Zero means 5. Negotiated only.
 	MaxOutstandingCalled int
 
 	// DataStructureNestingLevel is the maximum nesting depth.

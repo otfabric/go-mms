@@ -50,13 +50,23 @@ srv := mms.NewServer(mms.ServerOptions{
 })
 ```
 
-### ISO Transport Layer
+### ISO Transport Layer (independent of MMS logger)
 
-The `transport/iso` package has its own `WithLogger` option, used by the
-`Listener` to log per-connection handshake failures (TLS and COTP):
+MMS and ISO loggers are **separate**. Setting `DialOptions.Logger` or
+`ServerOptions.Logger` does **not** enable ISO transport logging, and
+`iso.WithLogger` does **not** enable MMS protocol logging.
+
+| Option | Affects |
+|--------|---------|
+| `DialOptions.Logger` / `ServerOptions.Logger` | MMS association lifecycle, request summaries, server accept/serve |
+| `iso.WithLogger` | ISO listener only: TLS/COTP handshake failures on `Accept` |
+
+`iso.Dial` does not emit logs today (the ISO logger is unused on the dial
+path). Nil MMS logger → silent discard handler. Nil / omitted
+`iso.WithLogger` → silent accept path.
 
 ```go
-ln, err := iso.Listen("tcp", ":102",
+ln, err := iso.Listen(":102",
     iso.WithLogger(logger),
 )
 ```
@@ -219,6 +229,6 @@ library — only the accept/reject outcome appears in logs.
 4. Use `RawHook` for wire-level protocol analysis and packet capture replay.
 5. **Avoid blocking in `RawHook` callbacks** — they run synchronously in
    the send/receive path and will stall the connection.
-6. The ISO transport layer has a separate logger (`iso.WithLogger`); set it
-   if you need visibility into TLS/COTP handshake failures on the server
-   accept path.
+6. Set `iso.WithLogger` separately from the MMS logger if you need
+   visibility into TLS/COTP handshake failures on the server accept path
+   (MMS logger does not inherit into ISO).

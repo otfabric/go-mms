@@ -131,6 +131,35 @@ func TestDecodeDataResponseWrongContext(t *testing.T) {
 	}
 }
 
+func TestDecodeAssociateResponse_MoreErrors(t *testing.T) {
+	if _, err := DecodeAssociateResponse([]byte{0xff}); err == nil {
+		t.Fatal("expected session parse error")
+	}
+	// ACCEPT with garbage presentation.
+	bad := session.EncodeAccept(session.ConnectParams{CalledSelector: []byte{0x01}}, []byte{0xff})
+	if _, err := DecodeAssociateResponse(bad); err == nil {
+		t.Fatal("expected presentation parse error")
+	}
+	// ACCEPT wrapping non-CPA presentation user-data (DATA-style).
+	pres := presentation.EncodeUserData(presentation.ContextIDACSE, []byte{0x01})
+	wrongKind := session.EncodeAccept(session.ConnectParams{CalledSelector: []byte{0x01}}, pres)
+	if _, err := DecodeAssociateResponse(wrongKind); err == nil {
+		t.Fatal("expected CPA kind error")
+	}
+}
+
+func TestDecodeDataResponse_AbortAndUnexpected(t *testing.T) {
+	if _, err := DecodeDataResponse(EncodeAbort()); err == nil {
+		t.Fatal("expected abort error")
+	}
+	if _, err := DecodeDataResponse(session.EncodeConnect(session.ConnectParams{}, []byte{1})); err == nil {
+		t.Fatal("expected unexpected SPDU error")
+	}
+	if _, err := DecodeDataResponse([]byte{0x01}); err == nil {
+		t.Fatal("expected session parse error")
+	}
+}
+
 func buildMockAssociateResponse(t *testing.T, mmsPayload []byte) []byte {
 	t.Helper()
 

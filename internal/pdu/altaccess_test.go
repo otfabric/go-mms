@@ -4,6 +4,8 @@ package pdu
 
 import (
 	"testing"
+
+	"github.com/otfabric/go-mms/internal/berutil"
 )
 
 func TestEncodeDecodeAlternateAccess_Component(t *testing.T) {
@@ -205,6 +207,45 @@ func TestDecodeAlternateAccess_InvalidTag(t *testing.T) {
 	_, err := decodeAlternateAccess([]byte{0xff, 0x00})
 	if err == nil {
 		t.Fatal("expected error for invalid tag")
+	}
+}
+
+func TestDecodeSelectAlternateAccess_Errors(t *testing.T) {
+	if _, err := decodeSelectAlternateAccess(nil); err == nil {
+		t.Fatal("expected empty error")
+	}
+	if _, err := decodeSelectAlternateAccess([]byte{0xff}); err == nil {
+		t.Fatal("expected TLV error")
+	}
+	// Unexpected accessSelection tag.
+	if _, err := decodeSelectAlternateAccess(berutil.EncodeTLV(0x83, []byte{1})); err == nil {
+		t.Fatal("expected unexpected tag")
+	}
+	// Bad index content.
+	if _, err := decodeSelectAlternateAccess(berutil.EncodeTLV(tagSAIndex, nil)); err == nil {
+		t.Fatal("expected index decode error")
+	}
+	// Nested wrapper wrong tag after component.
+	comp := berutil.EncodeTLV(tagSAComponent, []byte("a"))
+	nestedWrong := berutil.EncodeTLV(0xa1, []byte{1})
+	if _, err := decodeSelectAlternateAccess(append(comp, nestedWrong...)); err == nil {
+		t.Fatal("expected nested wrapper tag error")
+	}
+}
+
+func TestDecodeSelectAlternateAccess_Nested(t *testing.T) {
+	inner, err := encodeAlternateAccess([]AccessSelectorWire{{HasIndex: true, Index: 2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	comp := berutil.EncodeTLV(tagSAComponent, []byte("outer"))
+	nested := berutil.EncodeTLV(tagAltAccessWrapper, inner)
+	sels, err := decodeSelectAlternateAccess(append(comp, nested...))
+	if err != nil {
+		t.Fatalf("decodeSelectAlternateAccess: %v", err)
+	}
+	if len(sels) != 2 || sels[0].Component != "outer" || !sels[1].HasIndex || sels[1].Index != 2 {
+		t.Fatalf("sels=%+v", sels)
 	}
 }
 
