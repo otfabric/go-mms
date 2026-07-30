@@ -1,5 +1,28 @@
 # go-mms Releases
 
+## v1.0.7
+
+**Date:** 2026-07-30
+**Previous release:** v1.0.6
+
+## Summary
+
+Patch release: bump go-cotp to v1.0.4 (pulls go-tpkt v1.0.1). No public API
+surface or behavioural changes.
+
+## Changes
+
+### Dependencies
+
+- **go-cotp** — `v1.0.3` → **v1.0.4**
+- **go-tpkt** (indirect) — `v1.0.0` → **v1.0.1**
+
+### Unchanged
+
+- No API, wire, or behavioural changes. Import path remains `github.com/otfabric/go-mms`.
+
+---
+
 ## v1.0.6
 
 **Date:** 2026-07-30
