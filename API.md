@@ -149,29 +149,43 @@ handle a single already-accepted transport connection.
 ```go
 func (s *Server) ListenAndServe(ctx context.Context, ln TransportListener) error
 func (s *Server) Serve(ctx context.Context, conn Transport) error
-func (s *Server) SetVariableRead(fn func(ctx context.Context, name ObjectName) (*Value, error))
-func (s *Server) SetVariableWrite(fn func(ctx context.Context, name ObjectName, val *Value) error)
-func (s *Server) SetIdentifyHandler(fn func(ctx context.Context) (*ServerIdentity, error))
-func (s *Server) SetStatusHandler(fn func(ctx context.Context) (*ServerStatus, error))
-func (s *Server) MMS() *mms.Server
+
+// Model registration.
+func (s *Server) RegisterDomain(name string) error
+func (s *Server) RegisterVariable(v Variable) error
+func (s *Server) SetVariableRead(domain, itemID string, fn func(context.Context) (*Value, error)) error
+func (s *Server) RegisterNamedVariableList(nvl NamedVariableList) error
+
+// Identify / Status handlers.
+func (s *Server) HandleIdentify(h func(context.Context, IdentifyRequest) (*ServerIdentity, error))
+func (s *Server) HandleStatus(h func(context.Context, StatusRequest) (*ServerStatus, error))
+
+// Connections and reports.
+func (s *Server) Connections() []*ServerConn
+func (s *Server) Broadcast(ctx context.Context, req *InformationReportRequest) error
 ```
+
+Per-variable write handling is set via `Variable.Write` at registration time.
 
 ### Server file and journal providers
 
 ```go
 type FileProvider interface {
-    FileOpen(ctx context.Context, filename string, position uint32) (FileHandle, *FileAttributes, error)
-    FileRead(ctx context.Context, handle FileHandle, buf []byte) (int, error)
-    FileClose(ctx context.Context, handle FileHandle) error
-    FileDirectory(ctx context.Context, spec string) ([]FileEntry, error)
-    FileDelete(ctx context.Context, filename string) error
-    FileRename(ctx context.Context, current, newName string) error
+    List(ctx context.Context, req FileListRequest) (*FileListResult, error)
+    Open(ctx context.Context, path string) (FileHandle, FileAttributes, error)
+    Read(ctx context.Context, handle FileHandle, maxBytes int) (data []byte, moreFollows bool, err error)
+    Close(ctx context.Context, handle FileHandle) error
+    Delete(ctx context.Context, path string) error
+    Rename(ctx context.Context, currentName, newName string) error
     ObtainFile(ctx context.Context, sourceFile, destinationFile string) error
-    DownloadFile(ctx context.Context, filename string) (io.ReadCloser, *FileAttributes, error)
 }
 
 type JournalProvider interface {
-    ReadJournal(ctx context.Context, domain, name string, req JournalReadRequest) (*JournalResult, error)
+    ListJournals(ctx context.Context, domain string) ([]string, error)
+    ReadTimeRange(ctx context.Context, domain, journal string,
+        start, stop time.Time, maxEntries int) (*JournalResult, error)
+    ReadStartAfter(ctx context.Context, domain, journal string,
+        afterID []byte, afterTime time.Time, maxEntries int) (*JournalResult, error)
 }
 ```
 
@@ -188,8 +202,10 @@ outside a server handler.
 
 ```go
 func (sc *ServerConn) SendInformationReport(ctx context.Context, req *InformationReportRequest) error
-func (sc *ServerConn) RemoteAddr() net.Addr
-func (sc *ServerConn) LocalAddr() net.Addr
+func (sc *ServerConn) SendUnsolicitedStatus(ctx context.Context, status ServerStatus) error
+func (sc *ServerConn) RegisterVariable(v Variable) error // association-scope variable
+func (sc *ServerConn) Abort(ctx context.Context) error
+func (sc *ServerConn) AuthToken() any
 ```
 
 ---
@@ -310,14 +326,17 @@ type VariableSpec struct {
 
 ```go
 type Variable struct {
-    Name  ItemID
-    Value *Value
-    Type  *TypeSpec
+    Name      ObjectName
+    TypeSpec  TypeSpec
+    Deletable bool
+    Read      func(ctx context.Context) (*Value, error)
+    Write     func(ctx context.Context, v *Value) error
 }
 
 type NamedVariableList struct {
-    Name    ObjectName
-    Members []VariableSpec
+    Name      ObjectName
+    Deletable bool
+    Variables []VariableSpec
 }
 ```
 
@@ -325,8 +344,9 @@ type NamedVariableList struct {
 
 ```go
 const (
-    DataAccessErrorNone                        DataAccessErrorCode = 0
-    DataAccessErrorObjectInvalidated           DataAccessErrorCode = 1
+    DataAccessErrorNone                        DataAccessErrorCode = -1 // Go-only; never on the wire
+    DataAccessErrorObjectInvalidated           DataAccessErrorCode = 0
+    DataAccessErrorHardwareFault               DataAccessErrorCode = 1
     DataAccessErrorTemporarilyUnavailable      DataAccessErrorCode = 2
     DataAccessErrorObjectAccessDenied          DataAccessErrorCode = 3
     DataAccessErrorObjectUndefined             DataAccessErrorCode = 4
@@ -349,16 +369,20 @@ See [ERRORS.md](ERRORS.md) for the full taxonomy and `errors.Is` / `errors.As` g
 ```go
 // Sentinel errors (use errors.Is).
 var (
-    ErrClosed             error  // connection already closed
-    ErrAssociationRefused error  // peer rejected ISO/ACSE association
-    ErrAssociation        error  // association handshake failure
-    ErrNegotiation        error  // MMS Initiate negotiation failure
-    ErrProtocol           error  // wire-level protocol error
-    ErrDecode             error  // PDU decode failure
-    ErrUnsupported        error  // service not supported by this library
-    ErrService            error  // remote ConfirmedError response
-    ErrDataAccess         error  // per-variable data access error
-    ErrAuthentication     error  // authentication failure
+    ErrClosed               error  // connection already closed
+    ErrInvokeTimeout        error  // confirmed request timed out
+    ErrConnectionRejected   error  // peer rejected ISO/ACSE association
+    ErrAssociationFailed    error  // association handshake failure
+    ErrNegotiationFailed    error  // MMS Initiate negotiation failure
+    ErrInvalidPDU           error  // structurally invalid PDU
+    ErrDecodeFailed         error  // PDU decode failure
+    ErrUnsupported          error  // service not supported by this library
+    ErrServiceRejected      error  // remote ConfirmedError response
+    ErrDataAccess           error  // per-variable data access error
+    ErrProtocol             error  // wire-level protocol error
+    ErrServerConnClosed     error  // ServerConn already closed
+    ErrAuthenticationFailed error  // authentication failure
+    ErrFileAccessDenied     error  // FileProvider/JournalProvider permission error
 )
 
 // Typed errors (use errors.As).
@@ -369,9 +393,9 @@ type ServiceError struct {
 }
 
 type DecodeError struct {
-    Offset int
-    Tag    byte
-    Msg    string
+    Offset  int
+    Tag     byte
+    Message string
 }
 
 type DataAccessError struct {
@@ -384,8 +408,7 @@ type ProtocolError struct {
 }
 
 type AuthenticationError struct {
-    Mechanism AuthMechanism
-    Reason    string
+    Reason string
 }
 ```
 
@@ -525,4 +548,6 @@ const (
 | `ReadArrayElement` | `ReadByIndex` |
 | `DataAccessErrorTemporarilyUnavail` | `DataAccessErrorTemporarilyUnavailable` |
 | `DataAccessErrorObjectAccessUnsup` | `DataAccessErrorObjectAccessUnsupported` |
+| `DataAccessErrorTypeMismatch` | `DataAccessErrorTypeUnsupported` |
+| `DataAccessErrorObjectExists` | `DataAccessErrorObjectAttributeInconsistent` |
 | `VMDPhysicalStatusPartiallyOper` | `VMDPhysicalStatusPartiallyOperational` |

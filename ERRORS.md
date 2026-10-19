@@ -152,17 +152,25 @@ within an otherwise successful response.
 
 | Constant | Value | Meaning |
 |----------|-------|---------|
-| `DataAccessErrorNone` | 0 | No error |
-| `DataAccessErrorObjectInvalidated` | 1 | Object has been invalidated |
-| `DataAccessErrorHardwareFault` | 2 | Hardware fault |
-| `DataAccessErrorTemporarilyUnavail` | 3 | Temporarily unavailable |
-| `DataAccessErrorObjectAccessDenied` | 4 | Access denied |
-| `DataAccessErrorObjectUndefined` | 5 | Object does not exist |
-| `DataAccessErrorInvalidAddress` | 6 | Invalid address |
-| `DataAccessErrorTypeMismatch` | 7 | Type mismatch |
-| `DataAccessErrorTypeInconsistent` | 8 | Type inconsistent |
-| `DataAccessErrorObjectExists` | 9 | Object already exists |
-| `DataAccessErrorObjectAccessUnsup` | 10 | Object access unsupported |
+| `DataAccessErrorNone` | -1 | No error (Go-only sentinel; never sent on the wire) |
+| `DataAccessErrorObjectInvalidated` | 0 | Object has been invalidated |
+| `DataAccessErrorHardwareFault` | 1 | Hardware fault |
+| `DataAccessErrorTemporarilyUnavailable` | 2 | Temporarily unavailable |
+| `DataAccessErrorObjectAccessDenied` | 3 | Access denied |
+| `DataAccessErrorObjectUndefined` | 4 | Object does not exist |
+| `DataAccessErrorInvalidAddress` | 5 | Invalid address |
+| `DataAccessErrorTypeUnsupported` | 6 | Type unsupported |
+| `DataAccessErrorTypeInconsistent` | 7 | Type inconsistent |
+| `DataAccessErrorObjectAttributeInconsistent` | 8 | Object attribute inconsistent |
+| `DataAccessErrorObjectAccessUnsupported` | 9 | Object access unsupported |
+| `DataAccessErrorObjectNonExistent` | 10 | Object non-existent |
+| `DataAccessErrorObjectValueInvalid` | 11 | Object value invalid |
+
+Values 0–11 match the ISO 9506-2 `DataAccessError` wire encoding. The
+deprecated aliases `DataAccessErrorTemporarilyUnavail`,
+`DataAccessErrorObjectAccessUnsup`, `DataAccessErrorTypeMismatch`
+(= `TypeUnsupported`) and `DataAccessErrorObjectExists`
+(= `ObjectAttributeInconsistent`) remain for compatibility.
 
 ### `*ProtocolError`
 
