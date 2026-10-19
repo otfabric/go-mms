@@ -71,15 +71,15 @@ server logs a warning and skips them.
 | Client write serialization | Transport writes are serialized via a send mutex so PDUs do not interleave. Concurrent callers may still have multiple confirmed requests outstanding (wait for response happens outside the write lock); responses are correlated by invoke ID. |
 | Negotiated outstanding not enforced | `MaxOutstandingCalling` / `MaxOutstandingCalled` are negotiated and exposed via `Client.Negotiated()` / server association state, but the client invoke tracker is not capped by those values today. Limit concurrency in the caller if needed. |
 | Server request handling | Confirmed requests within a single server connection are handled serially. Concurrent request handling per-connection is not supported. |
-| Server Abort PDU | The server does not proactively send an MMS Abort PDU. It detects client disconnects and handles ISO Release/Conclude, but has no API to initiate an abort. |
+| Server Abort PDU | The server does not send an MMS Abort PDU on its own. It detects client disconnects and handles ISO Release/Conclude; applications can abort a connection explicitly with `ServerConn.Abort`. |
 | RawHook availability | Raw wire hooks (`RawHook`) are only available on the client side via `DialOptions`. The server does not expose a raw hook for wire-level inspection. |
 
 ## Named Variable List Limitations
 
 | Limitation | Details |
 |-----------|---------|
-| DeleteNamedVariableList scope | Only `scopeOfDelete=0` (specific list names) is supported. Scope-based bulk deletion (e.g., delete all domain NVLs, delete all association NVLs) is not implemented. |
-| Association-scope listing | Association-scoped variables and NVLs can be stored and accessed, but `GetNameList` for association scope returns `service-not-supported`. Listing and lifecycle management for association-scope objects is deferred. |
+| DeleteNamedVariableList scope | The server handles all four `scopeOfDelete` values (0 specific, 1 aa-specific, 2 domain, 3 VMD). The client exposes scopes 0, 2 and 3 (`DeleteNamedVariableList`, `DeleteAllDomainNVLs`, `DeleteAllVMDNVLs`); there is no client helper for aa-specific (scope 1) deletion. |
+| Association-scope objects | Association-scoped variables and NVLs are stored per connection and discarded when it closes. `GetNameList` for association scope lists the calling connection's own objects. |
 
 ## File and Journal Service Limitations
 
