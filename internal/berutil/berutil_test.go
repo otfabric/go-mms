@@ -404,3 +404,9 @@ func TestDecodeObjectIdentifierErrors(t *testing.T) {
 		t.Error("expected error for empty data")
 	}
 }
+
+func TestDecodeTLVAt_NegativeOffset(t *testing.T) {
+	if _, _, _, err := DecodeTLVAt([]byte{0x02, 0x01, 0x00}, -1); err == nil {
+		t.Fatal("negative offset accepted")
+	}
+}

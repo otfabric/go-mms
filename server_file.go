@@ -311,7 +311,7 @@ func (s *Server) handleFileDirectory(ctx context.Context, body []byte) (int, boo
 }
 
 const (
-	fileErrClassFile        = 11 // ServiceError errorClass "file" (CHOICE tag 11)
+	fileErrClassFile        = int(ErrorClassFile)
 	fileErrOther            = 0
 	fileErrPositionInvalid  = 5
 	fileErrFileAccessDenied = 6

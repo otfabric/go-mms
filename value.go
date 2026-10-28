@@ -5,6 +5,7 @@ package mms
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -372,7 +373,11 @@ func NewUTCTimeWithQuality(t time.Time, quality uint8) *Value {
 // NewBinaryTime creates a [Value] of type [ValueTypeBinaryTime].
 // The value is milliseconds since the Unix epoch. The MMS TimeOfDay
 // encoding counts days from 1984-01-01 in 16 bits, so only instants from
-// 1984-01-01 through 2163-06-05 can be sent; others fail to encode.
+// 1984-01-01 through 2163-06-05 can be sent in the dated (6-octet) form.
+// Values from 0 to 86399999 (one day) are sent in the 4-octet form,
+// which carries milliseconds since midnight without a date; a 4-octet
+// TimeOfDay received from a peer decodes to such a value. Other values
+// fail to encode.
 func NewBinaryTime(ms int64) *Value {
 	return &Value{typ: ValueTypeBinaryTime, binaryTime: ms}
 }
@@ -469,10 +474,10 @@ func (v *Value) Clone() *Value {
 }
 
 // Equal returns true if v and other have the same type and value,
-// including deep comparison of structures and arrays. Float values
-// are compared with exact bitwise equality (==), not approximate
-// comparison. If epsilon-based float equality is needed, callers
-// should implement that separately.
+// including deep comparison of structures and arrays. Float and Real
+// values are compared exactly: bit for bit, except that every NaN equals
+// every other NaN (so Equal is reflexive, and +0 differs from -0). If epsilon-based float
+// equality is needed, callers should implement that separately.
 func (v *Value) Equal(other *Value) bool {
 	if v == nil || other == nil {
 		return v == other
@@ -488,7 +493,7 @@ func (v *Value) Equal(other *Value) bool {
 	case ValueTypeUnsigned:
 		return v.uintVal == other.uintVal
 	case ValueTypeFloat:
-		return v.floatVal == other.floatVal
+		return floatsEqual(v.floatVal, other.floatVal)
 	case ValueTypeBitString:
 		return v.bitLen == other.bitLen && bytes.Equal(v.bytesVal, other.bytesVal)
 	case ValueTypeOctetString:
@@ -514,7 +519,7 @@ func (v *Value) Equal(other *Value) bool {
 		}
 		return true
 	case ValueTypeReal:
-		return v.floatVal == other.floatVal
+		return floatsEqual(v.floatVal, other.floatVal)
 	case ValueTypeBooleanArray:
 		return v.bitLen == other.bitLen && bytes.Equal(v.bytesVal, other.bytesVal)
 	case ValueTypeStructure, ValueTypeArray:
@@ -601,49 +606,49 @@ func (v *Value) Get(selectors ...AccessSelector) (*Value, error) {
 	cur := v
 	for i, sel := range selectors {
 		if cur == nil {
-			return nil, fmt.Errorf("nil value at selector [%d]", i)
+			return nil, invalidArgf("nil value at selector [%d]", i)
 		}
 		switch {
 		case sel.Component != "":
 			elems, ok := cur.Structure()
 			if !ok {
-				return nil, fmt.Errorf("selector [%d]: component %q on non-structure type %s", i, sel.Component, cur.typ)
+				return nil, invalidArgf("selector [%d]: component %q on non-structure type %s", i, sel.Component, cur.typ)
 			}
 			_ = elems
-			return nil, fmt.Errorf("selector [%d]: component access requires TypeSpec context; use TypeSpec.Resolve instead", i)
+			return nil, invalidArgf("selector [%d]: component access requires TypeSpec context; use TypeSpec.Resolve instead", i)
 		case sel.Index != nil:
 			idx := *sel.Index
 			switch cur.typ {
 			case ValueTypeStructure:
 				elems, _ := cur.Structure()
 				if idx < 0 || idx >= len(elems) {
-					return nil, fmt.Errorf("selector [%d]: index %d out of range (structure has %d elements)", i, idx, len(elems))
+					return nil, invalidArgf("selector [%d]: index %d out of range (structure has %d elements)", i, idx, len(elems))
 				}
 				cur = elems[idx]
 			case ValueTypeArray:
 				elems, _ := cur.ArrayElements()
 				if idx < 0 || idx >= len(elems) {
-					return nil, fmt.Errorf("selector [%d]: index %d out of range (array has %d elements)", i, idx, len(elems))
+					return nil, invalidArgf("selector [%d]: index %d out of range (array has %d elements)", i, idx, len(elems))
 				}
 				cur = elems[idx]
 			default:
-				return nil, fmt.Errorf("selector [%d]: index on non-composite type %s", i, cur.typ)
+				return nil, invalidArgf("selector [%d]: index on non-composite type %s", i, cur.typ)
 			}
 		case sel.IndexRange != nil:
 			elems, ok := cur.ArrayElements()
 			if !ok {
-				return nil, fmt.Errorf("selector [%d]: index range on non-array type %s", i, cur.typ)
+				return nil, invalidArgf("selector [%d]: index range on non-array type %s", i, cur.typ)
 			}
 			start := sel.IndexRange.Start
 			count := sel.IndexRange.Count
 			if start < 0 || start+count > len(elems) {
-				return nil, fmt.Errorf("selector [%d]: range [%d..%d) out of bounds (array has %d elements)", i, start, start+count, len(elems))
+				return nil, invalidArgf("selector [%d]: range [%d..%d) out of bounds (array has %d elements)", i, start, start+count, len(elems))
 			}
 			sub := make([]*Value, count)
 			copy(sub, elems[start:start+count])
 			cur = NewArray(sub)
 		default:
-			return nil, fmt.Errorf("selector [%d]: no field set", i)
+			return nil, invalidArgf("selector [%d]: no field set", i)
 		}
 	}
 	return cur, nil
@@ -665,4 +670,12 @@ func copyValues(v []*Value) []*Value {
 	c := make([]*Value, len(v))
 	copy(c, v)
 	return c
+}
+
+// floatsEqual compares bit patterns, treating all NaNs as equal.
+func floatsEqual(a, b float64) bool {
+	if math.IsNaN(a) || math.IsNaN(b) {
+		return math.IsNaN(a) && math.IsNaN(b)
+	}
+	return math.Float64bits(a) == math.Float64bits(b)
 }

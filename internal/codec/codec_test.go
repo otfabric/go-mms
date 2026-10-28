@@ -3,6 +3,7 @@
 package codec
 
 import (
+	"bytes"
 	"encoding/asn1"
 	"strings"
 	"testing"
@@ -233,18 +234,18 @@ func TestMarshalCancelError(t *testing.T) {
 	if len(data) == 0 {
 		t.Fatal("empty")
 	}
-	// WrapConstructed(8) → context 8 constructed = 0xa8.
-	if data[0] != 0xa8 {
-		t.Fatalf("tag = 0x%02x, want 0xa8", data[0])
+	// Cancel-ErrorPDU is MMSpdu [7], constructed = 0xa7.
+	if data[0] != 0xa7 {
+		t.Fatalf("tag = 0x%02x, want 0xa7", data[0])
 	}
 	tag, content, err := UnwrapPdu(data)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tag != 0xa8 {
+	if tag != 0xa7 {
 		t.Fatalf("Unwrap tag = 0x%02x", tag)
 	}
-	if len(content) == 0 || content[0] != 0x80 {
+	if len(content) == 0 || content[0] != 0x80 || !bytes.Contains(content, []byte{0xa1, 0x05, 0xa0, 0x03, 0x81, 0x01, 0x02}) {
 		t.Fatalf("content should start with [0] invokeID, got %x", content)
 	}
 }
@@ -254,16 +255,16 @@ func TestMarshalCancelResponse(t *testing.T) {
 	if len(data) == 0 {
 		t.Fatal("empty")
 	}
-	// WrapPrimitive(7) → context 7 primitive = 0x87.
-	if data[0] != 0x87 {
-		t.Fatalf("tag = 0x%02x, want 0x87", data[0])
+	// Cancel-ResponsePDU is MMSpdu [6], primitive = 0x86.
+	if data[0] != 0x86 {
+		t.Fatalf("tag = 0x%02x, want 0x86", data[0])
 	}
 	tag, err := PduType(data)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tag != 0x87 {
-		t.Fatalf("PduType = 0x%02x, want 0x87", tag)
+	if tag != 0x86 {
+		t.Fatalf("PduType = 0x%02x, want 0x86", tag)
 	}
 }
 

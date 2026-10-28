@@ -42,7 +42,7 @@ func (c *Client) ReadJournalTimeRange(ctx context.Context, domain, journal strin
 	invokeID := c.nextInvokeID()
 	reqBytes, err := pdu.MarshalReadJournalTimeRange(invokeID, domain, journal, start, stop)
 	if err != nil {
-		return nil, fmt.Errorf("mms: marshal read-journal request: %w", err)
+		return nil, invalidArgf("mms: marshal read-journal request: %w", err)
 	}
 	return c.sendJournalRequest(ctx, invokeID, reqBytes)
 }
@@ -55,7 +55,7 @@ func (c *Client) ReadJournalStartAfter(ctx context.Context, domain, journal stri
 	invokeID := c.nextInvokeID()
 	reqBytes, err := pdu.MarshalReadJournalStartAfter(invokeID, domain, journal, afterTime, afterID)
 	if err != nil {
-		return nil, fmt.Errorf("mms: marshal read-journal request: %w", err)
+		return nil, invalidArgf("mms: marshal read-journal request: %w", err)
 	}
 	return c.sendJournalRequest(ctx, invokeID, reqBytes)
 }
@@ -68,14 +68,14 @@ func (c *Client) sendJournalRequest(ctx context.Context, invokeID codec.InvokeID
 
 	if confirmed.ServiceKind != pdu.ServiceReadJournal {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected ReadJournal response, got %s", confirmed.ServiceKind),
 		}
 	}
 
 	wireEntries, moreFollows, err := pdu.UnmarshalReadJournalResponse(confirmed.ServiceData.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("mms: %w", err)
+		return nil, decodeErrorf("mms: %w", err)
 	}
 
 	entries := make([]JournalEntry, len(wireEntries))
@@ -84,7 +84,7 @@ func (c *Client) sendJournalRequest(ctx context.Context, invokeID codec.InvokeID
 		for j, wv := range we.Variables {
 			val, vErr := dataValueToValue(wv.Value)
 			if vErr != nil {
-				return nil, fmt.Errorf("mms: journal entry %d variable %q: %w", i, wv.Tag, vErr)
+				return nil, decodeErrorf("mms: journal entry %d variable %q: %w", i, wv.Tag, vErr)
 			}
 			vars[j] = JournalVariable{Tag: wv.Tag, Value: val}
 		}

@@ -85,13 +85,16 @@ func WrapContextTag(tagNum int, constructed bool, content []byte) []byte {
 }
 
 func encodeTagNumber(n int) []byte {
-	if n < 0x80 {
-		return []byte{byte(n)}
+	// Base-128, most significant group first, continuation bit on all
+	// but the last byte (X.690 §8.1.2.4.2).
+	var groups [10]byte
+	i := len(groups) - 1
+	groups[i] = byte(n & 0x7f)
+	for n >>= 7; n > 0; n >>= 7 {
+		i--
+		groups[i] = byte(n&0x7f) | 0x80
 	}
-	if n < 0x4000 {
-		return []byte{byte(n>>7) | 0x80, byte(n & 0x7f)}
-	}
-	return []byte{byte(n>>14) | 0x80, byte(n>>7) | 0x80, byte(n & 0x7f)}
+	return append([]byte(nil), groups[i:]...)
 }
 
 func lengthSize(l int) int {

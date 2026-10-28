@@ -59,15 +59,13 @@ func TestServe_CancelRequest(t *testing.T) {
 	}
 	<-client.recv
 
-	// CancelRequestPDU: context 6 primitive + Unsigned32 invoke ID.
-	cancelPdu := asn1util.WrapPrimitive(6, berutil.EncodeUint32(42))
+	// Cancel-RequestPDU: context 5 primitive + Unsigned32 invoke ID.
+	cancelPdu := asn1util.WrapPrimitive(5, berutil.EncodeUint32(42))
 	client.send <- isostack.EncodeDataRequest(cancelPdu)
 
 	// Follow with conclude so Serve returns.
-	go func() {
-		time.Sleep(30 * time.Millisecond)
-		client.send <- isostack.EncodeDataRequest(codec.MarshalConcludeRequest())
-	}()
+	// The channel is buffered, so the conclude can be queued up front.
+	client.send <- isostack.EncodeDataRequest(codec.MarshalConcludeRequest())
 
 	if err := c.Serve(ctx); err != nil {
 		t.Fatalf("Serve: %v", err)
@@ -84,7 +82,7 @@ drain:
 			if err != nil {
 				continue
 			}
-			if len(mmsPayload) > 0 && mmsPayload[0] == 0xa8 {
+			if len(mmsPayload) > 0 && mmsPayload[0] == 0xa7 {
 				gotCancel = true
 			}
 			if gotCancel {
@@ -95,7 +93,7 @@ drain:
 		}
 	}
 	if !gotCancel {
-		t.Fatal("expected CancelError PDU (0xa8)")
+		t.Fatal("expected CancelError PDU (0xa7)")
 	}
 }
 
@@ -129,10 +127,8 @@ func TestServe_CancelRequestMalformed(t *testing.T) {
 	badCancel := asn1util.WrapPrimitive(6, []byte{0xff, 0xff, 0xff, 0xff, 0xff}) // invalid unsigned
 	client.send <- isostack.EncodeDataRequest(badCancel)
 
-	go func() {
-		time.Sleep(30 * time.Millisecond)
-		client.send <- isostack.EncodeDataRequest(codec.MarshalConcludeRequest())
-	}()
+	// The channel is buffered, so the conclude can be queued up front.
+	client.send <- isostack.EncodeDataRequest(codec.MarshalConcludeRequest())
 	if err := c.Serve(ctx); err != nil {
 		t.Fatalf("Serve: %v", err)
 	}
@@ -165,10 +161,8 @@ func TestServe_UnexpectedPDUKind(t *testing.T) {
 	reject := codec.MarshalRejectPDU(0, 1, 0)
 	client.send <- isostack.EncodeDataRequest(reject)
 
-	go func() {
-		time.Sleep(30 * time.Millisecond)
-		client.send <- isostack.EncodeDataRequest(codec.MarshalConcludeRequest())
-	}()
+	// The channel is buffered, so the conclude can be queued up front.
+	client.send <- isostack.EncodeDataRequest(codec.MarshalConcludeRequest())
 	if err := c.Serve(ctx); err != nil {
 		t.Fatalf("Serve: %v", err)
 	}

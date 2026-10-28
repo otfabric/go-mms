@@ -643,14 +643,15 @@ func TestEmptyBitStringRoundTrip(t *testing.T) {
 }
 
 // The 6-byte TimeOfDay carries uint16 days since 1984-01-01; instants
-// outside that span must be rejected rather than wrapped.
+// outside that span must be rejected rather than wrapped. Values below
+// 2^32 use the 4-byte time-of-day form.
 func TestEncodeData_BinaryTimeRange(t *testing.T) {
-	for _, ms := range []int64{0, binaryTimeMinMs - 1, binaryTimeMaxMs + 1} {
+	for _, ms := range []int64{-1, msPerDay, binaryTimeMinMs - 1, binaryTimeMaxMs + 1} {
 		if _, err := MarshalData(&DataValue{Tag: TagDataBinaryTime, BinTimeMs: ms}); err == nil {
 			t.Errorf("BinaryTime %d ms: expected error", ms)
 		}
 	}
-	for _, ms := range []int64{binaryTimeMinMs, binaryTimeMaxMs, time.Date(2026, 1, 2, 3, 4, 5, 6e6, time.UTC).UnixMilli()} {
+	for _, ms := range []int64{0, 3_600_000, msPerDay - 1, binaryTimeMinMs, binaryTimeMaxMs, time.Date(2026, 1, 2, 3, 4, 5, 6e6, time.UTC).UnixMilli()} {
 		enc, err := MarshalData(&DataValue{Tag: TagDataBinaryTime, BinTimeMs: ms})
 		if err != nil {
 			t.Fatalf("BinaryTime %d ms: %v", ms, err)
@@ -665,5 +666,34 @@ func TestEncodeData_BinaryTimeRange(t *testing.T) {
 	}
 	if _, err := MarshalReadJournalTimeRange(1, "d", "j", time.Time{}, time.Now()); err == nil {
 		t.Error("ReadJournal with zero start time: expected error")
+	}
+}
+
+func TestUTCTimeFractionRoundTrip(t *testing.T) {
+	for frac := uint32(0); frac < 1<<24; frac += 4093 {
+		in := []byte{0x30, 0x30, 0x30, 0x30, byte(frac >> 16), byte(frac >> 8), byte(frac), 0x0a}
+		tm, q, err := decodeUTCTime(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out := encodeUTCTime(tm, q); string(out) != string(in) {
+			t.Fatalf("fraction %#x: %x -> %v -> %x", frac, in, tm, out)
+		}
+	}
+	// The last nanosecond of a second must not overflow the fraction.
+	out := encodeUTCTime(time.Unix(0, 999_999_999), 0)
+	if out[4] != 0xff || out[5] != 0xff || out[6] != 0xff {
+		t.Fatalf("999999999ns encodes to %x", out[4:7])
+	}
+}
+
+func TestDecodeBinaryTime_RejectsOverlongDay(t *testing.T) {
+	for _, in := range [][]byte{
+		{0x05, 0x26, 0x5c, 0x00},             // 86400000 ms
+		{0x30, 0x30, 0x30, 0x30, 0xff, 0xff}, // 808464432 ms of day
+	} {
+		if _, err := decodeBinaryTime(in); err == nil {
+			t.Errorf("decodeBinaryTime(%x) accepted a time of day past midnight", in)
+		}
 	}
 }

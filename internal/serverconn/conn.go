@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 
 	"github.com/otfabric/go-mms/internal/acse"
 	"github.com/otfabric/go-mms/internal/asn1util"
@@ -140,7 +141,7 @@ func (c *Conn) AcceptAssociation(ctx context.Context) error {
 
 	c.mmsOpts = negotiated
 
-	c.logger.Info("serverconn: association accepted",
+	c.logger.Info("mms: association accepted",
 		"max_pdu_size", negotiated.MaxPDUSize,
 		"max_outstanding_calling", negotiated.MaxOutstandingCalling,
 	)
@@ -198,13 +199,13 @@ func (c *Conn) Serve(ctx context.Context) error {
 		}
 
 		if c.mmsOpts.MaxPDUSize > 0 && len(mmsPayload) > c.mmsOpts.MaxPDUSize {
-			c.logger.Warn("serverconn: PDU exceeds negotiated size", "size", len(mmsPayload), "max", c.mmsOpts.MaxPDUSize)
+			c.logger.Warn("mms: PDU exceeds negotiated size", "size", len(mmsPayload), "max", c.mmsOpts.MaxPDUSize)
 			continue
 		}
 
 		kind, content, err := pdu.DecodePdu(mmsPayload)
 		if err != nil {
-			c.logger.Warn("serverconn: malformed PDU", "error", err)
+			c.logger.Warn("mms: malformed PDU", "error", err)
 			continue
 		}
 
@@ -220,7 +221,7 @@ func (c *Conn) Serve(ctx context.Context) error {
 				return err
 			}
 		default:
-			c.logger.Warn("serverconn: unexpected PDU kind", "kind", kind)
+			c.logger.Warn("mms: unexpected PDU kind", "kind", kind)
 		}
 	}
 }
@@ -228,7 +229,7 @@ func (c *Conn) Serve(ctx context.Context) error {
 func (c *Conn) handleConfirmedRequest(ctx context.Context, content []byte) error {
 	invokeID, serviceRaw, err := codec.UnmarshalConfirmedRequest(content)
 	if err != nil {
-		c.logger.Warn("serverconn: malformed confirmed request", "error", err)
+		c.logger.Warn("mms: malformed confirmed request", "error", err)
 		rejectPdu := codec.MarshalRejectPDU(0, 1, 0) // confirmed-request-pdu, other
 		return c.sendData(ctx, rejectPdu)
 	}
@@ -248,7 +249,7 @@ func (c *Conn) handleConfirmedRequest(ctx context.Context, content []byte) error
 	}
 
 	if c.mmsOpts.MaxPDUSize > 0 && len(respPdu) > c.mmsOpts.MaxPDUSize {
-		c.logger.Warn("serverconn: response exceeds negotiated PDU size",
+		c.logger.Warn("mms: response exceeds negotiated PDU size",
 			"invoke_id", invokeID, "size", len(respPdu), "max", c.mmsOpts.MaxPDUSize)
 		return c.sendError(ctx, invokeID, errorClassResource, errorCodeOther)
 	}
@@ -284,11 +285,38 @@ func (c *Conn) sendData(ctx context.Context, mmsPdu []byte) error {
 // SendUnconfirmed sends a pre-encoded MMS unconfirmed PDU (e.g.
 // InformationReport) over the connection. Safe for concurrent use with
 // the Serve loop.
+//
+// ctx bounds how long the caller waits, not the write: abandoning a PDU
+// half-written would corrupt the stream and end the association. A write
+// that has not started when ctx is done is skipped; one in progress
+// completes in the background.
 func (c *Conn) SendUnconfirmed(ctx context.Context, mmsPdu []byte) error {
-	c.sendMu.Lock()
-	defer c.sendMu.Unlock()
-	data := isostack.EncodeDataRequest(mmsPdu)
-	return c.transport.Send(ctx, data)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	const (
+		pending int32 = iota
+		writing
+		abandoned
+	)
+	var state atomic.Int32
+	done := make(chan error, 1)
+	go func() {
+		c.sendMu.Lock()
+		defer c.sendMu.Unlock()
+		if !state.CompareAndSwap(pending, writing) {
+			done <- nil
+			return
+		}
+		done <- c.transport.Send(context.Background(), isostack.EncodeDataRequest(mmsPdu))
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		state.CompareAndSwap(pending, abandoned)
+		return ctx.Err()
+	}
 }
 
 func (c *Conn) handleConclude(ctx context.Context) error {
@@ -296,7 +324,7 @@ func (c *Conn) handleConclude(ctx context.Context) error {
 	if err := c.sendData(ctx, resp); err != nil {
 		return fmt.Errorf("serverconn: send conclude response: %w", err)
 	}
-	c.logger.Info("serverconn: concluded")
+	c.logger.Info("mms: concluded")
 	return nil
 }
 
@@ -305,7 +333,7 @@ func (c *Conn) handleRelease(ctx context.Context) error {
 	if err := c.transport.Send(ctx, resp); err != nil {
 		return fmt.Errorf("serverconn: send release response: %w", err)
 	}
-	c.logger.Info("serverconn: released")
+	c.logger.Info("mms: released")
 	return nil
 }
 
@@ -330,7 +358,7 @@ func (c *Conn) Close() error {
 func (c *Conn) handleCancelRequest(ctx context.Context, content []byte) error {
 	invokeID, err := berutil.DecodeUnsigned(content)
 	if err != nil {
-		c.logger.Warn("serverconn: malformed cancel request", "error", err)
+		c.logger.Warn("mms: malformed cancel request", "error", err)
 		return nil
 	}
 	cancelErr := codec.MarshalCancelError(codec.InvokeID(invokeID), 10, 1) // cancel: invoke-id-unknown

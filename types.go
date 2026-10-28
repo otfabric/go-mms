@@ -601,27 +601,27 @@ func (ts *TypeSpec) Resolve(selectors ...AccessSelector) (*TypeSpec, error) {
 	cur := ts
 	for i, sel := range selectors {
 		if cur == nil {
-			return nil, fmt.Errorf("nil TypeSpec at selector [%d]", i)
+			return nil, invalidArgf("nil TypeSpec at selector [%d]", i)
 		}
 		switch {
 		case sel.Component != "":
 			child, ok := cur.ChildByName(sel.Component)
 			if !ok {
-				return nil, fmt.Errorf("selector [%d]: component %q not found in %s", i, sel.Component, cur.Type)
+				return nil, invalidArgf("selector [%d]: component %q not found in %s", i, sel.Component, cur.Type)
 			}
 			cur = child
 		case sel.Index != nil:
 			child, ok := cur.ChildByIndex(*sel.Index)
 			if !ok {
-				return nil, fmt.Errorf("selector [%d]: index %d out of range for %s", i, *sel.Index, cur.Type)
+				return nil, invalidArgf("selector [%d]: index %d out of range for %s", i, *sel.Index, cur.Type)
 			}
 			cur = child
 		case sel.IndexRange != nil:
 			if cur.Type != ValueTypeArray {
-				return nil, fmt.Errorf("selector [%d]: index range on non-array type %s", i, cur.Type)
+				return nil, invalidArgf("selector [%d]: index range on non-array type %s", i, cur.Type)
 			}
 			if cur.Element == nil {
-				return nil, fmt.Errorf("selector [%d]: array has no element type", i)
+				return nil, invalidArgf("selector [%d]: array has no element type", i)
 			}
 			sub := TypeSpec{
 				Type:    ValueTypeArray,
@@ -630,7 +630,7 @@ func (ts *TypeSpec) Resolve(selectors ...AccessSelector) (*TypeSpec, error) {
 			}
 			cur = &sub
 		default:
-			return nil, fmt.Errorf("selector [%d]: no field set", i)
+			return nil, invalidArgf("selector [%d]: no field set", i)
 		}
 	}
 	return cur, nil
