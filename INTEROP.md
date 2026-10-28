@@ -1,11 +1,11 @@
 # go-mms Interoperability
 
-`go-mms` owns its interoperability assertions. Tests in `interop/` consume the adapter images published by [mms-interop](https://github.com/otfabric/mms-interop) and assert `go-mms` behaviour against a live, independent implementation.
+`go-mms` owns its interoperability assertions. Tests in `interop/` consume the adapter images published by [iec61850-interop](https://github.com/otfabric/iec61850-interop) and assert `go-mms` behaviour against a live, independent implementation.
 
 ## Architecture
 
 ```
-mms-interop
+iec61850-interop
   adapter images: libiec61850, dscsystems, iec61850-rust
   (same contract: <stack>-mms-server / <stack>-mms-client, fixture, JSON Lines)
   IEC 61850 IED adapter image: iec61850bean
@@ -38,8 +38,8 @@ No pre-running containers. No manual steps. Tests are gated behind `-tags=intero
 ## Running
 
 ```bash
-# Build adapter images locally (in mms-interop)
-cd ../mms-interop && make build-libiec61850 build-dscsystems build-iec61850-rust build-iec61850bean
+# Build adapter images locally (in iec61850-interop)
+cd ../iec61850-interop && make build-libiec61850 build-dscsystems build-iec61850-rust build-iec61850bean
 
 # One stack (default libiec61850)
 MMS_INTEROP_STACK=dscsystems make interop
@@ -47,14 +47,14 @@ MMS_INTEROP_STACK=dscsystems make interop
 # Every stack
 make interop-all
 
-# Published images (CI pins the mms-interop v0.4.0 digests in .github/workflows/interop.yml)
-MMS_INTEROP_STACK=iec61850-rust IEC61850RUST_IMAGE=ghcr.io/otfabric/mms-interop-iec61850-rust:v0.4.0 make interop
+# Published images (CI pins the iec61850-interop v1.0.1 digests in .github/workflows/interop.yml)
+MMS_INTEROP_STACK=iec61850-rust IEC61850RUST_IMAGE=ghcr.io/otfabric/iec61850-interop-iec61850-rust:v1.0.1 make interop
 ```
 
 CI (`.github/workflows/interop.yml`) runs the full matrix, one job per stack,
-against images pinned from the mms-interop release. Bump the images and
+against images pinned from the iec61850-interop release. Bump the images and
 the fixture copies (`interop/testdata/interop.json`,
-`interop/testdata/iec61850/values.json`) together when mms-interop publishes
+`interop/testdata/iec61850/values.json`) together when iec61850-interop publishes
 new adapters.
 
 ## Environment variables
@@ -63,10 +63,10 @@ new adapters.
 |----------|-------------|---------|
 | `MMS_INTEROP_STACK` | Peer stack: `libiec61850`, `dscsystems`, `iec61850-rust`, `iec61850bean` | `libiec61850` |
 | `MMS_INTEROP_IMAGE` | Image for the selected stack (overrides the per-stack variable) | — |
-| `LIBIEC61850_IMAGE` | libiec61850 adapter image | `mms-interop-libiec61850:local` |
-| `DSCSYSTEMS_IMAGE` | dscsystems adapter image | `mms-interop-dscsystems:local` |
-| `IEC61850RUST_IMAGE` | iec61850-rust adapter image | `mms-interop-iec61850-rust:local` |
-| `IEC61850BEAN_IMAGE` | iec61850bean adapter image | `mms-interop-iec61850bean:local` |
+| `LIBIEC61850_IMAGE` | libiec61850 adapter image | `iec61850-interop-libiec61850:local` |
+| `DSCSYSTEMS_IMAGE` | dscsystems adapter image | `iec61850-interop-dscsystems:local` |
+| `IEC61850RUST_IMAGE` | iec61850-rust adapter image | `iec61850-interop-iec61850-rust:local` |
+| `IEC61850BEAN_IMAGE` | iec61850bean adapter image | `iec61850-interop-iec61850bean:local` |
 | `MMS_SERVER_BINARY` | Path to `<stack>-mms-server` binary (skips Docker) | — |
 | `MMS_CLIENT_BINARY` | Path to `<stack>-mms-client` binary (skips Docker) | — |
 | `IED_SERVER_BINARY` | Path to `<stack>-ied-server` binary (skips Docker) | — |
@@ -91,7 +91,7 @@ in `interop/stack_test.go` declares:
   prints it). Client-adapter steps answered `"error":"unsupported"` are
   skipped with that reason too.
 
-Both mirror `knownLimitations` in mms-interop `fixtures/capabilities.json`.
+Both mirror `knownLimitations` in iec61850-interop `fixtures/capabilities.json`.
 `TestStackSkipsNameRealTests` fails when a skip names a test that does not
 exist.
 
@@ -132,7 +132,7 @@ between a go-mms client and a go-mms server.
 
 ## MMS compatibility matrix
 
-Black-box bidirectional interoperability against a pinned libiec61850 adapter through the independently versioned mms-interop infrastructure.
+Black-box bidirectional interoperability against a pinned libiec61850 adapter through the independently versioned iec61850-interop infrastructure.
 
 **Key:** ✓ covered · ◐ covered, peer limitation asserted · — not tested · n/a not applicable
 
@@ -202,7 +202,7 @@ The go-mms→libIEC column is the go-mms client against `libiec61850-mms-server`
 | ReadJournal, unknown journal (negative) | ✓ | ✓ | |
 | Cancel | — | — | the go-mms client does not send Cancel |
 
-The ◐ rows are listed with the test that pins the peer behaviour in the mms-interop [`COVERAGE.md`](https://github.com/otfabric/mms-interop/blob/main/COVERAGE.md).
+The ◐ rows are listed with the test that pins the peer behaviour in the iec61850-interop [`COVERAGE.md`](https://github.com/otfabric/iec61850-interop/blob/main/COVERAGE.md).
 
 ## Related test suites
 
@@ -221,4 +221,4 @@ CI runs the coverage gate, a 2s fuzz pass and a 5s chaos run in the
 
 ## Fixture
 
-`interop/testdata/interop.json` is a synchronized copy of the canonical fixture from mms-interop. It must be updated alongside the pinned adapter image version when the fixture contract changes.
+`interop/testdata/interop.json` is a synchronized copy of the canonical fixture from iec61850-interop. It must be updated alongside the pinned adapter image version when the fixture contract changes.

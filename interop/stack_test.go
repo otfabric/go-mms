@@ -14,9 +14,9 @@ import (
 	"github.com/otfabric/go-mms/internal/apisurface"
 )
 
-// peerStack is an MMS implementation packaged by mms-interop. Every stack
+// peerStack is an MMS implementation packaged by iec61850-interop. Every stack
 // implements the same adapter contract: commands <name>-mms-server and
-// <name>-mms-client in image mms-interop-<name>, the same flags, fixture
+// <name>-mms-client in image iec61850-interop-<name>, the same flags, fixture
 // and JSON Lines, and a ready event whose "adapter" is <name>. The suite
 // runs one test body per scenario against the stack selected by
 // MMS_INTEROP_STACK.
@@ -29,7 +29,7 @@ type peerStack struct {
 	quirks quirks
 
 	// skips maps a test name to the reason the peer cannot run it. Only
-	// peer limitations belong here (mirrored in mms-interop
+	// peer limitations belong here (mirrored in iec61850-interop
 	// fixtures/capabilities.json knownLimitations and INTEROP.md); a
 	// go-mms bug is never skipped.
 	skips map[string]string
@@ -115,12 +115,12 @@ func stack(t testing.TB) peerStack {
 }
 
 // image returns the adapter image: MMS_INTEROP_IMAGE, else the stack's
-// own variable, else the locally built mms-interop-<name>:local.
+// own variable, else the locally built iec61850-interop-<name>:local.
 func (s peerStack) image() string {
 	if v := os.Getenv("MMS_INTEROP_IMAGE"); v != "" {
 		return v
 	}
-	return getEnv(s.imageEnv, "mms-interop-"+s.name+":local")
+	return getEnv(s.imageEnv, "iec61850-interop-"+s.name+":local")
 }
 
 func (s peerStack) serverCommand() string    { return s.name + "-mms-server" }

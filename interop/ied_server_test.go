@@ -7,7 +7,7 @@
 //
 //	go-mms client → <stack>-ied-server
 //
-// The IED server serves the mms-interop IEC 61850 fixture (revision
+// The IED server serves the iec61850-interop IEC 61850 fixture (revision
 // iec61850-v3: interop.icd and values.json) built into the image. go-mms
 // reads it as plain MMS: logical device InteropLD of IED InteropIED is
 // domain InteropIEDInteropLD, and data attribute LN.DO.DA with functional
@@ -170,10 +170,8 @@ func mmsItem(t *testing.T, ref, fc string) string {
 }
 
 // seededAttributes are the values.json references the IED adapters set
-// at start, with their functional constraint. GGIO1.DPS1.stVal and
-// MMTR1.TotVAh.actVal are in values.json but not seeded by the
-// iec61850bean adapter (mms-interop v0.4.0); their types are checked in
-// TestIEDServer_GetVariableAccessAttributes.
+// at start, with their functional constraint. GGIO1.DPS1.stVal, a Dbpos
+// BIT STRING, is checked separately in TestIEDServer_Read_FixtureValues.
 var seededAttributes = []struct{ ref, fc string }{
 	{"InteropLD/LLN0.Mod.stVal", "ST"},
 	{"InteropLD/LLN0.Mod.ctlModel", "CF"},
@@ -188,6 +186,7 @@ var seededAttributes = []struct{ ref, fc string }{
 	{"InteropLD/GGIO1.SPCSO3.stVal", "ST"},
 	{"InteropLD/GGIO1.SPCSO3.ctlModel", "CF"},
 	{"InteropLD/MMXU1.TotW.mag.f", "MX"},
+	{"InteropLD/MMTR1.TotVAh.actVal", "ST"},
 	{"InteropLD/GGIO1.SetInt1.setVal", "SP"},
 }
 
@@ -202,6 +201,9 @@ func valueMatches(v *mms.Value, want interface{}) bool {
 		return ok && got == w
 	case float64:
 		if got, ok := v.Int64(); ok {
+			return float64(got) == w
+		}
+		if got, ok := v.Uint64(); ok {
 			return float64(got) == w
 		}
 		if got, ok := v.Float32(); ok {
@@ -382,13 +384,16 @@ func TestIEDServer_Read_FixtureValues(t *testing.T) {
 		}
 	}
 
-	// Dbpos is a 2-bit BIT STRING whatever its value.
+	// Dbpos is a 2-bit BIT STRING; values.json gives its value as the
+	// integer the two bits spell (2 = on = '10'B).
+	want, _ := values.Values["InteropLD/GGIO1.DPS1.stVal"].(float64)
 	r, err := c.ReadObject(ctx, h.name("GGIO1$ST$DPS1$stVal"))
 	if err != nil {
 		t.Fatalf("Read(DPS1.stVal): %v", err)
 	}
-	if n, ok := r.Value.BitStringLength(); !ok || n != 2 {
-		t.Errorf("DPS1.stVal = %v, want a 2-bit BIT STRING", r.Value)
+	bits, okBits := r.Value.BitString()
+	if n, ok := r.Value.BitStringLength(); !ok || !okBits || n != 2 || len(bits) != 1 || float64(bits[0]>>6) != want {
+		t.Errorf("DPS1.stVal = %v, want 2-bit BIT STRING %v", r.Value, want)
 	}
 }
 

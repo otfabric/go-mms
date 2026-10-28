@@ -80,7 +80,7 @@
 | Chaos / stress tests | 4 | `e2e/chaos_test.go` (`TestChaos_*`, `TestStress_Concurrent`) over `internal/chaos` fault-injecting connections (delays, chunked I/O, bandwidth limit, drops, resets, stalls); `make chaos` |
 | Benchmarks | 21 | `internal/pdu/bench_test.go`, `value_bench_test.go`, `internal/apisurface` |
 | End-to-end API tests | 64 | `e2e/` — every exported `Client`, `Server` and `ServerConn` method and every `Value` constructor between a go-mms client and server over ISO transport; `TestAPICoverage` fails when a public method has no test |
-| Live interop tests | 120 | `interop/` (`-tags=interop`) — both directions against libiec61850 `v1.6.2.1-89-g6e265c54` via mms-interop; `TestInteropCoverage` guards the API and the server's service dispatch (see [INTEROP.md](INTEROP.md)) |
+| Live interop tests | 120 | `interop/` (`-tags=interop`) — both directions against libiec61850 `v1.6.2.1-89-g6e265c54` via iec61850-interop; `TestInteropCoverage` guards the API and the server's service dispatch (see [INTEROP.md](INTEROP.md)) |
 | Wire-vector tests | 11 | `internal/pdu/interop_test.go`, `internal/pdu/peer_vectors_test.go` — BER patterns as encoded by libiec61850 |
 | Golden fixture tests | 33 | 27 in `internal/pdu/testdata/golden/` + 6 in `internal/codec/testdata/golden/`; regenerate with `-update-golden` flag |
 | Coverage gate | ≥ 90% | `make coverage` (`scripts/coverage-gate.sh`) fails when any package or the total is below `COVERAGE_MIN` (default 90); run by the CI `quality` job |
@@ -96,7 +96,7 @@
 5. ~~No fuzz coverage for file/journal PDUs~~ — **Resolved.** 57 fuzz targets across all service categories, the value codec and server dispatch.
 6. ~~Unsolicited Status~~ — **Resolved.** `ServerConn.SendUnsolicitedStatus()` sends UnconfirmedPDU with VMD status.
 7. ~~Cancel service~~ — **Resolved.** Server handles CancelRequestPDU and responds with CancelError (invoke-id-unknown, since requests are processed synchronously).
-8. ~~No live-wire interop testing~~ — **Resolved.** `interop/` runs both directions against libiec61850 through the mms-interop adapter images; see [INTEROP.md](INTEROP.md).
+8. ~~No live-wire interop testing~~ — **Resolved.** `interop/` runs both directions against libiec61850 through the iec61850-interop adapter images; see [INTEROP.md](INTEROP.md).
 
 ### Remaining Gaps
 

@@ -10,7 +10,7 @@ import (
 )
 
 // Vectors in this file were captured from libiec61850 v1.6.1 (the
-// mms-interop reference peer). Unlike the golden files, which pin go-mms's
+// iec61850-interop reference peer). Unlike the golden files, which pin go-mms's
 // own output, they pin go-mms against an independent implementation.
 
 func mustHex(t *testing.T, s string) []byte {
