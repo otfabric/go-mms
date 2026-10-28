@@ -47,8 +47,8 @@ MMS_INTEROP_STACK=dscsystems make interop
 # Every stack
 make interop-all
 
-# Published images (CI pins the iec61850-interop v1.0.0 digests in .github/workflows/interop.yml)
-MMS_INTEROP_STACK=iec61850-rust IEC61850RUST_IMAGE=ghcr.io/otfabric/iec61850-interop-iec61850-rust:v1.0.0 make interop
+# Published images (CI pins the iec61850-interop v1.0.1 digests in .github/workflows/interop.yml)
+MMS_INTEROP_STACK=iec61850-rust IEC61850RUST_IMAGE=ghcr.io/otfabric/iec61850-interop-iec61850-rust:v1.0.1 make interop
 ```
 
 CI (`.github/workflows/interop.yml`) runs the full matrix, one job per stack,
