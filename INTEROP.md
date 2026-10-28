@@ -8,6 +8,8 @@
 mms-interop
   adapter images: libiec61850, dscsystems, iec61850-rust
   (same contract: <stack>-mms-server / <stack>-mms-client, fixture, JSON Lines)
+  IEC 61850 IED adapter image: iec61850bean
+  (<stack>-ied-server serving the iec61850-v2 IEC 61850 fixture)
          |
     go-mms/interop/
       harness_test.go                        lifecycle helpers
@@ -17,6 +19,7 @@ mms-interop
       libiec61850_client_services_test.go    TestClient_* (files, journals, NVLs, reports, ...)
       libiec61850_server_test.go             TestServer_* (core variable access)
       libiec61850_server_services_test.go    TestServer_* (the adapter's service sequence)
+      ied_server_test.go                     TestIEDServer_* (IED-only stacks: go-mms client → <stack>-ied-server)
       coverage_test.go                       API and service coverage guard
 ```
 
@@ -36,7 +39,7 @@ No pre-running containers. No manual steps. Tests are gated behind `-tags=intero
 
 ```bash
 # Build adapter images locally (in mms-interop)
-cd ../mms-interop && make build-libiec61850 build-dscsystems build-iec61850-rust
+cd ../mms-interop && make build-libiec61850 build-dscsystems build-iec61850-rust build-iec61850bean
 
 # One stack (default libiec61850)
 MMS_INTEROP_STACK=dscsystems make interop
@@ -50,20 +53,23 @@ MMS_INTEROP_STACK=iec61850-rust IEC61850RUST_IMAGE=ghcr.io/otfabric/mms-interop-
 
 CI (`.github/workflows/interop.yml`) runs the full matrix, one job per stack,
 against images pinned from the mms-interop release. Bump the images and
-`interop/testdata/interop.json` together when mms-interop publishes new
-adapters.
+the fixture copies (`interop/testdata/interop.json`,
+`interop/testdata/iec61850/values.json`) together when mms-interop publishes
+new adapters.
 
 ## Environment variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `MMS_INTEROP_STACK` | Peer stack: `libiec61850`, `dscsystems`, `iec61850-rust` | `libiec61850` |
+| `MMS_INTEROP_STACK` | Peer stack: `libiec61850`, `dscsystems`, `iec61850-rust`, `iec61850bean` | `libiec61850` |
 | `MMS_INTEROP_IMAGE` | Image for the selected stack (overrides the per-stack variable) | — |
 | `LIBIEC61850_IMAGE` | libiec61850 adapter image | `mms-interop-libiec61850:local` |
 | `DSCSYSTEMS_IMAGE` | dscsystems adapter image | `mms-interop-dscsystems:local` |
 | `IEC61850RUST_IMAGE` | iec61850-rust adapter image | `mms-interop-iec61850-rust:local` |
+| `IEC61850BEAN_IMAGE` | iec61850bean adapter image | `mms-interop-iec61850bean:local` |
 | `MMS_SERVER_BINARY` | Path to `<stack>-mms-server` binary (skips Docker) | — |
 | `MMS_CLIENT_BINARY` | Path to `<stack>-mms-client` binary (skips Docker) | — |
+| `IED_SERVER_BINARY` | Path to `<stack>-ied-server` binary (skips Docker) | — |
 | `MMS_FIXTURE` | Path to fixture JSON file | `testdata/interop.json` |
 
 ## Test naming
@@ -72,6 +78,7 @@ adapters.
 |--------|---------|---------------------|
 | `TestClient_` | MMS client | `<stack>-mms-server` |
 | `TestServer_` | MMS server | `<stack>-mms-client` |
+| `TestIEDServer_` | MMS client | `<stack>-ied-server` (IED-only stacks) |
 
 ## Peer stacks
 
@@ -92,6 +99,7 @@ exist.
 |-------|----------|--------|--------|---------|
 | libiec61850 | libiec61850 1.6.2.1-89-g6e265c54 | 120 pass | VMD named-list reports only; FileOpen ignores the seek | — |
 | dscsystems | dscsystems/go-iec61850 6bf3f37 (GPL, isolated container) | 112 pass, 8 skip | client drops FileOpen `lastModified`; no write to a named variable list | index-range alternate access (server refuses >1 element); client has no alternate access, association-specific NVLs or NVL write |
+| iec61850bean | beanit iec61850bean 1.9.0 (IED adapters only) | 14 pass (`TestIEDServer_*`); the 118 MMS contract tests skip | no Identify (no response); no Conclude (no response, `Close` ends at its deadline); a read of an unknown name disconnects | MMS contract suite: the image has no `<stack>-mms-server` / `-mms-client` |
 | iec61850-rust | csp0924/iec61850-rust (d4e8952) | 120 pass | — (its known limitations match libiec61850's and are asserted: ObtainFile role reversal answered file-other, domain/VMD NVL deletion object-access-unsupported, client abort closes the transport, in-memory file store) | — |
 
 Skipped tests per stack:
