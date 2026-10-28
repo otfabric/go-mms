@@ -9,7 +9,7 @@ mms-interop
   adapter images: libiec61850, dscsystems, iec61850-rust
   (same contract: <stack>-mms-server / <stack>-mms-client, fixture, JSON Lines)
   IEC 61850 IED adapter image: iec61850bean
-  (<stack>-ied-server serving the iec61850-v2 IEC 61850 fixture)
+  (<stack>-ied-server serving the iec61850-v3 IEC 61850 fixture)
          |
     go-mms/interop/
       harness_test.go                        lifecycle helpers
@@ -47,8 +47,8 @@ MMS_INTEROP_STACK=dscsystems make interop
 # Every stack
 make interop-all
 
-# Published images (CI pins the mms-interop v0.3.0 digests in .github/workflows/interop.yml)
-MMS_INTEROP_STACK=iec61850-rust IEC61850RUST_IMAGE=ghcr.io/otfabric/mms-interop-iec61850-rust:v0.3.0 make interop
+# Published images (CI pins the mms-interop v0.4.0 digests in .github/workflows/interop.yml)
+MMS_INTEROP_STACK=iec61850-rust IEC61850RUST_IMAGE=ghcr.io/otfabric/mms-interop-iec61850-rust:v0.4.0 make interop
 ```
 
 CI (`.github/workflows/interop.yml`) runs the full matrix, one job per stack,
