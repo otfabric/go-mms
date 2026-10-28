@@ -15,7 +15,7 @@ test: ## Run unit tests
 	@echo "Running unit tests"
 	@go test $(PKGS)
 
-INTEROP_STACKS ?= libiec61850 dscsystems iec61850-rust
+INTEROP_STACKS ?= libiec61850 dscsystems iec61850-rust iec61850bean
 
 interop: ## Run interop tests against one peer stack (MMS_INTEROP_STACK, default libiec61850; -tags=interop).
 	@echo "Running interoperability tests against $${MMS_INTEROP_STACK:-libiec61850}"
