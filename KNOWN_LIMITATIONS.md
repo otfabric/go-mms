@@ -26,7 +26,7 @@ but no client methods, server handlers, or PDU encoders/decoders exist.
 
 | Limitation | Details |
 |-----------|---------|
-| Extended BER tags | Only single-byte tags (0–30) supported. Extended multi-byte tags are not used by MMS and are rejected. |
+| Extended BER tags | Only single-byte tags (0–30) supported. Extended multi-byte tags are not used by MMS and are rejected; an MMS PDU or service tag in long form is rejected rather than truncated to a short tag. |
 | Indefinite BER length | Not supported. Only definite-form lengths are accepted. Indefinite-length encodings are rejected. |
 | BER length field | Maximum 3 bytes (content up to ~16 MB). Longer lengths are rejected. |
 | INTEGER size | Signed integers limited to 4 bytes (32-bit). Larger BER INTEGERs are rejected. |
@@ -36,7 +36,7 @@ but no client methods, server handlers, or PDU encoders/decoders exist.
 
 | Limitation | Details |
 |-----------|---------|
-| BinaryTime range | The 6-byte form counts days since 1984-01-01 in 16 bits, so `NewBinaryTime` values must lie between 1984-01-01 and 2163-06-05. Values outside the range fail to encode instead of wrapping. The same applies to journal times (start, stop, after, occurrence). |
+| BinaryTime range | The 6-byte form counts days since 1984-01-01 in 16 bits, so `NewBinaryTime` values must lie between 1984-01-01 and 2163-06-05. Values 0–86399999 (below one day) are sent in the 4-octet TimeOfDay form (milliseconds since midnight, no date), which is also what a received 4-octet value decodes to. Other values fail to encode instead of wrapping. A received milliseconds-of-day field ≥ 86400000 is rejected. The same range applies to journal times (start, stop, after, occurrence). |
 | Real and BooleanArray type descriptions | ISO 9506-2 `TypeDescription` has no alternative for these two data kinds. A server cannot register a variable whose type is `TypeReal` or `TypeBooleanArray`; declare the variable as floating-point or bit-string instead. |
 | Object identifier arcs | `NewObjectIdentifier` requires a first arc of 0, 1 or 2 and, unless the first arc is 2, a second arc below 40 (X.690 §8.19.4). |
 
@@ -68,13 +68,15 @@ server logs a warning and skips them.
 | Transport protocol | TCP only (RFC 1006 TPKT framing). No native OSI transport, UDP, or serial support. |
 | TLS | Supported via `iso.WithTLSConfig`, but DTLS and other non-TCP-TLS variants are not supported. |
 | Custom transports | The `Transport` interface allows arbitrary implementations, but the library does not provide any beyond `transport/iso`. |
+| go-cotp deadlines (worked around) | go-cotp v1.0.4 `ReadTSDU`/`WriteTSDU` arm a both-direction `SetDeadline` and clear it afterwards, which breaks full-duplex use (a write's deadline aborts the concurrent read and vice versa). `transport/iso` works around it: go-cotp gets a wrapper that ignores deadlines after the COTP handshake, and the transport applies per-direction read/write deadlines itself. Custom transports built directly on go-cotp need the same care. |
 
 ## Behavioral Limitations
 
 | Limitation | Details |
 |-----------|---------|
-| Cancel-only context | Transport-level reads check `ctx.Err()` only after `ReadFrame` returns. Cancellation without a deadline may not unblock until data arrives or the connection is closed. Use `context.WithTimeout` or `context.WithDeadline` for prompt cancellation. |
-| ListenAndServe shutdown | When the server context is cancelled, the accept loop exits, but existing connections are not forcibly closed. They end naturally when their next transport read fails (e.g., the client disconnects or context propagation reaches them). |
+| Write cancellation | Request writes are detached from the request context: the caller returns when its context ends, an unstarted write is skipped, and a write in progress completes in the background (a half-written PDU would corrupt the stream). In `transport/iso` the context deadline still bounds the write. See [TIMEOUT_AND_CLOSE.md](TIMEOUT_AND_CLOSE.md). |
+| ListenAndServe cancellation | Cancelling the `ListenAndServe` context closes every association's transport without a protocol-level abort. Use `Server.Shutdown` to let in-flight requests finish and send ACSE ABRT. |
+| No automatic reconnect | A lost association is reported through `Client.Done`/`Client.Err`; the caller reconnects (e.g. with `mms.Retry`). Server-side state (association-scoped objects, open files) is not restored. |
 | Client write serialization | Transport writes are serialized via a send mutex so PDUs do not interleave. Concurrent callers may still have multiple confirmed requests outstanding (wait for response happens outside the write lock); responses are correlated by invoke ID. |
 | Negotiated outstanding not enforced | `MaxOutstandingCalling` / `MaxOutstandingCalled` are negotiated and exposed via `Client.Negotiated()` / server association state, but the client invoke tracker is not capped by those values today. Limit concurrency in the caller if needed. |
 | Server request handling | Confirmed requests within a single server connection are handled serially. Concurrent request handling per-connection is not supported. |
@@ -101,8 +103,8 @@ server logs a warning and skips them.
 
 | Limitation | Details |
 |-----------|---------|
-| No OpenTelemetry / metrics | Logging is via `log/slog` only. There is no built-in metrics export, tracing spans, or OpenTelemetry integration. |
-| No per-request timing | Request durations are not measured or logged. Callers must implement their own timing if needed. |
+| No built-in exporters | The `Metrics` interface reports request and connection events, but go-mms ships no Prometheus or OpenTelemetry adapter (see [OBSERVABILITY.md](OBSERVABILITY.md) for an example) and creates no tracing spans. |
+| Metrics coverage | Only confirmed requests and association state changes are reported; unconfirmed PDUs (InformationReport, UnsolicitedStatus), Cancel and byte counts are not. |
 | Server raw hook | Not available. Only the client exposes a `RawHook` for wire-level inspection. |
 
 ## Testing Gaps

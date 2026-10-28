@@ -166,7 +166,8 @@ func TestListenAndServe_AcceptsConnection(t *testing.T) {
 	cancel()
 
 	select {
-	case <-done:
+	case err := <-done:
+		_ = err // only termination matters here
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout")
 	}

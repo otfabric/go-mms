@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/otfabric/go-cotp"
 	mms "github.com/otfabric/go-mms"
@@ -22,16 +23,53 @@ import (
 // selectors. If not set, selectors are omitted from the COTP CR.
 //
 // TPDU size follows go-cotp RFC 1006 defaults (omitted/default size path).
+//
+// With [WithRetry], failed attempts are retried with backoff.
 func DialTCP(ctx context.Context, addr string, opts ...Option) (mms.Transport, error) {
 	o := applyOptions(opts)
+	var tr mms.Transport
+	err := mms.Retry(ctx, o.retryPolicy(addr), func(ctx context.Context) error {
+		var err error
+		tr, err = dialOnce(ctx, addr, o)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return tr, nil
+}
 
-	var d net.Dialer
-	tcpConn, err := d.DialContext(ctx, "tcp", addr)
+// retryPolicy returns the configured policy with logging of retried
+// attempts added.
+func (o Options) retryPolicy(addr string) mms.RetryPolicy {
+	p := o.retry
+	if o.logger == nil {
+		return p
+	}
+	next := p.OnRetry
+	logger := o.logger
+	p.OnRetry = func(attempt int, err error, delay time.Duration) {
+		logger.Warn("iso: dial attempt failed, retrying",
+			"addr", addr, "attempt", attempt, "delay", delay, "error", err)
+		if next != nil {
+			next(attempt, err, delay)
+		}
+	}
+	return p
+}
+
+func dialOnce(ctx context.Context, addr string, o Options) (mms.Transport, error) {
+	dial := o.dialer
+	if dial == nil {
+		var d net.Dialer
+		dial = d.DialContext
+	}
+	tcpConn, err := dial(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("iso: tcp dial %s: %w", addr, err)
 	}
 
-	conn := net.Conn(tcpConn)
+	conn := tcpConn
 	if o.tlsConfig != nil {
 		tlsConn := tls.Client(tcpConn, o.tlsConfig)
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
@@ -41,7 +79,8 @@ func DialTCP(ctx context.Context, addr string, opts ...Option) (mms.Transport, e
 		conn = tlsConn
 	}
 
-	cotpConn, err := cotp.Connect(ctx, conn, cotp.ClientConfig{
+	shim := newSplitDeadlineConn(conn)
+	cotpConn, err := cotp.Connect(ctx, shim, cotp.ClientConfig{
 		LocalSelector:  o.callingTSelector,
 		RemoteSelector: o.calledTSelector,
 		// MaxTPDULength 0 → go-cotp default (omit-size / RFC1006Compat path).
@@ -49,7 +88,7 @@ func DialTCP(ctx context.Context, addr string, opts ...Option) (mms.Transport, e
 	if err != nil {
 		return nil, fmt.Errorf("iso: cotp connect %s: %w", addr, err)
 	}
-	return wrapCOTP(cotpConn, conn), nil
+	return wrapCOTP(cotpConn, conn, shim), nil
 }
 
 // Dial is a convenience function that establishes a TCP+TP0 connection and
@@ -58,6 +97,8 @@ func DialTCP(ctx context.Context, addr string, opts ...Option) (mms.Transport, e
 // It combines [DialTCP] with [mms.NewClient]. Use [WithClientDialOptions]
 // to pass MMS-level configuration; TSAP selectors from [mms.DialOptions]
 // are used automatically if ISO-level selectors are not set explicitly.
+// With [WithRetry], failed attempts (connect, handshakes and association)
+// are retried with backoff.
 func Dial(ctx context.Context, addr string, opts ...Option) (*mms.Client, error) {
 	o := applyOptions(opts)
 
@@ -68,23 +109,21 @@ func Dial(ctx context.Context, addr string, opts ...Option) (*mms.Client, error)
 		o.calledTSelector = o.mmsDialOpts.Transport.RemoteTSelector
 	}
 
-	dialOpts := []Option{
-		WithCallingTSelector(o.callingTSelector),
-		WithCalledTSelector(o.calledTSelector),
-	}
-	if o.tlsConfig != nil {
-		dialOpts = append(dialOpts, WithTLSConfig(o.tlsConfig))
-	}
-
-	conn, err := DialTCP(ctx, addr, dialOpts...)
+	var client *mms.Client
+	err := mms.Retry(ctx, o.retryPolicy(addr), func(ctx context.Context) error {
+		conn, err := dialOnce(ctx, addr, o)
+		if err != nil {
+			return err
+		}
+		c, err := mms.NewClient(ctx, conn, o.mmsDialOpts)
+		if err != nil {
+			_ = conn.Close()
+			return err
+		}
+		client = c
+		return nil
+	})
 	if err != nil {
-		return nil, err
-	}
-
-	mmsOpts := o.mmsDialOpts
-	client, err := mms.NewClient(ctx, conn, mmsOpts)
-	if err != nil {
-		_ = conn.Close()
 		return nil, err
 	}
 	return client, nil

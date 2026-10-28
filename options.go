@@ -4,6 +4,7 @@ package mms
 
 import (
 	"log/slog"
+	"time"
 )
 
 // DialOptions configures the MMS client connection.
@@ -24,15 +25,32 @@ type DialOptions struct {
 	Logger *slog.Logger
 
 	// RawHook, when non-nil, is called for every raw ISO upper-layer
-	// payload sent to or received from the transport. direction is "send"
-	// or "recv". raw contains the session SPDU bytes (which embed
-	// presentation, ACSE, and MMS data).
+	// payload sent to or received from the transport. direction is
+	// [RawHookSend] ("send") or [RawHookRecv] ("recv"). raw contains the
+	// session SPDU bytes (which embed presentation, ACSE, and MMS data).
 	//
 	// This hook operates at the COTP user-data level, not at the MMS PDU
 	// level specifically. It is intended for packet capture and replay
 	// tooling.
 	RawHook func(direction string, raw []byte)
+
+	// Metrics, when non-nil, receives request and connection events (see
+	// [Metrics]). Nil means no metrics.
+	Metrics Metrics
+
+	// RequestTimeout, when positive, bounds every confirmed request whose
+	// context has no earlier deadline. A request that times out fails with
+	// an error matching both [ErrInvokeTimeout] and
+	// [context.DeadlineExceeded]. Zero means no default timeout: requests
+	// wait until their context is done or the connection is lost.
+	RequestTimeout time.Duration
 }
+
+// Directions passed to [DialOptions.RawHook].
+const (
+	RawHookSend = "send"
+	RawHookRecv = "recv"
+)
 
 // TransportOptions configures the TPKT/COTP transport layer.
 type TransportOptions struct {

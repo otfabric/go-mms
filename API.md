@@ -14,7 +14,10 @@ Error taxonomy: [ERRORS.md](ERRORS.md).
 - [Server](#server)
 - [Values and types](#values-and-types)
 - [Error types](#error-types)
+- [Metrics](#metrics)
+- [Retry](#retry)
 - [Transport interfaces](#transport-interfaces)
+- [transport/iso](#transportiso)
 - [Identity, auth, and options](#identity-auth-and-options)
 - [Deprecated symbols](#deprecated-symbols)
 
@@ -34,10 +37,18 @@ owned by the client after this call. Performs the ISO/ACSE/MMS Initiate exchange
 ```go
 func (c *Client) Close(ctx context.Context) error
 func (c *Client) Abort(ctx context.Context) error
+func (c *Client) Done() <-chan struct{}
+func (c *Client) Err() error
 ```
 
 `Close` performs a graceful MMS Conclude exchange. `Abort` tears down the connection
-immediately without waiting for a response. Both methods are idempotent.
+immediately without waiting for a response; the ABRT send is bounded by `ctx`. Both
+methods are idempotent.
+
+`Done` is closed when the association has ended (local `Close`/`Abort`, peer
+conclude/release/abort, connection lost or undecodable). `Err` returns nil while the
+association is up and afterwards why it ended (matches `ErrClosed`). See
+[TIMEOUT_AND_CLOSE.md](TIMEOUT_AND_CLOSE.md).
 
 ### Identity and status
 
@@ -175,6 +186,7 @@ handle a single already-accepted transport connection.
 ```go
 func (s *Server) ListenAndServe(ctx context.Context, ln TransportListener) error
 func (s *Server) Serve(ctx context.Context, conn Transport) error
+func (s *Server) Shutdown(ctx context.Context) error
 
 // Model registration.
 func (s *Server) RegisterDomain(name string) error
@@ -191,7 +203,17 @@ func (s *Server) Connections() []*ServerConn
 func (s *Server) Broadcast(ctx context.Context, req *InformationReportRequest) error
 ```
 
-Per-variable write handling is set via `Variable.Write` at registration time.
+Per-variable write handling is set via `Variable.Write` at registration time. A
+`Variable.Read`/`Write` callback that returns a `*DataAccessError` with a valid code
+has that code sent; other errors are sent as temporarily-unavailable. An Identify or
+Status handler that returns a `*ServiceError` has its class and code sent.
+
+`Shutdown` closes the listeners of running `ListenAndServe` calls, lets each
+association finish its in-flight request, then aborts it (ACSE ABRT); when `ctx`
+ends first, remaining associations are aborted at once and `ctx.Err()` is returned.
+Afterwards `Serve` and `ListenAndServe` return `ErrServerClosed`. `Serve` closes its
+transport when `ctx` is cancelled, when the association is not established within
+`ServerOptions.AssociationTimeout`, or when `Shutdown` aborts it.
 
 ### Server file and journal providers
 
@@ -277,8 +299,12 @@ func (v *Value) ArrayElements() ([]*Value, bool)
 func (v *Value) Get(selectors ...AccessSelector) (*Value, error)
 func (v *Value) DataAccessError() (DataAccessErrorCode, bool)
 func (v *Value) Clone() *Value
+func (v *Value) Equal(other *Value) bool
 func (v *Value) String() string
 ```
+
+`Equal` compares Float and Real values bit for bit, except that all NaNs are equal
+(so `Equal` is reflexive); `+0` and `-0` differ.
 
 Component-name selectors in `Get` require a `TypeSpec` context; use index selectors
 (`SelectIndex`) or resolve via `TypeSpec.Resolve` for named component access.
@@ -287,17 +313,24 @@ Component-name selectors in `Get` require a `TypeSpec` context; use index select
 
 ```go
 type TypeSpec struct {
-    Type     ValueType
-    Elements []*TypeSpec  // structure elements
-    Element  *TypeSpec    // array element type
-    Count    int          // declared array length
-    NamedType string      // MMS named type reference
+    Type          ValueType
+    Elements      []TypeSpecElement // structure: {Name, Type}
+    Count         int               // array element count
+    Element       *TypeSpec         // array element type
+    Size          int               // bit width / string size
+    FormatWidth   int               // floating point
+    ExponentWidth int               // floating point
+    TypeName      *ObjectName       // named type reference
 }
 
 func (ts *TypeSpec) ShallowCompatible(v *Value) bool
 func (ts *TypeSpec) DefaultValue() *Value
-func (ts *TypeSpec) Resolve(v *Value, component string) (*Value, int, error)
+func (ts *TypeSpec) ChildByName(name string) (*TypeSpec, bool)
+func (ts *TypeSpec) ChildByIndex(index int) (*TypeSpec, bool)
+func (ts *TypeSpec) Resolve(selectors ...AccessSelector) (*TypeSpec, error)
 ```
+
+`Resolve` and `Value.Get` errors match `ErrInvalidArgument`.
 
 `ShallowCompatible` checks the top-level type and element count only; it does not
 recurse into children.
@@ -327,16 +360,16 @@ type InvokeID uint32
 
 ```go
 type AccessSelector struct {
-    Index     *int
-    Component string
-    Range     *IndexRange
+    Component  string
+    Index      *int
+    IndexRange *IndexRange
 }
 
 type IndexRange struct { Start, Count int }
 
 func SelectIndex(i int) AccessSelector
 func SelectComponent(name string) AccessSelector
-func SelectRange(start, count int) AccessSelector
+func SelectRange(low, count int) AccessSelector
 ```
 
 ### VariableSpec
@@ -409,6 +442,16 @@ var (
     ErrServerConnClosed     error  // ServerConn already closed
     ErrAuthenticationFailed error  // authentication failure
     ErrFileAccessDenied     error  // FileProvider/JournalProvider permission error
+    ErrServerClosed         error  // Serve/ListenAndServe after Server.Shutdown
+    ErrInvalidArgument      error  // invalid caller argument; request not sent
+)
+
+// ProtocolError.Phase values.
+const (
+    PhaseSession      = "session"
+    PhasePresentation = "presentation"
+    PhaseACSE         = "acse"
+    PhaseMMS          = "mms"
 )
 
 // Typed errors (use errors.As).
@@ -417,6 +460,7 @@ type ServiceError struct {
     Code     int
     InvokeID InvokeID
 }
+func (e *ServiceError) CodeName() string // ISO 9506-2 code name, "" if undefined
 
 type DecodeError struct {
     Offset  int
@@ -436,7 +480,106 @@ type ProtocolError struct {
 type AuthenticationError struct {
     Reason string
 }
+
+// MMS RejectPDU; unwraps to *ProtocolError (Phase PhaseMMS) → ErrProtocol.
+type RejectError struct {
+    Type        RejectType
+    Reason      int
+    InvokeID    InvokeID
+    HasInvokeID bool
+}
+
+type RejectType int
+const (
+    RejectConfirmedRequest  RejectType = 1
+    RejectConfirmedResponse RejectType = 2
+    RejectConfirmedError    RejectType = 3
+    RejectUnconfirmed       RejectType = 4
+    RejectPDUError          RejectType = 5
+    RejectCancelRequest     RejectType = 6
+    RejectCancelResponse    RejectType = 7
+    RejectCancelError       RejectType = 8
+    RejectConcludeRequest   RejectType = 9
+    RejectConcludeResponse  RejectType = 10
+    RejectConcludeError     RejectType = 11
+)
+func (t RejectType) String() string
 ```
+
+Errors carry sentinel kinds in addition to their chain (e.g. a lost connection matches
+`ErrClosed`, a request deadline `ErrInvokeTimeout` and `context.DeadlineExceeded`).
+Use `errors.Is`/`errors.As` and the typed fields; do not compare error strings.
+
+---
+
+## Metrics
+
+See [OBSERVABILITY.md](OBSERVABILITY.md).
+
+```go
+type Metrics interface {
+    ObserveRequest(RequestEvent)
+    ObserveConnection(ConnectionEvent)
+}
+
+type NopMetrics struct{} // default; embed for forward compatibility
+
+type RequestEvent struct {
+    Role     Role
+    Service  Service
+    InvokeID InvokeID
+    Duration time.Duration
+    Err      error
+}
+
+type ConnectionEvent struct {
+    Role       Role
+    State      ConnectionState
+    RemoteAddr string
+    Err        error
+}
+
+type Role int            // RoleClient, RoleServer; String() "client"/"server"
+type ConnectionState int // ConnectionEstablished, ConnectionRejected, ConnectionClosed
+type Service int         // ServiceStatus, ServiceGetNameList, ServiceIdentify, ServiceRead,
+                         // ServiceWrite, ServiceGetVariableAccessAttributes,
+                         // ServiceDefineNamedVariableList, ServiceGetNamedVariableListAttributes,
+                         // ServiceDeleteNamedVariableList, ServiceFileOpen, ServiceFileRead,
+                         // ServiceFileClose, ServiceFileRename, ServiceFileDelete,
+                         // ServiceFileDirectory, ServiceObtainFile, ServiceReadJournal,
+                         // ServiceUnknown; String() is the ISO 9506 service name
+```
+
+Set via `DialOptions.Metrics` and `ServerOptions.Metrics`; nil means no metrics.
+Methods are called synchronously and must be safe for concurrent use.
+
+---
+
+## Retry
+
+```go
+type RetryPolicy struct {
+    MaxAttempts    int           // total attempts; 0 or 1 = single attempt; < 0 = until ctx done
+    InitialBackoff time.Duration // 0 → 100ms
+    MaxBackoff     time.Duration // 0 → 30s
+    Multiplier     float64       // < 1 → 2
+    Jitter         float64       // [0,1]: delay d becomes random in [d*(1-Jitter), d]
+    Retryable      func(err error) bool // nil → IsRetryable
+    OnRetry        func(attempt int, err error, delay time.Duration)
+}
+
+func DefaultRetryPolicy() RetryPolicy // 5 attempts, 200ms doubling to 10s, 20% jitter
+func (p RetryPolicy) Backoff(attempt int) time.Duration // before jitter
+func IsRetryable(err error) bool
+func Retry(ctx context.Context, p RetryPolicy, fn func(ctx context.Context) error) error
+```
+
+The zero `RetryPolicy` performs a single attempt. `IsRetryable` returns false for
+`context.Canceled`, `ErrInvalidArgument`, `ErrAuthenticationFailed` and
+`ErrConnectionRejected`, true otherwise (including per-attempt deadlines). `Retry`
+returns nil on success, otherwise the last error, joined with `ctx.Err()` when the
+context ended the retries. Use it with `Client.Done` to reconnect, or use
+`iso.WithRetry` for dialing.
 
 ---
 
@@ -444,32 +587,65 @@ type AuthenticationError struct {
 
 ```go
 type Transport interface {
-    Read(b []byte) (int, error)
-    Write(b []byte) (int, error)
+    Send(ctx context.Context, data []byte) error
+    Receive(ctx context.Context) ([]byte, error)
     Close() error
 }
 
 type TransportListener interface {
     Accept(ctx context.Context) (Transport, error)
     Close() error
+    Addr() net.Addr
 }
 
 // Optional interface for TLS inspection.
 type TLSTransport interface {
     Transport
-    ConnectionState() tls.ConnectionState
+    TLSConnectionState() *tls.ConnectionState
 }
 
-// Optional interface for peer address inspection.
+// Optional interface for peer address inspection (also used for log
+// remote_addr and ConnectionEvent.RemoteAddr).
 type RemoteAddrTransport interface {
     Transport
     RemoteAddr() net.Addr
-    LocalAddr() net.Addr
 }
 ```
 
-The `transport/iso` sub-package provides `iso.Dial` and `iso.Listen` which implement
-these interfaces over the full ISO/OSI upper-layer stack.
+The client calls `Receive` on a reader goroutine while requests call `Send`, so
+transports must support one concurrent sender and receiver. The `transport/iso`
+sub-package implements these interfaces over TCP + TPKT/COTP.
+
+---
+
+## transport/iso
+
+```go
+func Dial(ctx context.Context, addr string, opts ...Option) (*mms.Client, error)
+func DialTCP(ctx context.Context, addr string, opts ...Option) (mms.Transport, error)
+func Listen(addr string, opts ...Option) (*Listener, error)
+func NewListener(ln net.Listener, opts ...Option) *Listener
+
+func WithCallingTSelector(sel []byte) Option
+func WithCalledTSelector(sel []byte) Option
+func WithClientDialOptions(opts mms.DialOptions) Option
+func WithTLSConfig(cfg *tls.Config) Option
+func WithLogger(l *slog.Logger) Option
+func WithRetry(p mms.RetryPolicy) Option
+func WithDialer(dial func(ctx context.Context, network, addr string) (net.Conn, error)) Option
+func WithHandshakeTimeout(d time.Duration) Option
+```
+
+- `WithRetry` makes `Dial`/`DialTCP` retry failed attempts (backoff with jitter,
+  honouring `ctx`). For `Dial` one attempt covers TCP connect, TLS and COTP handshakes
+  and the MMS association; permanent errors (`mms.IsRetryable`) return at once.
+  Default: single attempt. Ignored by `Listen`.
+- `WithDialer` replaces the TCP dial function (default: zero `net.Dialer`'s
+  `DialContext`) for proxies, socket options or fault injection. Ignored by `Listen`.
+- `WithHandshakeTimeout` bounds the TLS and COTP handshakes of each accepted
+  connection; 0 → 10s, negative disables. The `Listener` handshakes up to 64
+  connections concurrently in the background, so a silent peer never blocks `Accept`.
+  For clients, bound the handshake with the `ctx` of `Dial`/`DialTCP`.
 
 ---
 
@@ -483,9 +659,20 @@ type DialOptions struct {
     ISO       ISOOptions
     MMS       MMSOptions
     Logger    *slog.Logger // nil → silent discard; does not set iso.WithLogger
-    RawHook   func(direction string, raw []byte)
+    RawHook   func(direction string, raw []byte) // direction: RawHookSend or RawHookRecv
+    Metrics   Metrics       // nil → no metrics
+    RequestTimeout time.Duration // > 0: default bound per confirmed request
 }
+
+const (
+    RawHookSend = "send"
+    RawHookRecv = "recv"
+)
 ```
+
+`RequestTimeout` applies to every confirmed request whose context has no earlier
+deadline; on expiry the request fails with `ErrInvokeTimeout` and
+`context.DeadlineExceeded`. Zero means no default timeout.
 
 ### ISOOptions
 
@@ -523,6 +710,8 @@ type ServerOptions struct {
     Authenticate    Authenticator
     FileProvider    FileProvider
     JournalProvider JournalProvider
+    Metrics         Metrics       // nil → no metrics
+    AssociationTimeout time.Duration // AARQ → Authenticate → AARE; 0 → 30s, < 0 disables
 }
 ```
 
@@ -536,8 +725,8 @@ type ServerIdentity struct {
 }
 
 type ServerStatus struct {
-    LogicalStatus  VMDLogicalStatus
-    PhysicalStatus VMDPhysicalStatus
+    Logical  VMDLogicalStatus
+    Physical VMDPhysicalStatus
 }
 ```
 
@@ -547,21 +736,25 @@ type ServerStatus struct {
 type Authenticator func(ctx context.Context, auth *AuthContext) (AuthResult, error)
 
 type AuthContext struct {
-    Mechanism AuthMechanism
-    Value     []byte
-    Remote    net.Addr
+    Mechanism          AuthMechanism
+    MechanismOID       asn1.ObjectIdentifier
+    Password           []byte
+    CallingApplication *ApplicationReference
+    PeerCertificate    *x509.Certificate
+    RemoteAddr         net.Addr
 }
 
 type AuthResult struct {
-    Accepted bool
-    Reason   string
+    Accept bool
+    Token  any // available as ServerConn.AuthToken()
 }
 
 type AuthMechanism int
 const (
-    AuthMechanismNone     AuthMechanism = 0
-    AuthMechanismPassword AuthMechanism = 1
-    AuthMechanismCertificate AuthMechanism = 2
+    AuthMechanismUnknown AuthMechanism = iota
+    AuthMechanismNone
+    AuthMechanismACSEPassword
+    AuthMechanismTLSCertificate
 )
 ```
 

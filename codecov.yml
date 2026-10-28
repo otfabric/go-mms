@@ -1,0 +1,11 @@
+# Coverage policy: ≥90% per package and in total, enforced locally and in
+# CI by scripts/coverage-gate.sh. Codecov applies the same bar to the whole
+# project and to the lines a pull request changes.
+coverage:
+  status:
+    project:
+      default:
+        target: 90%
+    patch:
+      default:
+        target: 90%

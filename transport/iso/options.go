@@ -3,8 +3,11 @@
 package iso
 
 import (
+	"context"
 	"crypto/tls"
 	"log/slog"
+	"net"
+	"time"
 
 	mms "github.com/otfabric/go-mms"
 )
@@ -17,6 +20,9 @@ type Options struct {
 	mmsDialOpts      mms.DialOptions
 	hasMmsDialOpts   bool
 	logger           *slog.Logger
+	retry            mms.RetryPolicy
+	dialer           func(ctx context.Context, network, addr string) (net.Conn, error)
+	handshakeTimeout time.Duration
 }
 
 // Option configures an ISO transport connection.
@@ -67,7 +73,8 @@ func WithTLSConfig(cfg *tls.Config) Option {
 }
 
 // WithLogger sets a structured logger for the ISO transport layer.
-// Used by [Listener] to log per-connection handshake failures.
+// Used by [Listener] to log per-connection handshake failures and by
+// [DialTCP] and [Dial] to log failed attempts retried under [WithRetry].
 func WithLogger(l *slog.Logger) Option {
 	return func(o *Options) {
 		o.logger = l
@@ -80,4 +87,38 @@ func applyOptions(opts []Option) Options {
 		fn(&o)
 	}
 	return o
+}
+
+// WithRetry makes [DialTCP] and [Dial] retry failed attempts according to
+// p (exponential backoff with jitter, honouring the context). For [Dial]
+// one attempt covers TCP connect, TLS and COTP handshakes and the MMS
+// association; errors that cannot succeed on retry, such as a rejected
+// association, are returned at once (see [mms.IsRetryable]). The default
+// is a single attempt. Ignored by [Listen].
+func WithRetry(p mms.RetryPolicy) Option {
+	return func(o *Options) {
+		o.retry = p
+	}
+}
+
+// WithDialer replaces the function [DialTCP] and [Dial] use to open the
+// TCP connection (by default a zero [net.Dialer]'s DialContext). Use it
+// for proxies, custom socket options, or fault injection in tests. The
+// returned connection is owned by the transport. Ignored by [Listen].
+func WithDialer(dial func(ctx context.Context, network, addr string) (net.Conn, error)) Option {
+	return func(o *Options) {
+		o.dialer = dial
+	}
+}
+
+// WithHandshakeTimeout bounds the TLS and COTP handshakes of each
+// connection accepted by a [Listener]; a peer that does not complete them
+// in time is disconnected. Zero means 10s; a negative value disables the
+// limit. Handshakes run concurrently, so a slow peer never delays other
+// connections. For clients, bound the handshake with the context passed
+// to [DialTCP] or [Dial].
+func WithHandshakeTimeout(d time.Duration) Option {
+	return func(o *Options) {
+		o.handshakeTimeout = d
+	}
 }

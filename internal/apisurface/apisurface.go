@@ -131,6 +131,8 @@ func receiverType(expr ast.Expr) string {
 		return t.Name
 	case *ast.IndexExpr:
 		return receiverType(t.X)
+	case *ast.IndexListExpr:
+		return receiverType(t.X)
 	}
 	return ""
 }
