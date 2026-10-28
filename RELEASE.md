@@ -1,5 +1,30 @@
 # go-mms Releases
 
+## v1.2.2
+
+**Date:** 2026-10-28
+**Previous release:** v1.2.1
+
+## Summary
+
+Interop and documentation release; the library code is unchanged. The
+interop peers' repository, otfabric/mms-interop, is now
+[otfabric/iec61850-interop](https://github.com/otfabric/iec61850-interop),
+and iec61850bean joins the CI matrix as a fourth stack.
+
+## Changes
+
+### Tests
+
+- **iec61850bean** — iec61850-interop packages iec61850bean with IEC 61850 IED adapters only. The new `TestIEDServer_*` suite drives the go-mms client against `iec61850bean-ied-server` over plain MMS (association, name lists, data set attributes, variable access attributes, fixture reads, writes, Abort and Close). Its quirks are asserted, not skipped: no Identify and no Conclude response, and a read of an unknown name disconnects. The MMS contract suite skips for this stack.
+- **iec61850-interop v1.0.1** — CI pins the v1.0.1 images (`ghcr.io/otfabric/iec61850-interop-<stack>`) for libiec61850, dscsystems, iec61850-rust and iec61850bean.
+
+### Docs
+
+- INTEROP.md, COMPATIBILITY.md and interop/README.md use the new repository and image names and list iec61850bean. Earlier entries in this file keep the image names they were published with.
+
+---
+
 ## v1.2.1
 
 **Date:** 2026-10-28
