@@ -272,54 +272,6 @@ func TestIsTemporary(t *testing.T) {
 	}
 }
 
-// deadlineRecorder records deadline calls.
-type deadlineRecorder struct {
-	net.Conn
-	mu    sync.Mutex
-	calls []string
-}
-
-func (d *deadlineRecorder) record(s string) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.calls = append(d.calls, s)
-	return nil
-}
-
-func (d *deadlineRecorder) SetDeadline(time.Time) error      { return d.record("both") }
-func (d *deadlineRecorder) SetReadDeadline(time.Time) error  { return d.record("read") }
-func (d *deadlineRecorder) SetWriteDeadline(time.Time) error { return d.record("write") }
-
-func TestSplitDeadlineConn(t *testing.T) {
-	rec := &deadlineRecorder{}
-	s := newSplitDeadlineConn(rec)
-	now := time.Now()
-	_ = s.SetDeadline(now)
-	_ = s.SetReadDeadline(now)
-	_ = s.SetWriteDeadline(now)
-	s.detach()
-	_ = s.SetDeadline(now)
-	_ = s.SetReadDeadline(now)
-	_ = s.SetWriteDeadline(now)
-	if got := strings.Join(rec.calls, ","); got != "both,read,write" {
-		t.Errorf("forwarded deadline calls = %s, want both,read,write", got)
-	}
-}
-
-func TestArmDirection(t *testing.T) {
-	rec := &deadlineRecorder{}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
-	disarm := armDirection(ctx, rec.SetReadDeadline)
-	cancel()
-	time.Sleep(5 * time.Millisecond) // AfterFunc runs asynchronously
-	disarm()
-	rec.mu.Lock()
-	defer rec.mu.Unlock()
-	if len(rec.calls) != 3 {
-		t.Errorf("deadline calls = %v, want set, cancel, clear", rec.calls)
-	}
-}
-
 func TestCtxIOError(t *testing.T) {
 	io := errors.New("i/o timeout")
 	if ctxIOError(context.Background(), io) != io {
@@ -333,6 +285,10 @@ func TestCtxIOError(t *testing.T) {
 	err := ctxIOError(ctx, io)
 	if !errors.Is(err, context.Canceled) || !errors.Is(err, io) {
 		t.Errorf("ctxIOError = %v", err)
+	}
+	// An error that already carries the context error is not wrapped again.
+	if ctxIOError(ctx, err) != err {
+		t.Error("context error wrapped twice")
 	}
 	if ctxIOError(ctx, nil) != nil {
 		t.Error("nil with done context")

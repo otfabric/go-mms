@@ -76,7 +76,12 @@ If a response arrives after the request was cancelled, `tracker.Complete` return
 
 ## Full-duplex transport and deadlines
 
-The client reads (reader goroutine) and writes (requests) concurrently on one connection. go-cotp v1.0.4 arms a both-direction `SetDeadline` for each TSDU read or write and clears it afterwards, so one direction's deadline would abort the other. `transport/iso` hands go-cotp a wrapper that ignores deadlines after the COTP handshake and applies each context as a per-direction read or write deadline itself. See [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md).
+The client reads (reader goroutine) and writes (requests) concurrently on one connection. go-cotp (v1.1.0+) arms read and write deadlines per direction, so one direction's deadline never aborts the other. In `transport/iso`:
+
+- **Receive** passes its context to go-cotp. A context that ends before any octet of the next TSDU arrived returns the context error and leaves the connection usable; one that ends mid-TSDU aborts the connection (the error matches the context error, and later I/O fails with `ErrClosed` at the MMS layer).
+- **Send** passes go-cotp a context that keeps the caller's deadline but not its cancellation: a write is bounded by the deadline (a stalled peer) but never abandoned half-written because a request was cancelled. A write cut by the deadline aborts the connection.
+
+An I/O error caused by the context always matches `context.Canceled` or `context.DeadlineExceeded`, also when the connection deadline fires a moment before the context's own timer.
 
 ## Server shutdown
 

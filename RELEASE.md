@@ -1,5 +1,29 @@
 # go-mms Releases
 
+## v1.2.1
+
+**Date:** 2026-10-28
+**Previous release:** v1.2.0
+
+## Summary
+
+Moves to go-cotp [v1.1.0](https://github.com/otfabric/go-cotp/releases/tag/v1.1.0),
+which arms read and write deadlines per direction, and removes the go-mms
+workaround for the shared deadline of go-cotp v1.0.4. No API changes.
+
+## Changes
+
+### Changed
+
+- **go-cotp v1.1.0** (go-tpkt stays at v1.0.1). `transport/iso` no longer wraps the connection given to go-cotp (`splitDeadlineConn` and its per-direction deadline handling are removed); `Receive` passes its context to go-cotp, `Send` passes the deadline but not the cancellation of its context, so a cancelled request still never abandons a TSDU half-written.
+- **Receive with an expired context** — a context that ends before any octet of the next TSDU arrived returns the context error and leaves the connection usable (it used to abort it); one that ends mid-TSDU aborts the connection. Errors caused by a context match `context.Canceled` / `context.DeadlineExceeded` without being wrapped twice. The MMS client reader and the server association timeout behave as before (`ErrClosed`, `ErrAssociationFailed` + `context.DeadlineExceeded`).
+
+### Docs
+
+- TIMEOUT_AND_CLOSE.md and RACE_NOTES.md describe go-cotp's per-direction deadlines; the go-cotp entry is removed from KNOWN_LIMITATIONS.md.
+
+---
+
 ## v1.2.0
 
 **Date:** 2026-10-28

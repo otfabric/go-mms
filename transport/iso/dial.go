@@ -79,8 +79,7 @@ func dialOnce(ctx context.Context, addr string, o Options) (mms.Transport, error
 		conn = tlsConn
 	}
 
-	shim := newSplitDeadlineConn(conn)
-	cotpConn, err := cotp.Connect(ctx, shim, cotp.ClientConfig{
+	cotpConn, err := cotp.Connect(ctx, conn, cotp.ClientConfig{
 		LocalSelector:  o.callingTSelector,
 		RemoteSelector: o.calledTSelector,
 		// MaxTPDULength 0 → go-cotp default (omit-size / RFC1006Compat path).
@@ -88,7 +87,7 @@ func dialOnce(ctx context.Context, addr string, o Options) (mms.Transport, error
 	if err != nil {
 		return nil, fmt.Errorf("iso: cotp connect %s: %w", addr, err)
 	}
-	return wrapCOTP(cotpConn, conn, shim), nil
+	return &cotpTransport{cotp: cotpConn, raw: conn}, nil
 }
 
 // Dial is a convenience function that establishes a TCP+TP0 connection and
