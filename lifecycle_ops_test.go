@@ -287,3 +287,38 @@ func TestToWireServiceError(t *testing.T) {
 		t.Error("wire error changed")
 	}
 }
+
+// addrTransport reports a remote address like a network transport.
+type addrTransport struct{ Transport }
+
+func (addrTransport) RemoteAddr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 102}
+}
+
+func TestRemoteAddr_LoggedAndReported(t *testing.T) {
+	log := &eventLog{}
+	srv := NewServer(ServerOptions{Metrics: log})
+	clientConn, serverConn := loopbackPair()
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(context.Background(), addrTransport{serverConn}) }()
+	c, err := NewClient(context.Background(), addrTransport{clientConn}, DialOptions{Metrics: log})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-served; err != nil {
+		t.Errorf("Serve = %v", err)
+	}
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	for _, ev := range log.conns {
+		if ev.RemoteAddr != "192.0.2.1:102" {
+			t.Errorf("%v %v event remote = %q", ev.Role, ev.State, ev.RemoteAddr)
+		}
+	}
+	if remoteAddrOf(addrTransport{}) != "192.0.2.1:102" {
+		t.Error("remoteAddrOf")
+	}
+}
