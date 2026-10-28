@@ -59,12 +59,12 @@ deviation from the standard is not considered a breaking change.
 ## Peer implementations
 
 Each release is tested on the wire, in both directions, against the MMS
-stacks packaged by [mms-interop](https://github.com/otfabric/mms-interop):
+stacks packaged by [mms-interop](https://github.com/otfabric/mms-interop) (v0.3.0 images, pinned by digest):
 
 | Stack | Client direction (go-mms → peer server) | Server direction (peer client → go-mms) |
 |-------|:---:|:---:|
 | libiec61850 1.6.2.1 | ✓ | ✓ |
 | dscsystems/go-iec61850 | ✓ (no multi-element index range) | ✓ (peer client lacks alternate access, aa-scope NVLs, NVL write) |
-| csp0924/iec61850-rust | pending | pending |
+| csp0924/iec61850-rust | ✓ (peer limitations asserted, as for libiec61850) | ✓ |
 
 Per-test skips and the peer quirks behind them: [INTEROP.md](INTEROP.md#peer-stacks).

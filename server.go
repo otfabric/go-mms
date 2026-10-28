@@ -380,8 +380,8 @@ func (s *Server) associate(ctx context.Context, conn Transport, c *serverconn.Co
 
 	authInfo, err := c.ReceiveAssociation(actx)
 	if err != nil {
-		if errors.Is(actx.Err(), context.DeadlineExceeded) {
-			err = errors.Join(actx.Err(), err)
+		if deadlinePassed(actx) && !errors.Is(err, context.DeadlineExceeded) {
+			err = errors.Join(context.DeadlineExceeded, err)
 		}
 		return nil, classify(fmt.Errorf("mms: receive association: %w", err), ErrAssociationFailed)
 	}
@@ -407,6 +407,17 @@ func (s *Server) associate(ctx context.Context, conn Transport, c *serverconn.Co
 		return nil, classify(fmt.Errorf("mms: accept association: %w", err), ErrAssociationFailed)
 	}
 	return authToken, nil
+}
+
+// deadlinePassed reports whether ctx ended by its deadline, including a
+// deadline that has passed before ctx's timer fired (a transport deadline
+// taken from ctx can expire first).
+func deadlinePassed(ctx context.Context) bool {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return true
+	}
+	dl, ok := ctx.Deadline()
+	return ok && !time.Now().Before(dl)
 }
 
 // handler returns the per-connection confirmed-request handler: it

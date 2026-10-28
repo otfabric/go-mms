@@ -337,4 +337,15 @@ func TestCtxIOError(t *testing.T) {
 	if ctxIOError(ctx, nil) != nil {
 		t.Error("nil with done context")
 	}
+	// A passed deadline counts even before the context's timer fires.
+	past, cancelPast := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancelPast()
+	if !errors.Is(ctxDoneErr(past), context.DeadlineExceeded) {
+		t.Error("passed deadline not reported")
+	}
+	future, cancelFuture := context.WithTimeout(context.Background(), time.Hour)
+	defer cancelFuture()
+	if ctxDoneErr(future) != nil {
+		t.Error("future deadline reported")
+	}
 }

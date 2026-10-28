@@ -87,11 +87,28 @@ func armDirection(ctx context.Context, set func(time.Time) error) func() {
 }
 
 // ctxIOError prefers the context's error when ctx ended an I/O operation.
+// The connection deadline taken from ctx can fire just before ctx's own
+// timer, so a passed deadline counts as context.DeadlineExceeded.
 func ctxIOError(ctx context.Context, err error) error {
-	if err != nil && ctx.Err() != nil {
-		return fmt.Errorf("%w: %w", ctx.Err(), err)
+	if err == nil {
+		return nil
+	}
+	if cerr := ctxDoneErr(ctx); cerr != nil {
+		return fmt.Errorf("%w: %w", cerr, err)
 	}
 	return err
+}
+
+// ctxDoneErr returns ctx.Err(), or context.DeadlineExceeded once ctx's
+// deadline has passed even if its timer has not fired yet.
+func ctxDoneErr(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if dl, ok := ctx.Deadline(); ok && !time.Now().Before(dl) {
+		return context.DeadlineExceeded
+	}
+	return nil
 }
 
 func (t *cotpTransport) isClosed() bool {
