@@ -186,8 +186,7 @@ func (l *Listener) handshakeConn(ctx context.Context, conn net.Conn) (mms.Transp
 		conn = tlsConn
 	}
 
-	shim := newSplitDeadlineConn(conn)
-	cotpConn, err := cotp.Accept(ctx, shim, cotp.ServerConfig{
+	cotpConn, err := cotp.Accept(ctx, conn, cotp.ServerConfig{
 		LocalSelector: l.opts.calledTSelector,
 		// MaxTPDULength 0 → go-cotp default (RFC1006 omit/default path).
 	})
@@ -196,7 +195,7 @@ func (l *Listener) handshakeConn(ctx context.Context, conn net.Conn) (mms.Transp
 		_ = conn.Close() // go-cotp normally closed it already
 		return nil, err
 	}
-	return wrapCOTP(cotpConn, conn, shim), nil
+	return &cotpTransport{cotp: cotpConn, raw: conn}, nil
 }
 
 func (l *Listener) logWarn(msg string, conn net.Conn, err error) {
