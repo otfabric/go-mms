@@ -25,8 +25,8 @@ LIBIEC61850_IMAGE=mms-interop-libiec61850:local make interop
 MMS_INTEROP_STACK=dscsystems make interop
 make interop-all
 
-# Or using the published v0.3.0 images (CI pins the digests in interop.yml)
-LIBIEC61850_IMAGE=ghcr.io/otfabric/mms-interop-libiec61850:v0.3.0 make interop
+# Or using the published v0.4.0 images (CI pins the digests in interop.yml)
+LIBIEC61850_IMAGE=ghcr.io/otfabric/mms-interop-libiec61850:v0.4.0 make interop
 ```
 
 ## Environment variables

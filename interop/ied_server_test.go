@@ -8,7 +8,7 @@
 //	go-mms client → <stack>-ied-server
 //
 // The IED server serves the mms-interop IEC 61850 fixture (revision
-// iec61850-v2: interop.icd and values.json) built into the image. go-mms
+// iec61850-v3: interop.icd and values.json) built into the image. go-mms
 // reads it as plain MMS: logical device InteropLD of IED InteropIED is
 // domain InteropIEDInteropLD, and data attribute LN.DO.DA with functional
 // constraint FC is variable LN$FC$DO$DA. The server direction has no
@@ -31,7 +31,7 @@ import (
 )
 
 // iedFixtureRevision is the IEC 61850 fixture the IED adapters announce.
-const iedFixtureRevision = "iec61850-v2"
+const iedFixtureRevision = "iec61850-v3"
 
 const iedValuesPath = "testdata/iec61850/values.json"
 
@@ -172,7 +172,7 @@ func mmsItem(t *testing.T, ref, fc string) string {
 // seededAttributes are the values.json references the IED adapters set
 // at start, with their functional constraint. GGIO1.DPS1.stVal and
 // MMTR1.TotVAh.actVal are in values.json but not seeded by the
-// iec61850bean v0.3.0 adapter; their types are checked in
+// iec61850bean adapter (mms-interop v0.4.0); their types are checked in
 // TestIEDServer_GetVariableAccessAttributes.
 var seededAttributes = []struct{ ref, fc string }{
 	{"InteropLD/LLN0.Mod.stVal", "ST"},
@@ -263,25 +263,37 @@ func TestIEDServer_DataSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetNameListAll (data sets): %v", err)
 	}
-	if len(lists) != 1 || lists[0] != "LLN0$dsInterop" {
-		t.Fatalf("data sets = %v, want [LLN0$dsInterop]", lists)
+	if strings.Join(lists, ",") != "LLN0$dsInterop,LLN0$dsSvGeneric" {
+		t.Fatalf("data sets = %v, want [LLN0$dsInterop LLN0$dsSvGeneric]", lists)
 	}
-	attrs, err := c.GetNamedVariableListAttributes(ctx, h.name("LLN0$dsInterop"))
-	if err != nil {
-		t.Fatalf("GetNamedVariableListAttributes: %v", err)
+	// Members in FCDA order; an FCDA naming a whole attribute such as
+	// mag.f maps to its leaf variable.
+	wantMembers := map[string]string{
+		"LLN0$dsInterop":   "GGIO1$ST$SPS1$stVal,LLN0$ST$Mod$stVal",
+		"LLN0$dsSvGeneric": "MMXU1$MX$TotW$mag$f,MMXU1$MX$TotW$q,MMTR1$ST$TotVAh$actVal,MMTR1$ST$TotVAh$q,LLN0$ST$Mod$stVal",
 	}
-	if attrs.Deletable {
-		t.Error("fixture data set reported deletable")
-	}
-	var members []string
-	for _, v := range attrs.Variables {
-		if v.Name.Scope != mms.ObjectScopeDomain || v.Name.Domain != h.domain {
-			t.Errorf("member %+v not in domain %s", v.Name, h.domain)
+	var attrs *mms.NamedVariableListAttributes
+	for _, list := range lists {
+		a, err := c.GetNamedVariableListAttributes(ctx, h.name(list))
+		if err != nil {
+			t.Fatalf("GetNamedVariableListAttributes(%s): %v", list, err)
 		}
-		members = append(members, string(v.Name.ItemID))
-	}
-	if strings.Join(members, ",") != "GGIO1$ST$SPS1$stVal,LLN0$ST$Mod$stVal" {
-		t.Errorf("members = %v", members)
+		if a.Deletable {
+			t.Errorf("fixture data set %s reported deletable", list)
+		}
+		var members []string
+		for _, v := range a.Variables {
+			if v.Name.Scope != mms.ObjectScopeDomain || v.Name.Domain != h.domain {
+				t.Errorf("%s member %+v not in domain %s", list, v.Name, h.domain)
+			}
+			members = append(members, string(v.Name.ItemID))
+		}
+		if got := strings.Join(members, ","); got != wantMembers[list] {
+			t.Errorf("%s members = %s, want %s", list, got, wantMembers[list])
+		}
+		if list == "LLN0$dsInterop" {
+			attrs = a
+		}
 	}
 	// Read the members by name (the server does not read a data set by
 	// its list name).
