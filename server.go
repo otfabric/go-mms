@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/otfabric/go-mms/internal/acse"
 	"github.com/otfabric/go-mms/internal/asn1util"
@@ -27,18 +28,17 @@ import (
 // confirmed-service error domain and per-variable access-error domain
 // independent.
 const (
-	// serviceErrorClassVMD is the error class for VMD-state errors.
-	serviceErrorClassVMD = 0
-	// serviceErrorClassService is the error class for service-level errors.
-	serviceErrorClassService = 4
-	// serviceErrorClassAccess is the error class for access/object errors.
-	serviceErrorClassAccess = 7
+	serviceErrorClassVMD      = int(ErrorClassVMDState)
+	serviceErrorClassResource = int(ErrorClassResource)
+	serviceErrorClassService  = int(ErrorClassService)
+	serviceErrorClassAccess   = int(ErrorClassAccess)
 
 	// Confirmed service-error codes within their class.
 	// Access-class codes match the mms-extended.asn1 AccessError ENUMERATED:
 	//   other(0), objectaccessunsupported(1), objectnonexistent(2),
 	//   objectaccessdenied(3), objectinvalidated(4)
 	svcErrOther               = 0 // generic "other"
+	svcErrObjectAccessUnsupp  = 1 // access: object-access-unsupported
 	svcErrObjectNonExistent   = 2 // access: object-non-existent
 	svcErrObjectAccessDenied  = 3 // access: object-access-denied
 	svcErrServiceUnsupported  = 4 // vmd-state: other (no handler)
@@ -51,6 +51,8 @@ var (
 	errAccessDenied       = &serverconn.ServiceError{ErrorClass: serviceErrorClassAccess, ErrorCode: svcErrObjectAccessDenied}
 	errInvalidRequest     = &serverconn.ServiceError{ErrorClass: serviceErrorClassService, ErrorCode: svcErrOther}
 	errUnsupportedFeature = &serverconn.ServiceError{ErrorClass: serviceErrorClassVMD, ErrorCode: svcErrServiceNotSupported}
+	errAccessUnsupported  = &serverconn.ServiceError{ErrorClass: serviceErrorClassAccess, ErrorCode: svcErrObjectAccessUnsupp}
+	errResourceOther      = &serverconn.ServiceError{ErrorClass: serviceErrorClassResource, ErrorCode: svcErrOther}
 )
 
 // Per-variable data-access error codes for Read/Write result lists.
@@ -63,6 +65,19 @@ const (
 	wireErrTempUnavail       = DataAccessErrorTemporarilyUnavailable
 	wireErrTypeInconsistent  = DataAccessErrorTypeInconsistent
 )
+
+// callbackErrCode maps an error from a Variable Read or Write callback to
+// the wire DataAccessError code: the code of a wrapped [*DataAccessError]
+// when it is valid, temporarily-unavailable otherwise.
+func callbackErrCode(err error) int {
+	var dae *DataAccessError
+	if errors.As(err, &dae) {
+		if wire, encErr := encodeDataAccessError(dae.Code); encErr == nil {
+			return wire
+		}
+	}
+	return wireErrCode(wireErrTempUnavail)
+}
 
 // wireErrCode converts a DataAccessErrorCode to its validated MMS wire integer.
 // It panics on DataAccessErrorNone or any out-of-range code, making accidental
@@ -96,8 +111,13 @@ type Server struct {
 	identifyHandler func(context.Context, IdentifyRequest) (*ServerIdentity, error)
 	statusHandler   func(context.Context, StatusRequest) (*ServerStatus, error)
 
-	connsMu sync.RWMutex
-	conns   map[*ServerConn]struct{}
+	metrics      Metrics
+	assocTimeout time.Duration
+
+	connsMu   sync.RWMutex
+	conns     map[*ServerConn]struct{}
+	listeners map[TransportListener]struct{}
+	shutdown  bool
 }
 
 // ServerConn represents an active server-side MMS association. It can
@@ -111,6 +131,8 @@ type Server struct {
 type ServerConn struct {
 	mu        sync.RWMutex
 	closed    bool
+	busy      chan struct{} // held while a confirmed request is handled
+	remote    string
 	conn      *serverconn.Conn
 	authToken any
 	frsmTable *frsmTable
@@ -128,14 +150,21 @@ func NewServer(opts ServerOptions) *Server {
 	if logger == nil {
 		logger = slog.New(discardHandler{})
 	}
+	assocTimeout := opts.AssociationTimeout
+	if assocTimeout == 0 {
+		assocTimeout = defaultAssociationTimeout
+	}
 	return &Server{
-		logger:          logger,
+		logger:          logger.With("role", RoleServer.String()),
 		mmsOpts:         opts.MMS.withDefaults(),
 		registry:        servermodel.NewRegistry(),
 		authenticator:   opts.Authenticate,
 		fileProvider:    opts.FileProvider,
 		journalProvider: opts.JournalProvider,
+		metrics:         metricsOrNop(opts.Metrics),
+		assocTimeout:    assocTimeout,
 		conns:           make(map[*ServerConn]struct{}),
+		listeners:       make(map[TransportListener]struct{}),
 	}
 }
 
@@ -168,13 +197,13 @@ func (s *Server) RegisterDomain(name string) error {
 // be registered on the shared server model.
 func (s *Server) RegisterVariable(v Variable) error {
 	if err := validateObjectName(v.Name); err != nil {
-		return fmt.Errorf("mms: register variable: %w", err)
+		return invalidArgf("mms: register variable: %w", err)
 	}
 	if v.Name.Scope == ObjectScopeAssociation {
-		return fmt.Errorf("mms: register variable %q: use ServerConn.RegisterVariable for association-scope variables", v.Name.ItemID)
+		return invalidArgf("mms: register variable %q: use ServerConn.RegisterVariable for association-scope variables", v.Name.ItemID)
 	}
 	if _, err := typeSpecToWire(v.TypeSpec); err != nil {
-		return fmt.Errorf("mms: register variable %q: invalid type spec: %w", v.Name.ItemID, err)
+		return invalidArgf("mms: register variable %q: invalid type spec: %w", v.Name.ItemID, err)
 	}
 	entry := &servermodel.VarEntry{
 		Domain:    string(v.Name.Domain),
@@ -198,7 +227,7 @@ func (s *Server) RegisterVariable(v Variable) error {
 func (s *Server) SetVariableRead(domain, itemID string, fn func(context.Context) (*Value, error)) error {
 	entry, ok := s.registry.LookupVariable(int(ObjectScopeDomain), domain, itemID)
 	if !ok {
-		return fmt.Errorf("mms: SetVariableRead: variable %s/%s not found", domain, itemID)
+		return invalidArgf("mms: SetVariableRead: variable %s/%s not found", domain, itemID)
 	}
 	entry.ReadFunc = fn
 	return nil
@@ -209,16 +238,16 @@ func (s *Server) SetVariableRead(domain, itemID string, fn func(context.Context)
 // already be registered via [Server.RegisterDomain].
 func (s *Server) RegisterNamedVariableList(nvl NamedVariableList) error {
 	if err := validateObjectName(nvl.Name); err != nil {
-		return fmt.Errorf("mms: register NVL: %w", err)
+		return invalidArgf("mms: register NVL: %w", err)
 	}
 	if len(nvl.Variables) == 0 {
-		return fmt.Errorf("mms: register NVL %q: no variables", nvl.Name.ItemID)
+		return invalidArgf("mms: register NVL %q: no variables", nvl.Name.ItemID)
 	}
 
 	vars := make([]servermodel.NVLVariable, len(nvl.Variables))
 	for i, v := range nvl.Variables {
 		if err := validateObjectName(v.Name); err != nil {
-			return fmt.Errorf("mms: register NVL %q: variable [%d]: %w", nvl.Name.ItemID, i, err)
+			return invalidArgf("mms: register NVL %q: variable [%d]: %w", nvl.Name.ItemID, i, err)
 		}
 		nv := servermodel.NVLVariable{
 			Scope:    int(v.Name.Scope),
@@ -256,53 +285,61 @@ func (s *Server) RegisterNamedVariableList(nvl NamedVariableList) error {
 
 // Serve handles a single MMS association over the provided transport.
 // It performs the ISO handshake, then enters a request/response loop
-// until the client disconnects or an error occurs.
+// until the client concludes, releases or disconnects, or an error
+// occurs. Serve returns nil after an orderly Conclude or Release.
 //
 // The corresponding [ServerConn] is registered for the duration of
 // Serve and can be obtained via [Server.Connections].
 //
-// Serve does not close the transport — the caller owns transport
-// lifecycle. [ListenAndServe] handles this automatically with a
-// deferred Close in the per-connection goroutine.
+// The caller owns the transport, with three exceptions in which Serve
+// closes it to unblock a pending read: ctx is cancelled (Serve then
+// returns an error matching ctx.Err()), the association is not
+// established within [ServerOptions.AssociationTimeout], or
+// [Server.Shutdown] aborts the association. [Server.ListenAndServe]
+// closes every accepted transport when its Serve returns.
 //
 // Serve blocks until the connection is complete. For serving multiple
 // connections, call Serve in a goroutine per accepted transport.
 func (s *Server) Serve(ctx context.Context, conn Transport) error {
-	c := serverconn.New(conn, s.logger, s.dispatch, serverconn.MMSOptions{
+	remote := remoteAddrOf(conn)
+	logger := s.logger
+	if remote != "" {
+		logger = logger.With("remote_addr", remote)
+	}
+	if s.isShutdown() {
+		return ErrServerClosed
+	}
+
+	sc := &ServerConn{busy: make(chan struct{}, 1), remote: remote, frsmTable: newFRSMTable()}
+	c := serverconn.New(conn, logger, s.handler(sc, logger), serverconn.MMSOptions{
 		MaxPDUSize:                s.mmsOpts.MaxPDUSize,
 		MaxOutstandingCalling:     s.mmsOpts.MaxOutstandingCalling,
 		MaxOutstandingCalled:      s.mmsOpts.MaxOutstandingCalled,
 		DataStructureNestingLevel: s.mmsOpts.DataStructureNestingLevel,
 	})
+	sc.conn = c
 
-	authInfo, err := c.ReceiveAssociation(ctx)
+	// Cancelling ctx closes the transport so a blocked Receive returns.
+	stopOnCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopOnCancel()
+
+	authToken, err := s.associate(ctx, conn, c, logger)
 	if err != nil {
+		if ctx.Err() != nil {
+			err = errors.Join(ctx.Err(), err)
+		}
+		logger.Info("mms: association failed", "error", err)
+		s.metrics.ObserveConnection(ConnectionEvent{Role: RoleServer, State: ConnectionRejected, RemoteAddr: remote, Err: err})
 		return err
 	}
+	sc.authToken = authToken
 
-	var authToken any
-	if s.authenticator != nil {
-		authCtx := s.buildAuthContext(conn, authInfo)
-		result, authErr := s.authenticator(ctx, authCtx)
-		if authErr != nil {
-			s.logger.Warn("authentication error", "error", authErr)
-			_ = c.RejectAssociation(ctx)
-			return &AuthenticationError{Reason: authErr.Error()}
-		}
-		if !result.Accept {
-			s.logger.Warn("authentication rejected")
-			_ = c.RejectAssociation(ctx)
-			return &AuthenticationError{Reason: "authenticator rejected"}
-		}
-		authToken = result.Token
-	}
-
-	if err := c.AcceptAssociation(ctx); err != nil {
+	if err := s.registerConn(sc); err != nil {
+		_ = sc.Abort(ctx)
 		return err
 	}
-
-	sc := &ServerConn{conn: c, authToken: authToken, frsmTable: newFRSMTable()}
-	s.registerConn(sc)
+	logger.Info("mms: association established")
+	s.metrics.ObserveConnection(ConnectionEvent{Role: RoleServer, State: ConnectionEstablished, RemoteAddr: remote})
 	defer func() {
 		if s.fileProvider != nil {
 			sc.frsmTable.closeAll(ctx, s.fileProvider)
@@ -311,7 +348,106 @@ func (s *Server) Serve(ctx context.Context, conn Transport) error {
 	}()
 
 	svcCtx := context.WithValue(ctx, serverConnCtxKey{}, sc)
-	return c.Serve(svcCtx)
+	err = c.Serve(svcCtx)
+	if err != nil {
+		err = classify(fmt.Errorf("mms: serve: %w", err), ErrClosed)
+		if ctx.Err() != nil {
+			err = errors.Join(ctx.Err(), err)
+		}
+		logger.Info("mms: association ended", "error", err)
+	} else {
+		logger.Info("mms: association ended")
+	}
+	s.metrics.ObserveConnection(ConnectionEvent{Role: RoleServer, State: ConnectionClosed, RemoteAddr: remote, Err: err})
+	return err
+}
+
+// defaultAssociationTimeout is used when ServerOptions.AssociationTimeout
+// is zero.
+const defaultAssociationTimeout = 30 * time.Second
+
+// associate receives the AARQ, runs the authenticator and sends the AARE,
+// bounded by the association timeout. On timeout the transport is closed.
+func (s *Server) associate(ctx context.Context, conn Transport, c *serverconn.Conn, logger *slog.Logger) (any, error) {
+	actx := ctx
+	if s.assocTimeout > 0 {
+		var cancel context.CancelFunc
+		actx, cancel = context.WithTimeout(ctx, s.assocTimeout)
+		defer cancel()
+		stop := context.AfterFunc(actx, func() { _ = conn.Close() })
+		defer stop()
+	}
+
+	authInfo, err := c.ReceiveAssociation(actx)
+	if err != nil {
+		if errors.Is(actx.Err(), context.DeadlineExceeded) {
+			err = errors.Join(actx.Err(), err)
+		}
+		return nil, classify(fmt.Errorf("mms: receive association: %w", err), ErrAssociationFailed)
+	}
+
+	var authToken any
+	if s.authenticator != nil {
+		authCtx := s.buildAuthContext(conn, authInfo)
+		result, authErr := s.authenticator(actx, authCtx)
+		if authErr != nil {
+			logger.Warn("mms: authenticator error", "error", authErr)
+			_ = c.RejectAssociation(actx)
+			return nil, &AuthenticationError{Reason: authErr.Error()}
+		}
+		if !result.Accept {
+			logger.Warn("mms: authentication rejected")
+			_ = c.RejectAssociation(actx)
+			return nil, &AuthenticationError{Reason: "authenticator rejected"}
+		}
+		authToken = result.Token
+	}
+
+	if err := c.AcceptAssociation(actx); err != nil {
+		return nil, classify(fmt.Errorf("mms: accept association: %w", err), ErrAssociationFailed)
+	}
+	return authToken, nil
+}
+
+// handler returns the per-connection confirmed-request handler: it
+// dispatches the request, maps handler errors to service errors, and
+// reports the outcome to the logger and Metrics.
+func (s *Server) handler(sc *ServerConn, logger *slog.Logger) serverconn.ServiceHandler {
+	return func(ctx context.Context, invokeID codec.InvokeID, serviceTag int, body []byte) (int, bool, []byte, error) {
+		sc.busy <- struct{}{}
+		defer func() { <-sc.busy }()
+
+		start := time.Now()
+		respTag, constructed, payload, err := s.dispatch(ctx, invokeID, serviceTag, body)
+		err = toWireServiceError(err)
+		svc := serviceFromTag(serviceTag)
+		elapsed := time.Since(start)
+		if err != nil {
+			logger.Debug("mms: request failed", "service", svc.String(), "invoke_id", invokeID, "duration", elapsed, "error", err)
+		} else {
+			logger.Debug("mms: request", "service", svc.String(), "invoke_id", invokeID, "duration", elapsed)
+		}
+		s.metrics.ObserveRequest(RequestEvent{Role: RoleServer, Service: svc, InvokeID: InvokeID(invokeID), Duration: elapsed, Err: err})
+		return respTag, constructed, payload, err
+	}
+}
+
+// toWireServiceError converts a [*ServiceError] returned by a user
+// handler or provider into the ConfirmedErrorPDU it describes. Other
+// errors pass through unchanged.
+func toWireServiceError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var wire *serverconn.ServiceError
+	if errors.As(err, &wire) {
+		return err
+	}
+	var se *ServiceError
+	if errors.As(err, &se) {
+		return &serverconn.ServiceError{ErrorClass: int(se.Class), ErrorCode: se.Code}
+	}
+	return err
 }
 
 func (s *Server) buildAuthContext(conn Transport, authInfo acse.AuthInfo) *AuthContext {
@@ -371,10 +507,67 @@ func copyOID(oid asn1.ObjectIdentifier) asn1.ObjectIdentifier {
 	return cp
 }
 
-func (s *Server) registerConn(sc *ServerConn) {
+func (s *Server) registerConn(sc *ServerConn) error {
 	s.connsMu.Lock()
+	defer s.connsMu.Unlock()
+	if s.shutdown {
+		return ErrServerClosed
+	}
 	s.conns[sc] = struct{}{}
+	return nil
+}
+
+func (s *Server) isShutdown() bool {
+	s.connsMu.RLock()
+	defer s.connsMu.RUnlock()
+	return s.shutdown
+}
+
+// Shutdown stops the server gracefully: it closes the listeners of every
+// running [Server.ListenAndServe] (which then return [ErrServerClosed]),
+// lets each association finish the request it is handling, and then
+// aborts it (ACSE ABRT and transport close). MMS has no server-initiated
+// orderly release, so idle associations are aborted right away.
+//
+// If ctx is done before all in-flight requests finish, the remaining
+// associations are aborted immediately and Shutdown returns ctx.Err().
+// After Shutdown, [Server.Serve] and [Server.ListenAndServe] return
+// [ErrServerClosed]. Shutdown is safe to call more than once.
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.connsMu.Lock()
+	s.shutdown = true
+	lns := make([]TransportListener, 0, len(s.listeners))
+	for ln := range s.listeners {
+		lns = append(lns, ln)
+	}
+	conns := make([]*ServerConn, 0, len(s.conns))
+	for sc := range s.conns {
+		conns = append(conns, sc)
+	}
 	s.connsMu.Unlock()
+
+	for _, ln := range lns {
+		_ = ln.Close()
+	}
+
+	var wg sync.WaitGroup
+	for _, sc := range conns {
+		wg.Add(1)
+		go func(sc *ServerConn) {
+			defer wg.Done()
+			select {
+			case sc.busy <- struct{}{}:
+				defer func() { <-sc.busy }()
+			case <-ctx.Done():
+			}
+			abortCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+			defer cancel()
+			_ = sc.Abort(abortCtx)
+		}(sc)
+	}
+	wg.Wait()
+	s.logger.Info("mms: server shut down", "aborted", len(conns))
+	return ctx.Err()
 }
 
 func (s *Server) unregisterConn(sc *ServerConn) {
@@ -416,7 +609,7 @@ func (sc *ServerConn) defineAssocNVL(entry *servermodel.NVLEntry) error {
 		sc.assocNVLs = make(map[string]*servermodel.NVLEntry)
 	}
 	if _, exists := sc.assocNVLs[entry.ItemID]; exists {
-		return fmt.Errorf("mms: association NVL %q already defined", entry.ItemID)
+		return invalidArgf("mms: association NVL %q already defined", entry.ItemID)
 	}
 	sc.assocNVLs[entry.ItemID] = entry
 	sc.assocNVLOrder = append(sc.assocNVLOrder, entry.ItemID)
@@ -497,7 +690,7 @@ func (sc *ServerConn) deleteAllAssocNVLs() (matched, deleted int) {
 // [ObjectScopeAssociation] addressing.
 func (sc *ServerConn) RegisterVariable(v Variable) error {
 	if v.Name.ItemID == "" {
-		return fmt.Errorf("mms: register association variable: empty ItemID")
+		return invalidArgf("mms: register association variable: empty ItemID")
 	}
 	entry := &servermodel.VarEntry{
 		ItemID:    string(v.Name.ItemID),
@@ -517,7 +710,7 @@ func (sc *ServerConn) registerAssocVar(entry *servermodel.VarEntry) error {
 		sc.assocVars = make(map[string]*servermodel.VarEntry)
 	}
 	if _, exists := sc.assocVars[entry.ItemID]; exists {
-		return fmt.Errorf("mms: association variable %q already defined", entry.ItemID)
+		return invalidArgf("mms: association variable %q already defined", entry.ItemID)
 	}
 	sc.assocVars[entry.ItemID] = entry
 	sc.assocVarOrder = append(sc.assocVarOrder, entry.ItemID)
@@ -567,7 +760,10 @@ func (sc *ServerConn) Abort(ctx context.Context) error {
 	}
 	sc.mu.RUnlock()
 
+	// Close even if the send is stuck behind a slow peer.
+	stop := context.AfterFunc(ctx, func() { _ = sc.conn.Close() })
 	sendErr := sc.conn.SendAbort(ctx)
+	stop()
 	closeErr := sc.conn.Close()
 	if sendErr != nil {
 		return sendErr
@@ -589,7 +785,7 @@ func (sc *ServerConn) SendUnsolicitedStatus(ctx context.Context, status ServerSt
 
 	mmsPdu, err := pdu.MarshalUnsolicitedStatus(int(status.Logical), int(status.Physical))
 	if err != nil {
-		return fmt.Errorf("mms: marshal unsolicited status: %w", err)
+		return invalidArgf("mms: marshal unsolicited status: %w", err)
 	}
 	return sc.conn.SendUnconfirmed(ctx, mmsPdu)
 }
@@ -607,11 +803,11 @@ func (sc *ServerConn) SendInformationReport(ctx context.Context, req *Informatio
 
 	wire, err := infoReportRequestToWire(req)
 	if err != nil {
-		return fmt.Errorf("mms: marshal info report: %w", err)
+		return invalidArgf("mms: marshal info report: %w", err)
 	}
 	mmsPdu, err := pdu.MarshalInformationReport(wire)
 	if err != nil {
-		return fmt.Errorf("mms: marshal info report PDU: %w", err)
+		return invalidArgf("mms: marshal info report PDU: %w", err)
 	}
 	return sc.conn.SendUnconfirmed(ctx, mmsPdu)
 }
@@ -622,11 +818,11 @@ func (sc *ServerConn) SendInformationReport(ctx context.Context, req *Informatio
 func (s *Server) Broadcast(ctx context.Context, req *InformationReportRequest) error {
 	wire, err := infoReportRequestToWire(req)
 	if err != nil {
-		return fmt.Errorf("mms: marshal info report: %w", err)
+		return invalidArgf("mms: marshal info report: %w", err)
 	}
 	mmsPdu, err := pdu.MarshalInformationReport(wire)
 	if err != nil {
-		return fmt.Errorf("mms: marshal info report PDU: %w", err)
+		return invalidArgf("mms: marshal info report PDU: %w", err)
 	}
 
 	s.connsMu.RLock()
@@ -645,7 +841,7 @@ func (s *Server) Broadcast(ctx context.Context, req *InformationReportRequest) e
 			continue
 		}
 		if err := sc.conn.SendUnconfirmed(ctx, mmsPdu); err != nil {
-			s.logger.Warn("mms: broadcast send failed", "error", err)
+			s.logger.Warn("mms: broadcast send failed", "remote_addr", sc.remote, "error", err)
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -656,7 +852,7 @@ func (s *Server) Broadcast(ctx context.Context, req *InformationReportRequest) e
 
 func infoReportRequestToWire(req *InformationReportRequest) (*pdu.InformationReportWire, error) {
 	if req == nil {
-		return nil, fmt.Errorf("nil InformationReportRequest")
+		return nil, invalidArgf("nil InformationReportRequest")
 	}
 
 	hasListName := req.ListName != nil
@@ -664,15 +860,15 @@ func infoReportRequestToWire(req *InformationReportRequest) (*pdu.InformationRep
 
 	switch {
 	case hasListName && hasVars:
-		return nil, fmt.Errorf("InformationReportRequest: ListName and Variables are mutually exclusive")
+		return nil, invalidArgf("InformationReportRequest: ListName and Variables are mutually exclusive")
 	case !hasListName && !hasVars:
-		return nil, fmt.Errorf("InformationReportRequest: one of ListName or Variables is required")
+		return nil, invalidArgf("InformationReportRequest: one of ListName or Variables is required")
 	case !hasListName && len(req.Variables) != len(req.Values):
-		return nil, fmt.Errorf("InformationReportRequest: len(Variables)=%d != len(Values)=%d", len(req.Variables), len(req.Values))
+		return nil, invalidArgf("InformationReportRequest: len(Variables)=%d != len(Values)=%d", len(req.Variables), len(req.Values))
 	}
 
 	if len(req.Values) == 0 {
-		return nil, fmt.Errorf("InformationReportRequest: at least one Value is required")
+		return nil, invalidArgf("InformationReportRequest: at least one Value is required")
 	}
 
 	wire := &pdu.InformationReportWire{}
@@ -689,7 +885,7 @@ func infoReportRequestToWire(req *InformationReportRequest) (*pdu.InformationRep
 	for i, val := range req.Values {
 		dv, err := valueToDataValue(val)
 		if err != nil {
-			return nil, fmt.Errorf("value [%d]: %w", i, err)
+			return nil, invalidArgf("value [%d]: %w", i, err)
 		}
 		wire.Values = append(wire.Values, dv)
 	}
@@ -712,17 +908,33 @@ func infoReportRequestToWire(req *InformationReportRequest) (*pdu.InformationRep
 // the accept loop. Temporary accept errors (e.g. transient network
 // issues) are logged and retried. Fatal accept errors stop the server.
 func (s *Server) ListenAndServe(ctx context.Context, ln TransportListener) error {
-	s.logger.Info("server listening", "addr", ln.Addr())
-	defer func() { _ = ln.Close() }()
+	s.connsMu.Lock()
+	if s.shutdown {
+		s.connsMu.Unlock()
+		_ = ln.Close()
+		return ErrServerClosed
+	}
+	s.listeners[ln] = struct{}{}
+	s.connsMu.Unlock()
+	defer func() {
+		s.connsMu.Lock()
+		delete(s.listeners, ln)
+		s.connsMu.Unlock()
+		_ = ln.Close()
+	}()
 
+	s.logger.Info("mms: server listening", "addr", ln.Addr().String())
 	for {
 		conn, err := ln.Accept(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			if s.isShutdown() {
+				return ErrServerClosed
+			}
 			if isTemporary(err) {
-				s.logger.Warn("temporary accept error, retrying", "error", err)
+				s.logger.Warn("mms: temporary accept error, retrying", "error", err)
 				continue
 			}
 			return fmt.Errorf("mms: accept: %w", err)
@@ -730,9 +942,8 @@ func (s *Server) ListenAndServe(ctx context.Context, ln TransportListener) error
 
 		go func(c Transport) {
 			defer func() { _ = c.Close() }()
-			if err := s.Serve(ctx, c); err != nil {
-				s.logger.Info("connection closed", "error", err)
-			}
+			// Serve logs and reports the outcome itself.
+			_ = s.Serve(ctx, c)
 		}(conn)
 	}
 }
@@ -820,7 +1031,7 @@ func (s *Server) handleStatus(ctx context.Context, body []byte) (int, bool, []by
 		return 0, false, nil, errServiceUnsupported
 	}
 	if len(body) != 1 {
-		return 0, false, nil, &serverconn.ServiceError{ErrorClass: 1, ErrorCode: 0} // resource: other
+		return 0, false, nil, errInvalidRequest
 	}
 	req := StatusRequest{ExtendedDerivation: body[0] != 0}
 	result, err := h(ctx, req)
@@ -959,7 +1170,7 @@ func (s *Server) handleGetVarAccess(ctx context.Context, body []byte) (int, bool
 
 	wireTS, err := typeSpecToWire(ts)
 	if err != nil {
-		return 0, false, nil, &serverconn.ServiceError{ErrorClass: 7, ErrorCode: 1}
+		return 0, false, nil, errAccessUnsupported
 	}
 	respBytes, err := pdu.MarshalGetVarAccessResponse(entry.Deletable, wireTS)
 	if err != nil {
@@ -1004,7 +1215,7 @@ func (s *Server) handleRead(ctx context.Context, body []byte) (int, bool, []byte
 
 		val, err := readFn(ctx)
 		if err != nil {
-			accessResults = append(accessResults, &pdu.AccessResult{IsError: true, ErrorCode: wireErrCode(wireErrTempUnavail)})
+			accessResults = append(accessResults, &pdu.AccessResult{IsError: true, ErrorCode: callbackErrCode(err)})
 			continue
 		}
 
@@ -1103,12 +1314,7 @@ func (s *Server) handleWrite(ctx context.Context, body []byte) (int, bool, []byt
 		}
 
 		if err := writeFn(ctx, val); err != nil {
-			var dae *DataAccessError
-			if errors.As(err, &dae) && dae.Code != DataAccessErrorNone {
-				results = append(results, pdu.WriteResult{Code: wireErrCode(dae.Code)})
-			} else {
-				results = append(results, pdu.WriteResult{Code: wireErrCode(wireErrTempUnavail)})
-			}
+			results = append(results, pdu.WriteResult{Code: callbackErrCode(err)})
 			continue
 		}
 		results = append(results, pdu.WriteResult{Success: true})

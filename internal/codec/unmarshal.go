@@ -30,8 +30,14 @@ func UnwrapPdu(data []byte) (tag byte, content []byte, err error) {
 		return 0, nil, fmt.Errorf("codec: unwrap PDU: %d trailing bytes", len(rest))
 	}
 
+	// Every MMS PDU tag fits the single-byte form; a long-form tag
+	// number must not be truncated into one of them.
+	if raw.Tag > 30 {
+		return 0, nil, fmt.Errorf("codec: unwrap PDU: tag number %d is not an MMS PDU", raw.Tag)
+	}
+
 	// Reconstruct the tag byte from the parsed RawValue.
-	tag = byte(raw.Class<<6) | byte(raw.Tag&0x1f)
+	tag = byte(raw.Class<<6) | byte(raw.Tag)
 	if raw.IsCompound {
 		tag |= asn1util.ConstructedFlag
 	}

@@ -4,6 +4,7 @@ package mms
 
 import (
 	"log/slog"
+	"time"
 )
 
 // ServerOptions configures the MMS server.
@@ -31,6 +32,17 @@ type ServerOptions struct {
 	// (ReadJournal). When nil, journal service requests are
 	// rejected with service-unsupported.
 	JournalProvider JournalProvider
+
+	// Metrics, when non-nil, receives request and connection events (see
+	// [Metrics]). Nil means no metrics.
+	Metrics Metrics
+
+	// AssociationTimeout bounds the time [Server.Serve] waits for a new
+	// connection to complete the association (AARQ received,
+	// Authenticate run, AARE sent). A peer that connects and stays silent
+	// is disconnected after it. Zero means 30s; a negative value disables
+	// the limit.
+	AssociationTimeout time.Duration
 }
 
 // ServerMMSOptions configures MMS protocol negotiation parameters for

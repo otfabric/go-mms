@@ -53,7 +53,7 @@ func TestValues_Unencodable(t *testing.T) {
 	c := dial(t, m.addr)
 	ctx := timeout(t)
 	for name, v := range map[string]*mms.Value{
-		"NewBinaryTime":       mms.NewBinaryTime(0), // 1970 predates the 1984 TimeOfDay epoch
+		"NewBinaryTime":       mms.NewBinaryTime(1 << 32), // 1970-02-19: before the 1984 epoch, longer than a time of day
 		"NewObjectIdentifier": mms.NewObjectIdentifier([]int{3, 1}),
 	} {
 		before := m.get(dom + "/" + name)

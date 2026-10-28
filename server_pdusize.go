@@ -4,8 +4,6 @@ package mms
 
 import (
 	"context"
-
-	"github.com/otfabric/go-mms/internal/serverconn"
 )
 
 // confirmedResponseOverhead bounds the confirmed-response framing around
@@ -15,7 +13,7 @@ const confirmedResponseOverhead = 16
 
 // errResponseTooLarge is returned when not even one list element fits
 // the negotiated PDU size.
-var errResponseTooLarge = &serverconn.ServiceError{ErrorClass: 3, ErrorCode: 0} // resource: other
+var errResponseTooLarge = errResourceOther
 
 // responseBudget is the largest service payload that fits the PDU size
 // negotiated on the connection serving ctx.

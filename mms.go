@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/otfabric/go-mms/internal/acse"
 	"github.com/otfabric/go-mms/internal/codec"
@@ -32,10 +34,12 @@ import (
 // handlers. Negotiated outstanding-request limits are not enforced at
 // runtime (see package doc Concurrency).
 type Client struct {
-	mu     sync.Mutex
-	closed bool
-	logger *slog.Logger
-	opts   DialOptions
+	mu      sync.Mutex
+	closed  bool
+	logger  *slog.Logger
+	opts    DialOptions
+	metrics Metrics
+	remote  string
 
 	sendMu  sync.Mutex // serializes writes to transport
 	conn    Transport
@@ -72,10 +76,17 @@ func newClient(ctx context.Context, conn Transport, opts DialOptions) (*Client, 
 	if logger == nil {
 		logger = slog.New(discardHandler{})
 	}
+	remote := remoteAddrOf(conn)
+	logger = logger.With("role", RoleClient.String())
+	if remote != "" {
+		logger = logger.With("remote_addr", remote)
+	}
 
 	c := &Client{
 		logger:     logger,
 		opts:       opts,
+		metrics:    metricsOrNop(opts.Metrics),
+		remote:     remote,
 		conn:       conn,
 		readerDone: make(chan struct{}),
 		concludeCh: make(chan struct{}, 1),
@@ -83,6 +94,9 @@ func newClient(ctx context.Context, conn Transport, opts DialOptions) (*Client, 
 
 	if err := c.associate(ctx); err != nil {
 		_ = conn.Close()
+		err = classify(err, ErrAssociationFailed)
+		logger.Warn("mms: association failed", "error", err)
+		c.metricsSink().ObserveConnection(ConnectionEvent{Role: RoleClient, State: ConnectionRejected, RemoteAddr: remote, Err: err})
 		return nil, err
 	}
 
@@ -97,6 +111,7 @@ func newClient(ctx context.Context, conn Transport, opts DialOptions) (*Client, 
 		"max_outstanding_calling", c.maxOutCalling,
 		"max_outstanding_called", c.maxOutCalled,
 	)
+	c.metricsSink().ObserveConnection(ConnectionEvent{Role: RoleClient, State: ConnectionEstablished, RemoteAddr: remote})
 
 	return c, nil
 }
@@ -132,7 +147,7 @@ func (c *Client) associate(ctx context.Context) error {
 
 	assocResult, err := isostack.DecodeAssociateResponse(respData)
 	if err != nil {
-		return fmt.Errorf("mms: %w", err)
+		return decodeErrorf("mms: %w", err)
 	}
 
 	if assocResult.ACSEResult != acse.ResultAccepted {
@@ -142,25 +157,25 @@ func (c *Client) associate(ctx context.Context) error {
 
 	if len(assocResult.MmsPayload) == 0 {
 		return &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: "association accepted but no MMS Initiate Response",
 		}
 	}
 
 	kind, content, err := pdu.DecodePdu(assocResult.MmsPayload)
 	if err != nil {
-		return fmt.Errorf("mms: decode initiate response: %w", err)
+		return decodeErrorf("mms: decode initiate response: %w", err)
 	}
 	if kind != pdu.PduInitiateResponse {
 		return &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected InitiateResponse, got %s", kind),
 		}
 	}
 
 	initResp, err := pdu.UnmarshalInitiateResponse(content)
 	if err != nil {
-		return fmt.Errorf("mms: %w", err)
+		return decodeErrorf("mms: %w", err)
 	}
 
 	if err := c.applyNegotiatedParams(initReq, initResp); err != nil {
@@ -202,10 +217,10 @@ func (c *Client) applyNegotiatedParams(req pdu.InitiateRequest, resp *pdu.Initia
 
 	c.serverVersion = resp.InitResponseDetail.NegotiatedVersion
 	if c.serverVersion <= 0 {
-		return &ProtocolError{
-			Phase:   "mms",
+		return classify(&ProtocolError{
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("invalid negotiated version %d", c.serverVersion),
-		}
+		}, ErrNegotiationFailed)
 	}
 
 	c.logger.Debug("mms: negotiated",
@@ -282,7 +297,10 @@ func (c *Client) Close(ctx context.Context) error {
 //
 // After Abort returns, the Client is closed and all pending requests
 // are cancelled with [ErrClosed].
-func (c *Client) Abort(_ context.Context) error {
+//
+// The ABRT PDU is sent best-effort and bounded by ctx; the transport is
+// closed even when the send fails or ctx expires.
+func (c *Client) Abort(ctx context.Context) error {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -293,10 +311,14 @@ func (c *Client) Abort(_ context.Context) error {
 
 	// Best-effort send of the protocol abort PDU (ACSE ABRT wrapped in
 	// session/presentation layers). Ignored if the peer is already gone.
+	// A send stuck behind a slow peer must not block Abort past ctx: the
+	// transport is closed when ctx is done, which fails the send.
 	abortPDU := isostack.EncodeAbort()
+	stop := context.AfterFunc(ctx, func() { _ = c.conn.Close() })
 	c.sendMu.Lock()
-	_ = c.conn.Send(context.Background(), abortPDU)
+	_ = c.sendRaw(ctx, abortPDU)
 	c.sendMu.Unlock()
+	stop()
 
 	c.tracker.CancelAll(ErrClosed)
 	c.readerCancel()
@@ -305,6 +327,26 @@ func (c *Client) Abort(_ context.Context) error {
 	err := c.conn.Close()
 	c.logger.Info("mms: aborted")
 	return err
+}
+
+// Done returns a channel that is closed when the association has ended:
+// after [Client.Close] or [Client.Abort], when the peer concludes,
+// releases or aborts, or when the connection is lost or fails to decode.
+// Use it to detect a lost association and reconnect (see [Retry]).
+func (c *Client) Done() <-chan struct{} {
+	return c.readerDone
+}
+
+// Err returns nil while the association is up. After [Client.Done] is
+// closed it returns why the association ended; the error matches
+// [ErrClosed].
+func (c *Client) Err() error {
+	select {
+	case <-c.readerDone:
+		return classify(c.readerExitErr(), ErrClosed)
+	default:
+		return nil
+	}
 }
 
 // Negotiated returns the MMS parameters that were negotiated during
@@ -343,7 +385,7 @@ func (c *Client) conclude(ctx context.Context) error {
 		case <-c.concludeCh:
 			return nil
 		default:
-			return &ProtocolError{Phase: "mms", Message: "connection closed before conclude response"}
+			return &ProtocolError{Phase: PhaseMMS, Message: "connection closed before conclude response"}
 		}
 	}
 }
@@ -354,7 +396,7 @@ func (c *Client) Identify(ctx context.Context) (*ServerIdentity, error) {
 
 	reqBytes, err := pdu.MarshalIdentifyRequest(invokeID)
 	if err != nil {
-		return nil, fmt.Errorf("mms: marshal identify request: %w", err)
+		return nil, invalidArgf("mms: marshal identify request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -364,14 +406,14 @@ func (c *Client) Identify(ctx context.Context) (*ServerIdentity, error) {
 
 	if confirmed.ServiceKind != pdu.ServiceIdentify {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected Identify response, got %s", confirmed.ServiceKind),
 		}
 	}
 
 	identResp, err := pdu.UnmarshalIdentifyResponse(confirmed.ServiceData)
 	if err != nil {
-		return nil, fmt.Errorf("mms: %w", err)
+		return nil, decodeErrorf("mms: %w", err)
 	}
 
 	c.logger.Debug("mms: identify",
@@ -409,7 +451,7 @@ func (c *Client) StatusWithOptions(ctx context.Context, req ClientStatusRequest)
 
 	reqBytes, err := pdu.MarshalStatusRequest(invokeID, req.ExtendedDerivation)
 	if err != nil {
-		return nil, fmt.Errorf("mms: marshal status request: %w", err)
+		return nil, invalidArgf("mms: marshal status request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -419,14 +461,14 @@ func (c *Client) StatusWithOptions(ctx context.Context, req ClientStatusRequest)
 
 	if confirmed.ServiceKind != pdu.ServiceStatus {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected Status response, got %s", confirmed.ServiceKind),
 		}
 	}
 
 	statusResp, err := pdu.UnmarshalStatusResponse(confirmed.ServiceData)
 	if err != nil {
-		return nil, fmt.Errorf("mms: %w", err)
+		return nil, decodeErrorf("mms: %w", err)
 	}
 
 	c.logger.Debug("mms: status",
@@ -445,7 +487,36 @@ func (c *Client) StatusWithOptions(ctx context.Context, req ClientStatusRequest)
 // sendConfirmed sends an MMS PDU as a confirmed request, waits for the
 // response, verifies the invoke ID, and handles ConfirmedError and
 // Reject PDUs. Returns the parsed confirmed response on success.
+//
+// Every outcome is logged at Debug and reported to [Metrics].
 func (c *Client) sendConfirmed(ctx context.Context, invokeID codec.InvokeID, mmsPdu []byte) (*pdu.ConfirmedResponse, error) {
+	start := time.Now()
+	resp, err := c.doConfirmed(ctx, invokeID, mmsPdu)
+	svc := requestService(mmsPdu)
+	elapsed := time.Since(start)
+	if err != nil {
+		c.logger.Debug("mms: request failed", "service", svc.String(), "invoke_id", invokeID, "duration", elapsed, "error", err)
+	} else {
+		c.logger.Debug("mms: request", "service", svc.String(), "invoke_id", invokeID, "duration", elapsed)
+	}
+	c.metricsSink().ObserveRequest(RequestEvent{Role: RoleClient, Service: svc, InvokeID: InvokeID(invokeID), Duration: elapsed, Err: err})
+	return resp, err
+}
+
+// requestService returns the service of an encoded confirmed request PDU.
+func requestService(mmsPdu []byte) Service {
+	kind, content, err := pdu.DecodePdu(mmsPdu)
+	if err != nil || kind != pdu.PduConfirmedRequest {
+		return ServiceUnknown
+	}
+	_, raw, err := codec.UnmarshalConfirmedRequest(content)
+	if err != nil {
+		return ServiceUnknown
+	}
+	return serviceFromTag(raw.Tag)
+}
+
+func (c *Client) doConfirmed(ctx context.Context, invokeID codec.InvokeID, mmsPdu []byte) (*pdu.ConfirmedResponse, error) {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -453,19 +524,26 @@ func (c *Client) sendConfirmed(ctx context.Context, invokeID codec.InvokeID, mms
 	}
 	c.mu.Unlock()
 
+	if c.opts.RequestTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.opts.RequestTimeout)
+		defer cancel()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, contextErr(invokeID, err)
+	}
+
 	_, ch, err := c.tracker.AllocateWithID(invokeID)
 	if err != nil {
 		return nil, fmt.Errorf("mms: allocate invoke ID %d: %w", invokeID, err)
 	}
 
-	data := isostack.EncodeDataRequest(mmsPdu)
-
-	c.sendMu.Lock()
-	sendErr := c.sendRaw(ctx, data)
-	c.sendMu.Unlock()
-	if sendErr != nil {
-		c.tracker.Cancel(invokeID, sendErr)
-		return nil, fmt.Errorf("mms: send request: %w", sendErr)
+	if err := c.send(ctx, isostack.EncodeDataRequest(mmsPdu)); err != nil {
+		c.tracker.Cancel(invokeID, err)
+		if ctx.Err() != nil {
+			return nil, contextErr(invokeID, ctx.Err())
+		}
+		return nil, err
 	}
 
 	var resp invoke.Response
@@ -473,7 +551,7 @@ func (c *Client) sendConfirmed(ctx context.Context, invokeID codec.InvokeID, mms
 	case resp = <-ch:
 	case <-ctx.Done():
 		c.tracker.Cancel(invokeID, ctx.Err())
-		return nil, fmt.Errorf("mms: %w", ctx.Err())
+		return nil, contextErr(invokeID, ctx.Err())
 	case <-c.readerDone:
 		// The reader may have delivered this response just before exiting.
 		select {
@@ -492,16 +570,65 @@ func (c *Client) sendConfirmed(ctx context.Context, invokeID codec.InvokeID, mms
 	return c.processConfirmedPDU(invokeID, pdu.PduKind(resp.Kind), resp.Data)
 }
 
+// send writes one request PDU. The write itself is not bound to ctx:
+// abandoning a PDU half-written would corrupt the stream for every other
+// request on the association. Instead the write runs on its own goroutine
+// and send returns when ctx is done; a write that has not started by then
+// is skipped. A write that fails leaves the association unusable, so the
+// transport is closed, which stops the reader and fails the other pending
+// requests with ErrClosed.
+func (c *Client) send(ctx context.Context, data []byte) error {
+	const (
+		pending int32 = iota
+		writing
+		abandoned
+	)
+	var state atomic.Int32
+	done := make(chan error, 1)
+	go func() {
+		c.sendMu.Lock()
+		defer c.sendMu.Unlock()
+		if !state.CompareAndSwap(pending, writing) {
+			done <- nil
+			return
+		}
+		err := c.sendRaw(context.Background(), data)
+		if err != nil {
+			_ = c.conn.Close()
+			err = classify(fmt.Errorf("mms: send request: %w", err), ErrClosed)
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		// Either the write is skipped, or the PDU is on its way and the
+		// response will be discarded.
+		state.CompareAndSwap(pending, abandoned)
+		return ctx.Err()
+	}
+}
+
+// contextErr wraps a context error for a request; deadline expiry also
+// matches ErrInvokeTimeout.
+func contextErr(invokeID codec.InvokeID, err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return classify(fmt.Errorf("mms: invoke %d: %w", invokeID, err), ErrInvokeTimeout)
+	}
+	return fmt.Errorf("mms: %w", err)
+}
+
 func (c *Client) processConfirmedPDU(invokeID codec.InvokeID, kind pdu.PduKind, content []byte) (*pdu.ConfirmedResponse, error) {
 	switch kind {
 	case pdu.PduConfirmedResponse:
 		confirmed, err := pdu.DecodeConfirmedResponse(content)
 		if err != nil {
-			return nil, fmt.Errorf("mms: %w", err)
+			return nil, decodeErrorf("mms: %w", err)
 		}
 		if confirmed.InvokeID != invokeID {
 			return nil, &ProtocolError{
-				Phase:   "mms",
+				Phase:   PhaseMMS,
 				Message: fmt.Sprintf("confirmed response invoke ID mismatch: expected %d, got %d", invokeID, confirmed.InvokeID),
 			}
 		}
@@ -515,7 +642,7 @@ func (c *Client) processConfirmedPDU(invokeID codec.InvokeID, kind pdu.PduKind, 
 
 	default:
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("unexpected PDU type %s for confirmed request", kind),
 		}
 	}
@@ -524,11 +651,11 @@ func (c *Client) processConfirmedPDU(invokeID codec.InvokeID, kind pdu.PduKind, 
 func (c *Client) handleConfirmedError(expectedID codec.InvokeID, content []byte) error {
 	ce, err := pdu.DecodeConfirmedError(content)
 	if err != nil {
-		return fmt.Errorf("mms: decode confirmed error: %w", err)
+		return decodeErrorf("mms: decode confirmed error: %w", err)
 	}
 	if ce.InvokeID != expectedID {
 		return &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("confirmed error invoke ID mismatch: sent %d, received %d", expectedID, ce.InvokeID),
 		}
 	}
@@ -542,22 +669,21 @@ func (c *Client) handleConfirmedError(expectedID codec.InvokeID, content []byte)
 func (c *Client) handleReject(expectedID codec.InvokeID, content []byte) error {
 	rj, err := pdu.DecodeRejectPDU(content)
 	if err != nil {
-		return fmt.Errorf("mms: decode reject: %w", err)
+		return decodeErrorf("mms: decode reject: %w", err)
 	}
 	if rj.HasInvokeID && rj.InvokeID != expectedID {
 		return &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("reject invoke ID mismatch: sent %d, received %d", expectedID, rj.InvokeID),
 		}
 	}
 
-	var msg string
-	if rj.HasInvokeID {
-		msg = fmt.Sprintf("request rejected: type=%d reason=%d invokeID=%d", rj.RejectType, rj.RejectReason, rj.InvokeID)
-	} else {
-		msg = fmt.Sprintf("request rejected: type=%d reason=%d invokeID=absent", rj.RejectType, rj.RejectReason)
+	return &RejectError{
+		Type:        RejectType(rj.RejectType),
+		Reason:      rj.RejectReason,
+		InvokeID:    InvokeID(rj.InvokeID),
+		HasInvokeID: rj.HasInvokeID,
 	}
-	return &ProtocolError{Phase: "mms", Message: msg}
 }
 
 // OnInformationReport registers a handler for incoming InformationReport
@@ -597,13 +723,22 @@ func (c *Client) stopReader(err error) {
 // around it.
 func (c *Client) checkPDUSize(mmsPayload []byte) error {
 	if c.maxPDUSize > 0 && len(mmsPayload) > c.maxPDUSize {
-		return fmt.Errorf("mms: received PDU size %d exceeds negotiated max %d", len(mmsPayload), c.maxPDUSize)
+		return invalidPDUf("mms: received PDU size %d exceeds negotiated max %d", len(mmsPayload), c.maxPDUSize)
 	}
 	return nil
 }
 
 func (c *Client) readerLoop(ctx context.Context) {
-	defer close(c.readerDone)
+	defer func() {
+		c.mu.Lock()
+		err := c.readerErr
+		if c.closed {
+			err = nil // ended by Close or Abort
+		}
+		c.mu.Unlock()
+		c.metricsSink().ObserveConnection(ConnectionEvent{Role: RoleClient, State: ConnectionClosed, RemoteAddr: c.remote, Err: err})
+		close(c.readerDone)
+	}()
 
 	for {
 		rawData, err := c.receiveRaw(ctx)
@@ -621,19 +756,19 @@ func (c *Client) readerLoop(ctx context.Context) {
 		}
 		if err != nil {
 			c.logger.Debug("mms: reader loop decode error", "error", err)
-			c.stopReader(fmt.Errorf("mms: %w", err))
+			c.stopReader(classify(decodeErrorf("mms: %w", err), ErrClosed))
 			return
 		}
 		if err := c.checkPDUSize(mmsPayload); err != nil {
 			c.logger.Debug("mms: reader loop PDU size error", "error", err)
-			c.stopReader(err)
+			c.stopReader(classify(err, ErrClosed))
 			return
 		}
 
 		kind, content, err := pdu.DecodePdu(mmsPayload)
 		if err != nil {
 			c.logger.Debug("mms: reader loop PDU error", "error", err)
-			c.stopReader(fmt.Errorf("mms: decode PDU: %w", err))
+			c.stopReader(classify(decodeErrorf("mms: decode PDU: %w", err), ErrClosed))
 			return
 		}
 
@@ -757,7 +892,7 @@ func (c *Client) infoReportToIndication(r *pdu.InformationReportWire) (*Informat
 
 func (c *Client) sendRaw(ctx context.Context, data []byte) error {
 	if c.opts.RawHook != nil {
-		c.opts.RawHook("send", data)
+		c.opts.RawHook(RawHookSend, data)
 	}
 	return c.conn.Send(ctx, data)
 }
@@ -768,7 +903,7 @@ func (c *Client) receiveRaw(ctx context.Context) ([]byte, error) {
 		return nil, err
 	}
 	if c.opts.RawHook != nil {
-		c.opts.RawHook("recv", data)
+		c.opts.RawHook(RawHookRecv, data)
 	}
 	return data, nil
 }
@@ -800,10 +935,10 @@ type AccessResult struct {
 // access error, Read returns a [*DataAccessError].
 func (c *Client) Read(ctx context.Context, req ReadRequest) (*ReadResult, error) {
 	if req.DomainID == "" {
-		return nil, fmt.Errorf("mms: read: empty DomainID")
+		return nil, invalidArgf("mms: read: empty DomainID")
 	}
 	if req.ItemID == "" {
-		return nil, fmt.Errorf("mms: read: empty ItemID")
+		return nil, invalidArgf("mms: read: empty ItemID")
 	}
 
 	results, err := c.ReadMultiple(ctx, []ObjectName{
@@ -829,7 +964,7 @@ func (c *Client) Read(ctx context.Context, req ReadRequest) (*ReadResult, error)
 func (c *Client) ReadMultiple(ctx context.Context, variables []ObjectName) ([]AccessResult, error) {
 	for i, v := range variables {
 		if err := validateObjectName(v); err != nil {
-			return nil, fmt.Errorf("mms: read: variable [%d]: %w", i, err)
+			return nil, invalidArgf("mms: read: variable [%d]: %w", i, err)
 		}
 	}
 
@@ -842,7 +977,7 @@ func (c *Client) ReadMultiple(ctx context.Context, variables []ObjectName) ([]Ac
 
 	reqBytes, err := pdu.MarshalReadRequest(invokeID, wireVars)
 	if err != nil {
-		return nil, fmt.Errorf("mms: marshal read request: %w", err)
+		return nil, invalidArgf("mms: marshal read request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -852,19 +987,19 @@ func (c *Client) ReadMultiple(ctx context.Context, variables []ObjectName) ([]Ac
 
 	if confirmed.ServiceKind != pdu.ServiceRead {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected Read response, got %s", confirmed.ServiceKind),
 		}
 	}
 
 	dataValues, err := pdu.UnmarshalReadResponse(confirmed.ServiceData)
 	if err != nil {
-		return nil, fmt.Errorf("mms: %w", err)
+		return nil, decodeErrorf("mms: %w", err)
 	}
 
 	if len(dataValues) != len(variables) {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("read response: expected %d results, got %d", len(variables), len(dataValues)),
 		}
 	}
@@ -874,13 +1009,13 @@ func (c *Client) ReadMultiple(ctx context.Context, variables []ObjectName) ([]Ac
 		if dv.Tag == pdu.TagDataAccessError {
 			code, err := decodeDataAccessError(dv.ErrCode)
 			if err != nil {
-				return nil, fmt.Errorf("mms: read result [%d]: %w", i, err)
+				return nil, decodeErrorf("mms: read result [%d]: %w", i, err)
 			}
 			results[i] = AccessResult{ErrorCode: code}
 		} else {
 			val, err := dataValueToValue(dv)
 			if err != nil {
-				return nil, fmt.Errorf("mms: read result [%d]: %w", i, err)
+				return nil, decodeErrorf("mms: read result [%d]: %w", i, err)
 			}
 			results[i] = AccessResult{Value: val, ErrorCode: DataAccessErrorNone}
 		}
@@ -911,13 +1046,13 @@ type WriteResult struct{}
 // returns a [*DataAccessError].
 func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, error) {
 	if req.DomainID == "" {
-		return nil, fmt.Errorf("mms: write: empty DomainID")
+		return nil, invalidArgf("mms: write: empty DomainID")
 	}
 	if req.ItemID == "" {
-		return nil, fmt.Errorf("mms: write: empty ItemID")
+		return nil, invalidArgf("mms: write: empty ItemID")
 	}
 	if req.Value == nil {
-		return nil, fmt.Errorf("mms: write: nil Value")
+		return nil, invalidArgf("mms: write: nil Value")
 	}
 
 	invokeID := c.nextInvokeID()
@@ -926,12 +1061,12 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 
 	dv, err := valueToDataValue(req.Value)
 	if err != nil {
-		return nil, fmt.Errorf("mms: marshal write value: %w", err)
+		return nil, invalidArgf("mms: marshal write value: %w", err)
 	}
 
 	reqBytes, err := pdu.MarshalWriteRequest(invokeID, []pdu.ObjectNameWire{wireVar}, []*pdu.DataValue{dv})
 	if err != nil {
-		return nil, fmt.Errorf("mms: marshal write request: %w", err)
+		return nil, invalidArgf("mms: marshal write request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -941,19 +1076,19 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 
 	if confirmed.ServiceKind != pdu.ServiceWrite {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected Write response, got %s", confirmed.ServiceKind),
 		}
 	}
 
 	items, err := pdu.UnmarshalWriteResponse(confirmed.ServiceData)
 	if err != nil {
-		return nil, fmt.Errorf("mms: %w", err)
+		return nil, decodeErrorf("mms: %w", err)
 	}
 
 	if len(items) != 1 {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("write response: expected 1 result, got %d", len(items)),
 		}
 	}
@@ -962,7 +1097,7 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 	if !item.Success {
 		code, err := decodeDataAccessError(item.ErrCode)
 		if err != nil {
-			return nil, fmt.Errorf("mms: write: %w", err)
+			return nil, decodeErrorf("mms: write: %w", err)
 		}
 		return nil, &DataAccessError{Code: code}
 	}
@@ -982,14 +1117,14 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 // component, array-element, or array-range addressing.
 func (c *Client) ReadVariables(ctx context.Context, variables []VariableSpec) ([]AccessResult, error) {
 	if len(variables) == 0 {
-		return nil, fmt.Errorf("mms: read: no variables specified")
+		return nil, invalidArgf("mms: read: no variables specified")
 	}
 	for i, v := range variables {
 		if err := validateObjectName(v.Name); err != nil {
-			return nil, fmt.Errorf("mms: read: variable [%d]: %w", i, err)
+			return nil, invalidArgf("mms: read: variable [%d]: %w", i, err)
 		}
 		if err := validateAccessSelectors(v.AlternateAccess); err != nil {
-			return nil, fmt.Errorf("mms: read: variable [%d]: %w", i, err)
+			return nil, invalidArgf("mms: read: variable [%d]: %w", i, err)
 		}
 	}
 
@@ -1002,7 +1137,7 @@ func (c *Client) ReadVariables(ctx context.Context, variables []VariableSpec) ([
 
 	reqBytes, err := pdu.MarshalReadRequestWithAccess(invokeID, wireVars)
 	if err != nil {
-		return nil, fmt.Errorf("mms: marshal read request: %w", err)
+		return nil, invalidArgf("mms: marshal read request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -1012,19 +1147,19 @@ func (c *Client) ReadVariables(ctx context.Context, variables []VariableSpec) ([
 
 	if confirmed.ServiceKind != pdu.ServiceRead {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected Read response, got %s", confirmed.ServiceKind),
 		}
 	}
 
 	dataValues, err := pdu.UnmarshalReadResponse(confirmed.ServiceData)
 	if err != nil {
-		return nil, fmt.Errorf("mms: %w", err)
+		return nil, decodeErrorf("mms: %w", err)
 	}
 
 	if len(dataValues) != len(variables) {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("read response count mismatch: requested %d, got %d", len(variables), len(dataValues)),
 		}
 	}
@@ -1034,13 +1169,13 @@ func (c *Client) ReadVariables(ctx context.Context, variables []VariableSpec) ([
 		if dv.Tag == pdu.TagDataAccessError {
 			code, err := decodeDataAccessError(dv.ErrCode)
 			if err != nil {
-				return nil, fmt.Errorf("mms: read result [%d]: %w", i, err)
+				return nil, decodeErrorf("mms: read result [%d]: %w", i, err)
 			}
 			results[i] = AccessResult{ErrorCode: code}
 		} else {
 			val, err := dataValueToValue(dv)
 			if err != nil {
-				return nil, fmt.Errorf("mms: read result [%d]: %w", i, err)
+				return nil, decodeErrorf("mms: read result [%d]: %w", i, err)
 			}
 			results[i] = AccessResult{Value: val, ErrorCode: DataAccessErrorNone}
 		}
@@ -1061,19 +1196,19 @@ func (c *Client) ReadVariables(ctx context.Context, variables []VariableSpec) ([
 // Returns per-variable results preserving partial-success semantics.
 func (c *Client) WriteVariables(ctx context.Context, variables []VariableSpec, values []*Value) ([]WriteAccessResult, error) {
 	if len(variables) != len(values) {
-		return nil, fmt.Errorf("mms: write: %d variables but %d values", len(variables), len(values))
+		return nil, invalidArgf("mms: write: %d variables but %d values", len(variables), len(values))
 	}
 	for i, v := range variables {
 		if err := validateObjectName(v.Name); err != nil {
-			return nil, fmt.Errorf("mms: write: variable [%d]: %w", i, err)
+			return nil, invalidArgf("mms: write: variable [%d]: %w", i, err)
 		}
 		if err := validateAccessSelectors(v.AlternateAccess); err != nil {
-			return nil, fmt.Errorf("mms: write: variable [%d]: %w", i, err)
+			return nil, invalidArgf("mms: write: variable [%d]: %w", i, err)
 		}
 	}
 	for i, val := range values {
 		if val == nil {
-			return nil, fmt.Errorf("mms: write: nil value at index %d", i)
+			return nil, invalidArgf("mms: write: nil value at index %d", i)
 		}
 	}
 
@@ -1088,14 +1223,14 @@ func (c *Client) WriteVariables(ctx context.Context, variables []VariableSpec, v
 	for i, val := range values {
 		dv, err := valueToDataValue(val)
 		if err != nil {
-			return nil, fmt.Errorf("mms: marshal write value [%d]: %w", i, err)
+			return nil, invalidArgf("mms: marshal write value [%d]: %w", i, err)
 		}
 		wireValues[i] = dv
 	}
 
 	reqBytes, err := pdu.MarshalWriteRequestWithAccess(invokeID, wireVars, wireValues)
 	if err != nil {
-		return nil, fmt.Errorf("mms: marshal write request: %w", err)
+		return nil, invalidArgf("mms: marshal write request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -1105,19 +1240,19 @@ func (c *Client) WriteVariables(ctx context.Context, variables []VariableSpec, v
 
 	if confirmed.ServiceKind != pdu.ServiceWrite {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected Write response, got %s", confirmed.ServiceKind),
 		}
 	}
 
 	items, err := pdu.UnmarshalWriteResponse(confirmed.ServiceData)
 	if err != nil {
-		return nil, fmt.Errorf("mms: %w", err)
+		return nil, decodeErrorf("mms: %w", err)
 	}
 
 	if len(items) != len(variables) {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("write response count mismatch: sent %d, got %d", len(variables), len(items)),
 		}
 	}
@@ -1129,7 +1264,7 @@ func (c *Client) WriteVariables(ctx context.Context, variables []VariableSpec, v
 			var decErr error
 			errCode, decErr = decodeDataAccessError(item.ErrCode)
 			if decErr != nil {
-				return nil, fmt.Errorf("mms: write result [%d]: %w", i, decErr)
+				return nil, decodeErrorf("mms: write result [%d]: %w", i, decErr)
 			}
 		} else {
 			errCode = DataAccessErrorNone
@@ -1267,10 +1402,10 @@ func (c *Client) ReadObject(ctx context.Context, name ObjectName) (*ReadResult, 
 // all three scopes (VMD, domain, association).
 func (c *Client) WriteObject(ctx context.Context, name ObjectName, value *Value) (*WriteResult, error) {
 	if err := validateObjectName(name); err != nil {
-		return nil, fmt.Errorf("mms: write: %w", err)
+		return nil, invalidArgf("mms: write: %w", err)
 	}
 	if value == nil {
-		return nil, fmt.Errorf("mms: write: nil Value")
+		return nil, invalidArgf("mms: write: nil Value")
 	}
 
 	invokeID := c.nextInvokeID()
@@ -1278,12 +1413,12 @@ func (c *Client) WriteObject(ctx context.Context, name ObjectName, value *Value)
 	wireVar := objectNameToWire(name)
 	dv, err := valueToDataValue(value)
 	if err != nil {
-		return nil, fmt.Errorf("mms: marshal write value: %w", err)
+		return nil, invalidArgf("mms: marshal write value: %w", err)
 	}
 
 	reqBytes, err := pdu.MarshalWriteRequest(invokeID, []pdu.ObjectNameWire{wireVar}, []*pdu.DataValue{dv})
 	if err != nil {
-		return nil, fmt.Errorf("mms: marshal write request: %w", err)
+		return nil, invalidArgf("mms: marshal write request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -1293,19 +1428,19 @@ func (c *Client) WriteObject(ctx context.Context, name ObjectName, value *Value)
 
 	if confirmed.ServiceKind != pdu.ServiceWrite {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected Write response, got %s", confirmed.ServiceKind),
 		}
 	}
 
 	items, err := pdu.UnmarshalWriteResponse(confirmed.ServiceData)
 	if err != nil {
-		return nil, fmt.Errorf("mms: %w", err)
+		return nil, decodeErrorf("mms: %w", err)
 	}
 
 	if len(items) != 1 {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("write response: expected 1 result, got %d", len(items)),
 		}
 	}
@@ -1313,7 +1448,7 @@ func (c *Client) WriteObject(ctx context.Context, name ObjectName, value *Value)
 	if !items[0].Success {
 		code, err := decodeDataAccessError(items[0].ErrCode)
 		if err != nil {
-			return nil, fmt.Errorf("mms: writeObject: %w", err)
+			return nil, decodeErrorf("mms: writeObject: %w", err)
 		}
 		return nil, &DataAccessError{Code: code}
 	}
@@ -1332,7 +1467,7 @@ func (c *Client) WriteObject(ctx context.Context, name ObjectName, value *Value)
 // in a single PDU using the variableListName addressing form.
 func (c *Client) ReadNamedVariableList(ctx context.Context, listName ObjectName, opts ...ReadNamedVariableListOptions) ([]AccessResult, error) {
 	if err := validateObjectName(listName); err != nil {
-		return nil, fmt.Errorf("mms: read NVL: %w", err)
+		return nil, invalidArgf("mms: read NVL: %w", err)
 	}
 
 	var opt ReadNamedVariableListOptions
@@ -1350,7 +1485,7 @@ func (c *Client) ReadNamedVariableList(ctx context.Context, listName ObjectName,
 		reqBytes, err = pdu.MarshalReadRequestByListName(invokeID, objectNameToWire(listName))
 	}
 	if err != nil {
-		return nil, fmt.Errorf("mms: marshal read NVL request: %w", err)
+		return nil, invalidArgf("mms: marshal read NVL request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -1360,14 +1495,14 @@ func (c *Client) ReadNamedVariableList(ctx context.Context, listName ObjectName,
 
 	if confirmed.ServiceKind != pdu.ServiceRead {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected Read response, got %s", confirmed.ServiceKind),
 		}
 	}
 
 	dataValues, err := pdu.UnmarshalReadResponse(confirmed.ServiceData)
 	if err != nil {
-		return nil, fmt.Errorf("mms: %w", err)
+		return nil, decodeErrorf("mms: %w", err)
 	}
 
 	results := make([]AccessResult, len(dataValues))
@@ -1375,13 +1510,13 @@ func (c *Client) ReadNamedVariableList(ctx context.Context, listName ObjectName,
 		if dv.Tag == pdu.TagDataAccessError {
 			code, err := decodeDataAccessError(dv.ErrCode)
 			if err != nil {
-				return nil, fmt.Errorf("mms: read result [%d]: %w", i, err)
+				return nil, decodeErrorf("mms: read result [%d]: %w", i, err)
 			}
 			results[i] = AccessResult{ErrorCode: code}
 		} else {
 			val, err := dataValueToValue(dv)
 			if err != nil {
-				return nil, fmt.Errorf("mms: read NVL result [%d]: %w", i, err)
+				return nil, decodeErrorf("mms: read NVL result [%d]: %w", i, err)
 			}
 			results[i] = AccessResult{Value: val, ErrorCode: DataAccessErrorNone}
 		}
@@ -1402,11 +1537,11 @@ func (c *Client) ReadNamedVariableList(ctx context.Context, listName ObjectName,
 // Returns per-variable results preserving partial-success semantics.
 func (c *Client) WriteNamedVariableList(ctx context.Context, listName ObjectName, values []*Value) ([]WriteAccessResult, error) {
 	if err := validateObjectName(listName); err != nil {
-		return nil, fmt.Errorf("mms: write NVL: %w", err)
+		return nil, invalidArgf("mms: write NVL: %w", err)
 	}
 	for i, val := range values {
 		if val == nil {
-			return nil, fmt.Errorf("mms: write NVL: nil value at index %d", i)
+			return nil, invalidArgf("mms: write NVL: nil value at index %d", i)
 		}
 	}
 
@@ -1416,14 +1551,14 @@ func (c *Client) WriteNamedVariableList(ctx context.Context, listName ObjectName
 	for i, val := range values {
 		dv, err := valueToDataValue(val)
 		if err != nil {
-			return nil, fmt.Errorf("mms: write NVL: marshal value [%d]: %w", i, err)
+			return nil, invalidArgf("mms: write NVL: marshal value [%d]: %w", i, err)
 		}
 		wireValues[i] = dv
 	}
 
 	reqBytes, err := pdu.MarshalWriteRequestByListName(invokeID, objectNameToWire(listName), wireValues)
 	if err != nil {
-		return nil, fmt.Errorf("mms: marshal write NVL request: %w", err)
+		return nil, invalidArgf("mms: marshal write NVL request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -1433,19 +1568,19 @@ func (c *Client) WriteNamedVariableList(ctx context.Context, listName ObjectName
 
 	if confirmed.ServiceKind != pdu.ServiceWrite {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected Write response, got %s", confirmed.ServiceKind),
 		}
 	}
 
 	items, err := pdu.UnmarshalWriteResponse(confirmed.ServiceData)
 	if err != nil {
-		return nil, fmt.Errorf("mms: %w", err)
+		return nil, decodeErrorf("mms: %w", err)
 	}
 
 	if len(items) != len(values) {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("write NVL response count mismatch: sent %d, got %d", len(values), len(items)),
 		}
 	}
@@ -1457,7 +1592,7 @@ func (c *Client) WriteNamedVariableList(ctx context.Context, listName ObjectName
 			var decErr error
 			errCode, decErr = decodeDataAccessError(item.ErrCode)
 			if decErr != nil {
-				return nil, fmt.Errorf("mms: write result [%d]: %w", i, decErr)
+				return nil, decodeErrorf("mms: write result [%d]: %w", i, decErr)
 			}
 		} else {
 			errCode = DataAccessErrorNone
@@ -1492,20 +1627,20 @@ func validateAccessSelectors(selectors []AccessSelector) error {
 			kinds++
 		}
 		if kinds == 0 {
-			return fmt.Errorf("selector [%d]: no field set (need exactly one of Component, Index, or IndexRange)", i)
+			return invalidArgf("selector [%d]: no field set (need exactly one of Component, Index, or IndexRange)", i)
 		}
 		if kinds > 1 {
-			return fmt.Errorf("selector [%d]: multiple fields set (need exactly one of Component, Index, or IndexRange)", i)
+			return invalidArgf("selector [%d]: multiple fields set (need exactly one of Component, Index, or IndexRange)", i)
 		}
 		if sel.Index != nil && *sel.Index < 0 {
-			return fmt.Errorf("selector [%d]: negative index %d", i, *sel.Index)
+			return invalidArgf("selector [%d]: negative index %d", i, *sel.Index)
 		}
 		if sel.IndexRange != nil {
 			if sel.IndexRange.Start < 0 {
-				return fmt.Errorf("selector [%d]: negative range start %d", i, sel.IndexRange.Start)
+				return invalidArgf("selector [%d]: negative range start %d", i, sel.IndexRange.Start)
 			}
 			if sel.IndexRange.Count <= 0 {
-				return fmt.Errorf("selector [%d]: range count must be > 0, got %d", i, sel.IndexRange.Count)
+				return invalidArgf("selector [%d]: range count must be > 0, got %d", i, sel.IndexRange.Count)
 			}
 		}
 	}
@@ -1575,17 +1710,17 @@ type NameListResult struct {
 // [NameListResult.MoreFollows] is true.
 func (c *Client) GetNameList(ctx context.Context, req NameListRequest) (*NameListResult, error) {
 	if int(req.ObjectClass) < 0 || int(req.ObjectClass) > int(ObjectClassOperatorStation) {
-		return nil, fmt.Errorf("mms: getnamelist: unknown object class %d", int(req.ObjectClass))
+		return nil, invalidArgf("mms: getnamelist: unknown object class %d", int(req.ObjectClass))
 	}
 	switch req.Scope {
 	case ObjectScopeVMD, ObjectScopeAssociation:
 		// valid
 	case ObjectScopeDomain:
 		if req.DomainID == "" {
-			return nil, fmt.Errorf("mms: getnamelist: domain scope requires non-empty DomainID")
+			return nil, invalidArgf("mms: getnamelist: domain scope requires non-empty DomainID")
 		}
 	default:
-		return nil, fmt.Errorf("mms: getnamelist: unknown scope %d", int(req.Scope))
+		return nil, invalidArgf("mms: getnamelist: unknown scope %d", int(req.Scope))
 	}
 
 	invokeID := c.nextInvokeID()
@@ -1596,7 +1731,7 @@ func (c *Client) GetNameList(ctx context.Context, req NameListRequest) (*NameLis
 		string(req.DomainID), req.ContinueAfter,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("mms: marshal getnamelist request: %w", err)
+		return nil, invalidArgf("mms: marshal getnamelist request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -1606,14 +1741,14 @@ func (c *Client) GetNameList(ctx context.Context, req NameListRequest) (*NameLis
 
 	if confirmed.ServiceKind != pdu.ServiceGetNameList {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected GetNameList response, got %s", confirmed.ServiceKind),
 		}
 	}
 
 	result, err := pdu.UnmarshalGetNameListResponse(confirmed.ServiceData)
 	if err != nil {
-		return nil, fmt.Errorf("mms: %w", err)
+		return nil, decodeErrorf("mms: %w", err)
 	}
 
 	c.logger.Debug("mms: getnamelist",
@@ -1654,7 +1789,7 @@ func (c *Client) GetNameListAll(ctx context.Context, req NameListRequest) ([]str
 		nextToken := result.Names[len(result.Names)-1]
 		if nextToken == prevToken {
 			return nil, &ProtocolError{
-				Phase:   "mms",
+				Phase:   PhaseMMS,
 				Message: fmt.Sprintf("getnamelist: pagination stalled (continuation token %q did not advance)", nextToken),
 			}
 		}
@@ -1674,7 +1809,7 @@ type VariableAccessAttributes struct {
 // attributes of a named variable from the server.
 func (c *Client) GetVariableAccessAttributes(ctx context.Context, name ObjectName) (*VariableAccessAttributes, error) {
 	if err := validateObjectName(name); err != nil {
-		return nil, fmt.Errorf("mms: getvaraccess: %w", err)
+		return nil, invalidArgf("mms: getvaraccess: %w", err)
 	}
 
 	invokeID := c.nextInvokeID()
@@ -1682,7 +1817,7 @@ func (c *Client) GetVariableAccessAttributes(ctx context.Context, name ObjectNam
 	wireName := objectNameToWire(name)
 	reqBytes, err := pdu.MarshalGetVarAccessRequest(invokeID, wireName)
 	if err != nil {
-		return nil, fmt.Errorf("mms: marshal getvaraccess request: %w", err)
+		return nil, invalidArgf("mms: marshal getvaraccess request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -1692,19 +1827,19 @@ func (c *Client) GetVariableAccessAttributes(ctx context.Context, name ObjectNam
 
 	if confirmed.ServiceKind != pdu.ServiceGetVariableAccessAttrs {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected GetVariableAccessAttributes response, got %s", confirmed.ServiceKind),
 		}
 	}
 
 	result, err := pdu.UnmarshalGetVarAccessResponse(confirmed.ServiceData)
 	if err != nil {
-		return nil, fmt.Errorf("mms: %w", err)
+		return nil, decodeErrorf("mms: %w", err)
 	}
 
 	ts, err := typeSpecFromWire(result.TypeSpec)
 	if err != nil {
-		return nil, fmt.Errorf("mms: getvaraccess: convert type spec: %w", err)
+		return nil, decodeErrorf("mms: getvaraccess: convert type spec: %w", err)
 	}
 
 	c.logger.Debug("mms: getvaraccess",
@@ -1731,14 +1866,14 @@ type DefineNamedVariableListRequest struct {
 // DefineNamedVariableList creates a named variable list on the server.
 func (c *Client) DefineNamedVariableList(ctx context.Context, req DefineNamedVariableListRequest) error {
 	if err := validateObjectName(req.ListName); err != nil {
-		return fmt.Errorf("mms: define named variable list: list name: %w", err)
+		return invalidArgf("mms: define named variable list: list name: %w", err)
 	}
 	if len(req.Variables) == 0 {
-		return fmt.Errorf("mms: define named variable list: no variables")
+		return invalidArgf("mms: define named variable list: no variables")
 	}
 	for i, v := range req.Variables {
 		if err := validateObjectName(v.Name); err != nil {
-			return fmt.Errorf("mms: define named variable list: variable [%d]: %w", i, err)
+			return invalidArgf("mms: define named variable list: variable [%d]: %w", i, err)
 		}
 	}
 
@@ -1752,7 +1887,7 @@ func (c *Client) DefineNamedVariableList(ctx context.Context, req DefineNamedVar
 
 	reqBytes, err := pdu.MarshalDefineNamedVarListRequest(invokeID, wireListName, wireVars)
 	if err != nil {
-		return fmt.Errorf("mms: marshal define named var list request: %w", err)
+		return invalidArgf("mms: marshal define named var list request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -1762,7 +1897,7 @@ func (c *Client) DefineNamedVariableList(ctx context.Context, req DefineNamedVar
 
 	if confirmed.ServiceKind != pdu.ServiceDefineNamedVariableList {
 		return &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected DefineNamedVariableList response, got %s", confirmed.ServiceKind),
 		}
 	}
@@ -1789,7 +1924,7 @@ type NamedVariableListAttributes struct {
 // variable list from the server.
 func (c *Client) GetNamedVariableListAttributes(ctx context.Context, listName ObjectName) (*NamedVariableListAttributes, error) {
 	if err := validateObjectName(listName); err != nil {
-		return nil, fmt.Errorf("mms: getnamedvarlistattrs: %w", err)
+		return nil, invalidArgf("mms: getnamedvarlistattrs: %w", err)
 	}
 
 	invokeID := c.nextInvokeID()
@@ -1797,7 +1932,7 @@ func (c *Client) GetNamedVariableListAttributes(ctx context.Context, listName Ob
 	wireName := objectNameToWire(listName)
 	reqBytes, err := pdu.MarshalGetNamedVarListAttrsRequest(invokeID, wireName)
 	if err != nil {
-		return nil, fmt.Errorf("mms: marshal get named var list attrs request: %w", err)
+		return nil, invalidArgf("mms: marshal get named var list attrs request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -1807,21 +1942,21 @@ func (c *Client) GetNamedVariableListAttributes(ctx context.Context, listName Ob
 
 	if confirmed.ServiceKind != pdu.ServiceGetNamedVariableListAttrs {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected GetNamedVariableListAttributes response, got %s", confirmed.ServiceKind),
 		}
 	}
 
 	result, err := pdu.UnmarshalGetNamedVarListAttrsResponse(confirmed.ServiceData)
 	if err != nil {
-		return nil, fmt.Errorf("mms: %w", err)
+		return nil, decodeErrorf("mms: %w", err)
 	}
 
 	variables := make([]VariableSpec, len(result.Variables))
 	for i, wn := range result.Variables {
 		vs, err := variableSpecFromWire(wn)
 		if err != nil {
-			return nil, fmt.Errorf("mms: variable [%d]: %w", i, err)
+			return nil, decodeErrorf("mms: variable [%d]: %w", i, err)
 		}
 		variables[i] = vs
 	}
@@ -1850,11 +1985,11 @@ type DeleteNamedVariableListResult struct {
 // the server.
 func (c *Client) DeleteNamedVariableList(ctx context.Context, listNames []ObjectName) (*DeleteNamedVariableListResult, error) {
 	if len(listNames) == 0 {
-		return nil, fmt.Errorf("mms: delete named variable list: no list names")
+		return nil, invalidArgf("mms: delete named variable list: no list names")
 	}
 	for i, n := range listNames {
 		if err := validateObjectName(n); err != nil {
-			return nil, fmt.Errorf("mms: delete named variable list: name [%d]: %w", i, err)
+			return nil, invalidArgf("mms: delete named variable list: name [%d]: %w", i, err)
 		}
 	}
 
@@ -1867,7 +2002,7 @@ func (c *Client) DeleteNamedVariableList(ctx context.Context, listNames []Object
 
 	reqBytes, err := pdu.MarshalDeleteNamedVarListRequest(invokeID, wireNames)
 	if err != nil {
-		return nil, fmt.Errorf("mms: marshal delete named var list request: %w", err)
+		return nil, invalidArgf("mms: marshal delete named var list request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -1877,14 +2012,14 @@ func (c *Client) DeleteNamedVariableList(ctx context.Context, listNames []Object
 
 	if confirmed.ServiceKind != pdu.ServiceDeleteNamedVariableList {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected DeleteNamedVariableList response, got %s", confirmed.ServiceKind),
 		}
 	}
 
 	result, err := pdu.UnmarshalDeleteNamedVarListResponse(confirmed.ServiceData)
 	if err != nil {
-		return nil, fmt.Errorf("mms: %w", err)
+		return nil, decodeErrorf("mms: %w", err)
 	}
 
 	c.logger.Debug("mms: delete named variable list",
@@ -1905,14 +2040,14 @@ func (c *Client) DeleteNamedVariableList(ctx context.Context, listNames []Object
 // the domain and deletes those that are marked as deletable.
 func (c *Client) DeleteAllDomainNVLs(ctx context.Context, domain string) (*DeleteNamedVariableListResult, error) {
 	if domain == "" {
-		return nil, fmt.Errorf("mms: delete all domain NVLs: empty domain name")
+		return nil, invalidArgf("mms: delete all domain NVLs: empty domain name")
 	}
 
 	invokeID := c.nextInvokeID()
 
 	reqBytes, err := pdu.MarshalDeleteNVLDomainScopeRequest(invokeID, domain)
 	if err != nil {
-		return nil, fmt.Errorf("mms: marshal delete domain NVLs request: %w", err)
+		return nil, invalidArgf("mms: marshal delete domain NVLs request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -1922,14 +2057,14 @@ func (c *Client) DeleteAllDomainNVLs(ctx context.Context, domain string) (*Delet
 
 	if confirmed.ServiceKind != pdu.ServiceDeleteNamedVariableList {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected DeleteNamedVariableList response, got %s", confirmed.ServiceKind),
 		}
 	}
 
 	result, err := pdu.UnmarshalDeleteNamedVarListResponse(confirmed.ServiceData)
 	if err != nil {
-		return nil, fmt.Errorf("mms: %w", err)
+		return nil, decodeErrorf("mms: %w", err)
 	}
 
 	c.logger.Debug("mms: delete all domain NVLs",
@@ -1954,7 +2089,7 @@ func (c *Client) DeleteAllVMDNVLs(ctx context.Context) (*DeleteNamedVariableList
 
 	reqBytes, err := pdu.MarshalDeleteNVLVMDScopeRequest(invokeID)
 	if err != nil {
-		return nil, fmt.Errorf("mms: marshal delete VMD NVLs request: %w", err)
+		return nil, invalidArgf("mms: marshal delete VMD NVLs request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -1964,14 +2099,14 @@ func (c *Client) DeleteAllVMDNVLs(ctx context.Context) (*DeleteNamedVariableList
 
 	if confirmed.ServiceKind != pdu.ServiceDeleteNamedVariableList {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected DeleteNamedVariableList response, got %s", confirmed.ServiceKind),
 		}
 	}
 
 	result, err := pdu.UnmarshalDeleteNamedVarListResponse(confirmed.ServiceData)
 	if err != nil {
-		return nil, fmt.Errorf("mms: %w", err)
+		return nil, decodeErrorf("mms: %w", err)
 	}
 
 	c.logger.Debug("mms: delete all VMD NVLs",
@@ -1992,17 +2127,17 @@ func (c *Client) DeleteAllVMDNVLs(ctx context.Context) (*DeleteNamedVariableList
 // and scope must be a known value.
 func validateObjectName(n ObjectName) error {
 	if n.ItemID == "" {
-		return fmt.Errorf("empty ItemID")
+		return invalidArgf("empty ItemID")
 	}
 	switch n.Scope {
 	case ObjectScopeVMD, ObjectScopeAssociation:
 		// valid
 	case ObjectScopeDomain:
 		if n.Domain == "" {
-			return fmt.Errorf("domain scope requires non-empty Domain")
+			return invalidArgf("domain scope requires non-empty Domain")
 		}
 	default:
-		return fmt.Errorf("unknown scope %d", int(n.Scope))
+		return invalidArgf("unknown scope %d", int(n.Scope))
 	}
 	return nil
 }
@@ -2046,7 +2181,7 @@ func objectScopeFromWire(s int) (ObjectScope, error) {
 	case pdu.ScopeAssociation:
 		return ObjectScopeAssociation, nil
 	default:
-		return 0, fmt.Errorf("mms: unknown wire scope %d", s)
+		return 0, decodeErrorf("mms: unknown wire scope %d", s)
 	}
 }
 
@@ -2076,7 +2211,7 @@ func objectScopeToWire(s ObjectScope) (int, error) {
 	case ObjectScopeAssociation:
 		return pdu.ScopeAssociation, nil
 	default:
-		return 0, fmt.Errorf("mms: unknown scope %d", s)
+		return 0, invalidArgf("mms: unknown scope %d", s)
 	}
 }
 
