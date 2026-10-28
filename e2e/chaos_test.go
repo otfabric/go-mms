@@ -139,7 +139,7 @@ func workload(ctx context.Context, c *mms.Client, id int) (int, error) {
 		cancel()
 		if err != nil {
 			if ctx.Err() != nil || expectedChaosError(err) {
-				return ok, nil
+				return ok, nil //nolint:nilerr // an expected outcome of chaos ends the workload
 			}
 			return ok, err
 		}

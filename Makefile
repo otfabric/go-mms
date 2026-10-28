@@ -6,7 +6,7 @@ export GOWORK := off
 PKGS     := ./...
 FUZZTIME ?= 15s
 
-.PHONY: help test test-race test-verbose vet lint fmt fuzz fuzz-ber fuzz-pdu bench tidy check clean coverage coverage-html coverage-clean interop test-armv7 vuln
+.PHONY: help interop-all test test-race test-verbose vet lint fmt fuzz fuzz-short fuzz-ber fuzz-pdu chaos bench tidy check clean coverage coverage-html coverage-clean interop test-armv7 vuln
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "%-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -15,9 +15,17 @@ test: ## Run unit tests
 	@echo "Running unit tests"
 	@go test $(PKGS)
 
-interop: ## Run interoperability tests against mms-interop adapter images (-tags=interop).
-	@echo "Running interoperability tests"
-	@go test -tags=interop -v -timeout 300s ./interop/...
+INTEROP_STACKS ?= libiec61850 dscsystems iec61850-rust
+
+interop: ## Run interop tests against one peer stack (MMS_INTEROP_STACK, default libiec61850; -tags=interop).
+	@echo "Running interoperability tests against $${MMS_INTEROP_STACK:-libiec61850}"
+	@go test -tags=interop -v -count=1 -timeout 600s ./interop/...
+
+interop-all: ## Run interop tests against every peer stack in INTEROP_STACKS.
+	@set -e; for s in $(INTEROP_STACKS); do \
+		echo "=== interop: $$s"; \
+		MMS_INTEROP_STACK=$$s go test -tags=interop -count=1 -timeout 600s ./interop/...; \
+	done
 
 test-verbose: ## Run unit tests with verbose output
 	@echo "Running tests with verbose output"
@@ -25,7 +33,7 @@ test-verbose: ## Run unit tests with verbose output
 
 test-race: ## Run tests with race detector
 	@echo "Running tests with race detector"
-	@go test -race $(PKGS)
+	@go test -race -timeout 20m $(PKGS)
 
 vet: ## Run go vet
 	@echo "Running go vet"
@@ -45,10 +53,9 @@ fmt: ## Format all Go source files
 	@echo "Running go fmt"
 	@go fmt $(PKGS)
 
-coverage: ## Run tests with coverage profile and text summary
-	@echo "Running tests with coverage"
-	@go test -coverprofile=coverage.out $(PKGS)
-	@go tool cover -func=coverage.out | tee coverage.txt
+coverage: ## Run tests with coverage and fail below COVERAGE_MIN (default 90%) per package and in total
+	@echo "Running coverage gate"
+	@set -o pipefail; scripts/coverage-gate.sh coverage.out | tee coverage.txt
 
 coverage-html: coverage ## Generate HTML coverage report
 	@echo "Generating HTML coverage report"
@@ -58,51 +65,25 @@ coverage-clean: ## Remove coverage artifacts
 	@echo "Removing coverage artifacts"
 	rm -f coverage.out coverage.txt coverage.html
 
-fuzz: ## Run all fuzz targets for FUZZTIME each (default 15s)
-	@echo "=== Fuzzing berutil ==="
-	@go test -fuzz=FuzzDecodeTLV       -fuzztime=$(FUZZTIME) ./internal/berutil
-	@go test -fuzz=FuzzDecodeLength    -fuzztime=$(FUZZTIME) ./internal/berutil
-	@go test -fuzz=FuzzDecodeInteger   -fuzztime=$(FUZZTIME) ./internal/berutil
-	@go test -fuzz=FuzzDecodeUnsigned  -fuzztime=$(FUZZTIME) ./internal/berutil
-	@echo "=== Fuzzing pdu ==="
-	@go test -fuzz=FuzzDecodeTypeSpec                    -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzDecodeObjectName                  -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzUnmarshalDataElement              -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzUnmarshalAccessResults            -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzDecodePdu                         -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzDecodeConfirmedError              -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzDecodeRejectPDU                   -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzDecodeConfirmedResponse           -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzUnmarshalReadResponse             -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzUnmarshalWriteResponse            -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzUnmarshalGetNameListResponse      -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzUnmarshalGetVarAccessResponse     -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzUnmarshalGetNamedVarListAttrsResponse -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzUnmarshalDeleteNamedVarListResponse   -fuzztime=$(FUZZTIME) ./internal/pdu
+fuzz: ## Run every fuzz target for FUZZTIME each (default 15s)
+	@scripts/fuzz.sh
+
+fuzz-short: ## Run every fuzz target for 2s (smoke test, part of check)
+	@FUZZTIME=2s scripts/fuzz.sh
 
 fuzz-ber: ## Fuzz only BER utility decoders
-	@echo "Fuzzing BER utility decoders"
-	@go test -fuzz=FuzzDecodeTLV       -fuzztime=$(FUZZTIME) ./internal/berutil
-	@go test -fuzz=FuzzDecodeLength    -fuzztime=$(FUZZTIME) ./internal/berutil
-	@go test -fuzz=FuzzDecodeInteger   -fuzztime=$(FUZZTIME) ./internal/berutil
-	@go test -fuzz=FuzzDecodeUnsigned  -fuzztime=$(FUZZTIME) ./internal/berutil
+	@scripts/fuzz.sh ./internal/berutil ./internal/asn1util
 
 fuzz-pdu: ## Fuzz only PDU decoders
-	@echo "Fuzzing PDU decoders"
-	@go test -fuzz=FuzzDecodeTypeSpec                   -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzDecodeObjectName                 -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzUnmarshalDataElement              -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzUnmarshalAccessResults            -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzDecodePdu                         -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzDecodeConfirmedError              -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzDecodeRejectPDU                   -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzDecodeConfirmedResponse           -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzUnmarshalReadResponse             -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzUnmarshalWriteResponse            -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzUnmarshalGetNameListResponse      -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzUnmarshalGetVarAccessResponse     -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzUnmarshalGetNamedVarListAttrsResponse -fuzztime=$(FUZZTIME) ./internal/pdu
-	@go test -fuzz=FuzzUnmarshalDeleteNamedVarListResponse   -fuzztime=$(FUZZTIME) ./internal/pdu
+	@scripts/fuzz.sh ./internal/pdu ./internal/codec
+
+CHAOS_DURATION ?= 30s
+CHAOS_SEED     ?= 0
+
+chaos: ## Run chaos and stress tests under -race for CHAOS_DURATION (default 30s) with a random seed (CHAOS_SEED=0)
+	@echo "Running chaos tests ($(CHAOS_DURATION), seed $(CHAOS_SEED))"
+	@MMS_CHAOS_DURATION=$(CHAOS_DURATION) MMS_CHAOS_SEED=$(CHAOS_SEED) \
+		go test -race -run 'Chaos|Stress' -count=1 -v -timeout 30m ./e2e
 
 bench: ## Run all benchmarks
 	@echo "Running benchmarks"
@@ -120,7 +101,7 @@ test-armv7: ## Compile internal/pdu for linux/armv7 (catches 32-bit int overflow
 	GOOS=linux GOARCH=arm GOARM=7 go test -c -o "$$tmp" ./internal/pdu/; \
 	rm -f "$$tmp"
 
-check: fmt tidy vet lint vuln test test-race coverage test-armv7 ## Run all pre-commit checks
+check: fmt tidy vet lint vuln test test-race coverage fuzz-short test-armv7 ## Run all pre-commit checks
 
 clean: coverage-clean ## Clean test cache and coverage artifacts
 	@echo "Cleaning test cache and coverage artifacts"

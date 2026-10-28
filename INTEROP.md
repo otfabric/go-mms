@@ -6,10 +6,12 @@
 
 ```
 mms-interop
-  libiec61850 adapter images
+  adapter images: libiec61850, dscsystems, iec61850-rust
+  (same contract: <stack>-mms-server / <stack>-mms-client, fixture, JSON Lines)
          |
     go-mms/interop/
       harness_test.go                        lifecycle helpers
+      stack_test.go                          peer stacks, quirks and skips (MMS_INTEROP_STACK)
       fixture_server_test.go                 go-mms server model built from the fixture
       libiec61850_client_test.go             TestClient_* (core variable access)
       libiec61850_client_services_test.go    TestClient_* (files, journals, NVLs, reports, ...)
@@ -18,9 +20,12 @@ mms-interop
       coverage_test.go                       API and service coverage guard
 ```
 
-Each test:
-1. Starts the adapter container with `docker run`.
-2. Waits for the readiness event (`{"event":"ready",...}`) on stdout.
+The suite is stack-parametrized: one test body per scenario, run against the
+stack selected by `MMS_INTEROP_STACK`. (The file names predate the other
+stacks.) Each test:
+1. Starts the stack's adapter container with `docker run`.
+2. Waits for the readiness event (`{"event":"ready",...}`) and checks its
+   fixture revision and adapter name.
 3. Exercises the `go-mms` API under test.
 4. Asserts results.
 5. Tears the container down.
@@ -31,37 +36,72 @@ No pre-running containers. No manual steps. Tests are gated behind `-tags=intero
 
 ```bash
 # Build adapter images locally (in mms-interop)
-cd ../mms-interop && make build-libiec61850 ADAPTER_VERSION=v0.2.0
+cd ../mms-interop && make build-libiec61850 build-dscsystems build-iec61850-rust
 
-# Run against local images
-LIBIEC61850_IMAGE=mms-interop-libiec61850:local make interop
+# One stack (default libiec61850)
+MMS_INTEROP_STACK=dscsystems make interop
 
-# Run against the published v0.2.0 image (version tag)
-LIBIEC61850_IMAGE=ghcr.io/otfabric/mms-interop-libiec61850:v0.2.0 make interop
+# Every stack
+make interop-all
 
-# Same image, pinned by digest (what CI uses)
-LIBIEC61850_IMAGE=ghcr.io/otfabric/mms-interop-libiec61850@sha256:0ce17d8471eda3a3ef8949a5819b44359a2aeaec23695fee06c5dbea083f0391 make interop
+# Published images (CI pins them in .github/workflows/interop.yml)
+MMS_INTEROP_STACK=iec61850-rust IEC61850RUST_IMAGE=ghcr.io/otfabric/mms-interop-iec61850-rust:v0.3.0 make interop
 ```
 
-CI (`.github/workflows/interop.yml`) pulls that digest from GHCR. Bump the
-digest and `interop/testdata/interop.json` together when mms-interop
-publishes a new adapter.
+CI (`.github/workflows/interop.yml`) runs the full matrix, one job per stack,
+against images pinned from the mms-interop release. Bump the images and
+`interop/testdata/interop.json` together when mms-interop publishes new
+adapters.
 
 ## Environment variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `LIBIEC61850_IMAGE` | Adapter image | `mms-interop-libiec61850:local` |
-| `MMS_SERVER_BINARY` | Path to `libiec61850-mms-server` binary (skips Docker) | — |
-| `MMS_CLIENT_BINARY` | Path to `libiec61850-mms-client` binary (skips Docker) | — |
+| `MMS_INTEROP_STACK` | Peer stack: `libiec61850`, `dscsystems`, `iec61850-rust` | `libiec61850` |
+| `MMS_INTEROP_IMAGE` | Image for the selected stack (overrides the per-stack variable) | — |
+| `LIBIEC61850_IMAGE` | libiec61850 adapter image | `mms-interop-libiec61850:local` |
+| `DSCSYSTEMS_IMAGE` | dscsystems adapter image | `mms-interop-dscsystems:local` |
+| `IEC61850RUST_IMAGE` | iec61850-rust adapter image | `mms-interop-iec61850-rust:local` |
+| `MMS_SERVER_BINARY` | Path to `<stack>-mms-server` binary (skips Docker) | — |
+| `MMS_CLIENT_BINARY` | Path to `<stack>-mms-client` binary (skips Docker) | — |
 | `MMS_FIXTURE` | Path to fixture JSON file | `testdata/interop.json` |
 
 ## Test naming
 
 | Prefix | Go role | Adapter counterpart |
 |--------|---------|---------------------|
-| `TestClient_` | MMS client | `libiec61850-mms-server` |
-| `TestServer_` | MMS server | `libiec61850-mms-client` |
+| `TestClient_` | MMS client | `<stack>-mms-server` |
+| `TestServer_` | MMS server | `<stack>-mms-client` |
+
+## Peer stacks
+
+Peer limitations are never hidden as failures or silent passes. Each stack
+in `interop/stack_test.go` declares:
+
+- **quirks** — documented behaviours a test adapts its expectation to, so
+  the rest of the scenario still runs;
+- **skips** — tests the peer cannot run, each with a reason (`go test -v`
+  prints it). Client-adapter steps answered `"error":"unsupported"` are
+  skipped with that reason too.
+
+Both mirror `knownLimitations` in mms-interop `fixtures/capabilities.json`.
+`TestStackSkipsNameRealTests` fails when a skip names a test that does not
+exist.
+
+| Stack | Upstream | Result | Quirks | Skipped |
+|-------|----------|--------|--------|---------|
+| libiec61850 | libiec61850 1.6.2.1 | 120 pass | VMD named-list reports only; FileOpen ignores the seek | — |
+| dscsystems | dscsystems/go-iec61850 (GPL, isolated container) | 112 pass, 8 skip | client drops FileOpen `lastModified`; no write to a named variable list | index-range alternate access (server refuses >1 element); client has no alternate access, association-specific NVLs or NVL write |
+| iec61850-rust | csp0924/iec61850-rust | pending mms-interop v0.3.0 | | no MMS file services |
+
+Skipped tests per stack:
+
+| Stack | Test | Reason |
+|-------|------|--------|
+| dscsystems | `TestClient_ReadArrayRange` | server refuses index-range alternate access of more than one element |
+| dscsystems | `TestClient_ReadVariables_WriteVariables_AlternateAccess` | same |
+| dscsystems | `TestServer_ReadArrayElements`, `TestServer_WriteArrayElements`, `TestServer_ReadComponent`, `TestServer_WriteComponent` | client reads and writes whole variables only (`unsupported`) |
+| dscsystems | `TestServer_NVL_DomainScope`, `TestServer_NVL_AssociationScope` | client cannot write a list / has no association-specific names (`unsupported`) |
 
 ## Coverage guard
 
@@ -76,7 +116,8 @@ with `-tags=interop`) fails when:
   `TestServer_` test.
 
 Adding a public method or a server service therefore needs an interop test
-or a written exemption. The in-process counterpart is `e2e/coverage_test.go`
+or a written exemption. `Client.Done` and `Client.Err` map to
+`TestClient_PeerDisconnect`, `Server.Shutdown` to `TestServer_Shutdown`. The in-process counterpart is `e2e/coverage_test.go`
 (`TestAPICoverage`, part of `go test ./...`), which requires every exported
 method, constructor and `Value` constructor to be exercised by an `e2e` test
 between a go-mms client and a go-mms server.
@@ -96,6 +137,8 @@ The go-mms→libIEC column is the go-mms client against `libiec61850-mms-server`
 | Abort (client-initiated) | ✓ | ✓ | |
 | Abort (server-initiated) | n/a | ✓ | `ServerConn.Abort`; the peer observes the connection loss |
 | Reconnect after close | ✓ | ✓ | |
+| Peer disconnect detection | ✓ | n/a | `TestClient_PeerDisconnect`: the adapter is killed; `Client.Done` closes, `Client.Err` and later requests match `ErrClosed` |
+| Graceful server shutdown | n/a | ✓ | `TestServer_Shutdown`: `Server.Shutdown` ends the shared libiec61850 client run; `ListenAndServe` returns `ErrServerClosed`, no association left |
 | Identify | ✓ | ✓ | |
 | Status | ✓ | ✓ | logical/physical from the fixture |
 | UnsolicitedStatus | n/a | — | sent after each report; the libiec61850 client API has no handler for it |
@@ -152,6 +195,21 @@ The go-mms→libIEC column is the go-mms client against `libiec61850-mms-server`
 | Cancel | — | — | the go-mms client does not send Cancel |
 
 The ◐ rows are listed with the test that pins the peer behaviour in the mms-interop [`COVERAGE.md`](https://github.com/otfabric/mms-interop/blob/main/COVERAGE.md).
+
+## Related test suites
+
+The interop suite complements the in-process quality gates (all without
+Docker):
+
+| Target | What it runs |
+|--------|--------------|
+| `make test` / `make test-race` | Unit and `e2e` tests (go-mms client ↔ go-mms server) |
+| `make coverage` | `scripts/coverage-gate.sh`: fails below `COVERAGE_MIN` (default 90%) per package or in total |
+| `make fuzz` / `make fuzz-short` | `scripts/fuzz.sh`: every `Fuzz*` target, discovered with `go test -list`, for `FUZZTIME` (default 15s; 2s for `fuzz-short`) |
+| `make chaos` | `TestChaos_*` / `TestStress_*` under `-race` through `internal/chaos` fault-injecting connections (delays, chunked I/O, bandwidth limit, drops, resets, stalls); `CHAOS_DURATION` (default 30s) and `CHAOS_SEED` (0 = random; the seed is logged for replay), passed as `MMS_CHAOS_DURATION` / `MMS_CHAOS_SEED` |
+
+CI runs the coverage gate, a 2s fuzz pass and a 5s chaos run in the
+`quality` job of `.github/workflows/ci.yml`.
 
 ## Fixture
 

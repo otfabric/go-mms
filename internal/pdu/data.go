@@ -113,7 +113,9 @@ func MarshalData(v *DataValue) ([]byte, error) {
 		return berutil.EncodeTLV(TagDataObjId, content), nil
 
 	case TagDataGenTime:
-		ts := v.Time.UTC().Format("20060102150405Z")
+		// Fractional seconds (accepted on decode) are kept; whole
+		// seconds encode without a fraction as before.
+		ts := v.Time.UTC().Format("20060102150405.999999999Z")
 		return berutil.EncodeTLV(TagDataGenTime, []byte(ts)), nil
 
 	case TagDataBCD:

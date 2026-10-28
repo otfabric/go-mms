@@ -22,6 +22,8 @@ import (
 var interopAPICoverage = map[string][]string{
 	"Client.Abort":                          {"TestClient_Abort"},
 	"Client.Close":                          {"TestClient_Conclude"},
+	"Client.Done":                           {"TestClient_PeerDisconnect"},
+	"Client.Err":                            {"TestClient_PeerDisconnect"},
 	"Client.DefineNamedVariableList":        {"TestClient_NVL", "TestClient_NVL_VMDScope", "TestClient_NVL_AssociationScope"},
 	"Client.DeleteAllDomainNVLs":            {"TestClient_DeleteAllNVLs_UnsupportedByPeer"},
 	"Client.DeleteAllVMDNVLs":               {"TestClient_DeleteAllNVLs_UnsupportedByPeer"},
@@ -70,6 +72,7 @@ var interopAPICoverage = map[string][]string{
 	"Server.RegisterDomain":            {"TestServer_GetNameList_Domains"},
 	"Server.RegisterNamedVariableList": {"TestServer_NVL_ServerRegistered"},
 	"Server.RegisterVariable":          {"TestServer_Read_Boolean", "TestServer_Write_Float32", "TestServer_Write_ReadOnly"},
+	"Server.Shutdown":                  {"TestServer_Shutdown"},
 
 	"ServerConn.Abort":                 {"TestServer_ServerConnAbort"},
 	"ServerConn.SendInformationReport": {"TestServer_InformationReport"},

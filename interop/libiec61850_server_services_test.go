@@ -14,11 +14,14 @@ package interop
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
 	"strings"
 	"testing"
+
+	mms "github.com/otfabric/go-mms"
 )
 
 // okResult returns the result for operation/target and fails the test if
@@ -29,6 +32,7 @@ func okResult(t *testing.T, op, target string) clientResult {
 	if !ok {
 		t.Fatalf("no %q result for target %q from client", op, target)
 	}
+	skipUnsupported(t, r)
 	if !r.OK {
 		t.Fatalf("%s %q failed: %s", op, target, r.Error)
 	}
@@ -43,6 +47,7 @@ func failResult(t *testing.T, op, target string) string {
 	if !ok {
 		t.Fatalf("no %q result for target %q from client", op, target)
 	}
+	skipUnsupported(t, r)
 	if r.OK {
 		t.Fatalf("%s %q succeeded, want failure", op, target)
 	}
@@ -153,6 +158,16 @@ func TestServer_WriteComponent(t *testing.T) {
 
 var nvlMemberRefs = []interface{}{"interop/boolean", "interop/integer"}
 
+// nvlWrittenValues returns interop/boolean and interop/integer after the
+// client's write-nvl step: (true, 77), or (false, 0) from write-multiple
+// when the peer client cannot write a list.
+func nvlWrittenValues(t *testing.T) []interface{} {
+	if stack(t).quirks.noWriteNVL {
+		return []interface{}{false, float64(0)}
+	}
+	return []interface{}{true, float64(77)}
+}
+
 func TestServer_NVL_DomainScope(t *testing.T) {
 	okResult(t, "define-nvl", "interop/svclist")
 	assertJSON(t, "domain lists", okResult(t, "get-name-list", "interop/nvl").Names, []string{"svclist"})
@@ -171,7 +186,7 @@ func TestServer_NVL_VMDScope(t *testing.T) {
 	okResult(t, "define-nvl", "vmd/vmdlist")
 	assertJSON(t, "vmdlist attributes", okResult(t, "get-nvl-attrs", "vmd/vmdlist").Value,
 		map[string]interface{}{"deletable": true, "variables": nvlMemberRefs})
-	assertJSON(t, "vmdlist", okResult(t, "read-nvl", "vmd/vmdlist").Value, []interface{}{true, float64(77)})
+	assertJSON(t, "vmdlist", okResult(t, "read-nvl", "vmd/vmdlist").Value, nvlWrittenValues(t))
 	okResult(t, "delete-nvl", "vmd/vmdlist")
 }
 
@@ -304,6 +319,9 @@ func assertFileRead(t *testing.T, target string, want []byte, size int, modMs in
 	t.Helper()
 	m := asObject(t, okResult(t, "file-read", target).Value)
 	assertJSON(t, target+" size", m["size"], float64(size))
+	if stack(t).quirks.fileOpenNoLastModified {
+		modMs = 0
+	}
 	assertJSON(t, target+" lastModified", m["lastModified"], float64(modMs))
 	assertJSON(t, target+" length", m["length"], float64(len(want)))
 	assertJSON(t, target+" fnv1a", m["fnv1a"], fnv1a64(want))
@@ -421,6 +439,10 @@ func TestServer_InformationReport(t *testing.T) {
 	okResult(t, "write", "interop/report-trigger")
 	fix := mustLoadFixture(t)
 	values := map[string]interface{}{"interop/integer": float64(-123), "interop/boolean": true}
+	if stack(t).quirks.noWriteNVL {
+		// The list write that restores the fixture values is unsupported.
+		values = map[string]interface{}{"interop/integer": float64(0), "interop/boolean": false}
+	}
 
 	for _, rep := range fix.InformationReports {
 		if rep.VMDList != "" {
@@ -447,4 +469,20 @@ func TestServer_Abort(t *testing.T) {
 // libiec61850 must observe the association being torn down.
 func TestServer_ServerConnAbort(t *testing.T) {
 	okResult(t, "server-abort", "")
+}
+
+// TestServer_Shutdown checks the graceful shutdown that ends the shared
+// libiec61850 client run: ListenAndServe returns ErrServerClosed and no
+// association is left.
+func TestServer_Shutdown(t *testing.T) {
+	run := sharedClientRun(t)
+	if run.shutdownErr != nil {
+		t.Errorf("Shutdown = %v", run.shutdownErr)
+	}
+	if !errors.Is(run.servedErr, mms.ErrServerClosed) {
+		t.Errorf("ListenAndServe after Shutdown = %v, want ErrServerClosed", run.servedErr)
+	}
+	if run.connsAfter != 0 {
+		t.Errorf("%d associations left after Shutdown", run.connsAfter)
+	}
 }

@@ -240,7 +240,7 @@ func (c *Conn) handleConfirmedRequest(ctx context.Context, content []byte) error
 		if errors.As(err, &svcErr) {
 			return c.sendError(ctx, invokeID, svcErr.ErrorClass, svcErr.ErrorCode)
 		}
-		return c.sendError(ctx, invokeID, 7, 1) // access: object-access-denied
+		return c.sendError(ctx, invokeID, 7, 1) // access: object-access-unsupported
 	}
 
 	respPdu, err := codec.MarshalConfirmedResponse(invokeID, respTag, constructed, respPayload)
