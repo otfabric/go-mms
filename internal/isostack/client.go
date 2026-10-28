@@ -12,6 +12,7 @@
 package isostack
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/otfabric/go-mms/internal/acse"
@@ -104,6 +105,10 @@ func EncodeDataRequest(mmsPayload []byte) []byte {
 	return session.EncodeData(pres)
 }
 
+// ErrPeerReleased reports that the peer ended the session (FINISH or
+// ABORT) while data was expected.
+var ErrPeerReleased = errors.New("isostack: session ended by peer")
+
 // DecodeDataResponse parses session DATA → presentation user-data
 // and returns the inner MMS PDU payload.
 func DecodeDataResponse(data []byte) ([]byte, error) {
@@ -116,9 +121,9 @@ func DecodeDataResponse(data []byte) ([]byte, error) {
 	case session.SpduData:
 		// Normal data transfer
 	case session.SpduFinish:
-		return nil, fmt.Errorf("isostack: received Session FINISH (server-initiated release)")
+		return nil, fmt.Errorf("%w: received Session FINISH (server-initiated release)", ErrPeerReleased)
 	case session.SpduAbort:
-		return nil, fmt.Errorf("isostack: received Session ABORT")
+		return nil, fmt.Errorf("%w: received Session ABORT", ErrPeerReleased)
 	default:
 		return nil, fmt.Errorf("isostack: unexpected SPDU type %s during data transfer", spdu.Type)
 	}

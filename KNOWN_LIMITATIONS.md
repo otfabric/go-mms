@@ -16,10 +16,9 @@ but no client methods, server handlers, or PDU encoders/decoders exist.
 | Event Management (DefineEventCondition, EventNotification, etc.) | Not needed for IEC 61850 |
 | Program Invocation (CreateProgramInvocation, Start, Stop, Resume, etc.) | Not needed for IEC 61850 |
 | Cancel | Rarely used; cancelling in-flight confirmed requests is not supported |
-| UnsolicitedStatus | Low priority; only request/response Status is implemented |
+| UnsolicitedStatus (client side) | The server sends it (`ServerConn.SendUnsolicitedStatus`); the client has no callback, logs a decode warning and drops the PDU |
 | ScatteredAccess | Not needed for IEC 61850; no known real-world usage |
 | OperatorStation services | Not needed for IEC 61850 |
-| Abort PDU (server → client) | Server detects client disconnects and handles ISO Release, but does not proactively send an MMS Abort PDU to the client. Client-initiated Abort is fully implemented. |
 
 ## Protocol Limitations
 
@@ -32,6 +31,14 @@ but no client methods, server handlers, or PDU encoders/decoders exist.
 | BER length field | Maximum 3 bytes (content up to ~16 MB). Longer lengths are rejected. |
 | INTEGER size | Signed integers limited to 4 bytes (32-bit). Larger BER INTEGERs are rejected. |
 | Unsigned INTEGER size | Unsigned integers limited to 4 bytes (32-bit, with optional leading zero pad). Larger values are rejected. |
+
+### Data Values and Type Descriptions
+
+| Limitation | Details |
+|-----------|---------|
+| BinaryTime range | The 6-byte form counts days since 1984-01-01 in 16 bits, so `NewBinaryTime` values must lie between 1984-01-01 and 2163-06-05. Values outside the range fail to encode instead of wrapping. The same applies to journal times (start, stop, after, occurrence). |
+| Real and BooleanArray type descriptions | ISO 9506-2 `TypeDescription` has no alternative for these two data kinds. A server cannot register a variable whose type is `TypeReal` or `TypeBooleanArray`; declare the variable as floating-point or bit-string instead. |
+| Object identifier arcs | `NewObjectIdentifier` requires a first arc of 0, 1 or 2 and, unless the first arc is 2, a second arc below 40 (X.690 §8.19.4). |
 
 ### Nesting and Collection Bounds
 
@@ -71,7 +78,7 @@ server logs a warning and skips them.
 | Client write serialization | Transport writes are serialized via a send mutex so PDUs do not interleave. Concurrent callers may still have multiple confirmed requests outstanding (wait for response happens outside the write lock); responses are correlated by invoke ID. |
 | Negotiated outstanding not enforced | `MaxOutstandingCalling` / `MaxOutstandingCalled` are negotiated and exposed via `Client.Negotiated()` / server association state, but the client invoke tracker is not capped by those values today. Limit concurrency in the caller if needed. |
 | Server request handling | Confirmed requests within a single server connection are handled serially. Concurrent request handling per-connection is not supported. |
-| Server Abort PDU | The server does not send an MMS Abort PDU on its own. It detects client disconnects and handles ISO Release/Conclude; applications can abort a connection explicitly with `ServerConn.Abort`. |
+| Server Abort PDU | The server does not send an MMS Abort PDU on its own. It detects client disconnects and handles ISO Release/Conclude; applications can abort a connection explicitly with `ServerConn.Abort`, which sends ACSE ABRT and closes the connection. |
 | RawHook availability | Raw wire hooks (`RawHook`) are only available on the client side via `DialOptions`. The server does not expose a raw hook for wire-level inspection. |
 
 ## Named Variable List Limitations
@@ -85,7 +92,8 @@ server logs a warning and skips them.
 
 | Limitation | Details |
 |-----------|---------|
-| ObtainFile | Delegates to the `FileProvider` as a single synchronous operation. The MMS-specified segmented transfer protocol (where the server calls back to the client's file services) is not implemented. |
+| ObtainFile | Delegates to the `FileProvider` as a single synchronous operation. The MMS-specified segmented transfer protocol (where the server calls back to the client's file services) is not implemented on either side: the client does not answer FileOpen/FileRead from the server, so `Client.ObtainFile` against servers that use role reversal (libiec61850) fails with a File-class `ServiceError`. |
+| Journal domain | `ReadJournal` and journal `GetNameList` are passed to the `JournalProvider` without checking the domain against registered domains; the provider decides what exists. |
 | File size metadata | `uint32` maximum (~4 GB). Files larger than 4 GB cannot have their size accurately represented in the MMS protocol layer. |
 | No server-initiated file transfer | The server cannot initiate an ObtainFile to pull files from the client. Only client→server ObtainFile is supported. |
 
@@ -104,10 +112,8 @@ listed here for transparency.
 
 | Gap | Details |
 |-----|---------|
-| No golden-file corpus from C reference | Interop tests use inline byte sequences. A captured-wire corpus from a C reference implementation would strengthen conformance confidence. |
-| No fuzz coverage for file/journal PDUs | Fuzz targets cover core PDU types (Data, TypeSpec, ObjectName, Read, Write, GetNameList, GetVarAccess, NVL, Error, Reject) but not file service or journal service PDU decoders. |
-| No live-wire interop testing | Interop tests validate encoding compatibility via inline byte patterns. There is no automated CI harness that connects to a real MMS server or C reference. |
-| Limited interop coverage | Only Initiate, GetNameList, GetVariableAccessAttributes, Read, and Write have been interop-tested against the C reference implementation. Other services are verified by Go-only round-trip tests. |
+| Single peer implementation | Live-wire interop (`interop/`, see [INTEROP.md](INTEROP.md)) runs against libiec61850 only. Behaviour where libiec61850 deviates (listOfVariable reports, FileOpen initial position, bulk NVL delete, ObtainFile) is pinned by tests but not cross-checked against a second implementation. |
+| Cancel and UnsolicitedStatus not interop-tested | The go-mms client sends no Cancel (the server side is unit-tested), and the libiec61850 client has no UnsolicitedStatus handler (the server side is covered by `e2e`). |
 
 ## Not in Scope
 

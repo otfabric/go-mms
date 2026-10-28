@@ -113,7 +113,12 @@ func (s *Server) handleReadJournal(ctx context.Context, body []byte) (int, bool,
 		return 0, false, nil, fmt.Errorf("marshal journal entries: %w", wErr)
 	}
 
-	payload, mErr := pdu.MarshalReadJournalResponse(wireEntries, result.MoreFollows)
+	payload, mErr := fitList(len(wireEntries), s.responseBudget(ctx), func(k int, truncated bool) ([]byte, error) {
+		return pdu.MarshalReadJournalResponse(wireEntries[:k], result.MoreFollows || truncated)
+	})
+	if errors.Is(mErr, errResponseTooLarge) {
+		return 0, false, nil, mErr
+	}
 	if mErr != nil {
 		return 0, false, nil, fmt.Errorf("marshal read-journal response: %w", mErr)
 	}

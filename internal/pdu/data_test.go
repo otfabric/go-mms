@@ -641,3 +641,29 @@ func TestEmptyBitStringRoundTrip(t *testing.T) {
 		t.Errorf("bitLen = %d, want 0", got.BitLen)
 	}
 }
+
+// The 6-byte TimeOfDay carries uint16 days since 1984-01-01; instants
+// outside that span must be rejected rather than wrapped.
+func TestEncodeData_BinaryTimeRange(t *testing.T) {
+	for _, ms := range []int64{0, binaryTimeMinMs - 1, binaryTimeMaxMs + 1} {
+		if _, err := MarshalData(&DataValue{Tag: TagDataBinaryTime, BinTimeMs: ms}); err == nil {
+			t.Errorf("BinaryTime %d ms: expected error", ms)
+		}
+	}
+	for _, ms := range []int64{binaryTimeMinMs, binaryTimeMaxMs, time.Date(2026, 1, 2, 3, 4, 5, 6e6, time.UTC).UnixMilli()} {
+		enc, err := MarshalData(&DataValue{Tag: TagDataBinaryTime, BinTimeMs: ms})
+		if err != nil {
+			t.Fatalf("BinaryTime %d ms: %v", ms, err)
+		}
+		dv, _, err := UnmarshalDataElement(enc, 0)
+		if err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if dv.BinTimeMs != ms {
+			t.Errorf("round trip %d ms = %d", ms, dv.BinTimeMs)
+		}
+	}
+	if _, err := MarshalReadJournalTimeRange(1, "d", "j", time.Time{}, time.Now()); err == nil {
+		t.Error("ReadJournal with zero start time: expected error")
+	}
+}

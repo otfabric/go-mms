@@ -133,7 +133,11 @@ func decodeAlternateAccess(data []byte) ([]AccessSelectorWire, error) {
 			}
 			chain = append(chain, sels...)
 		case tagSSComponent:
-			chain = append(chain, AccessSelectorWire{Component: string(content)})
+			name, err := decodeComponentName(content)
+			if err != nil {
+				return nil, err
+			}
+			chain = append(chain, AccessSelectorWire{Component: name})
 		case tagSSIndex:
 			idx, err := berutil.DecodeUnsigned(content)
 			if err != nil {
@@ -151,7 +155,20 @@ func decodeAlternateAccess(data []byte) ([]AccessSelectorWire, error) {
 		}
 	}
 
+	if len(chain) == 0 {
+		return nil, fmt.Errorf("empty alternate access")
+	}
 	return chain, nil
+}
+
+func decodeComponentName(content []byte) (string, error) {
+	if len(content) == 0 {
+		return "", fmt.Errorf("empty component name")
+	}
+	if len(content) > maxIdentifierLen {
+		return "", fmt.Errorf("component name length %d exceeds maximum %d", len(content), maxIdentifierLen)
+	}
+	return string(content), nil
 }
 
 // decodeSelectAlternateAccess decodes selectAlternateAccess [0] content.
@@ -170,7 +187,11 @@ func decodeSelectAlternateAccess(data []byte) ([]AccessSelectorWire, error) {
 	var sel AccessSelectorWire
 	switch tag {
 	case tagSAComponent:
-		sel = AccessSelectorWire{Component: string(content)}
+		name, err := decodeComponentName(content)
+		if err != nil {
+			return nil, fmt.Errorf("selectAlternateAccess component: %w", err)
+		}
+		sel = AccessSelectorWire{Component: name}
 	case tagSAIndex:
 		idx, err := berutil.DecodeUnsigned(content)
 		if err != nil {

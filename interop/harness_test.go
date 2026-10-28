@@ -23,6 +23,7 @@ package interop
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -142,15 +143,14 @@ func fixturePath(t *testing.T) string {
 	return p
 }
 
-// dial opens a go-mms client connection to addr and fails the test on error.
 // dial opens an MMS connection to addr, retrying for up to 5 seconds to
 // absorb any latency between the Docker container's "ready" event and the
 // TCP listener becoming fully available (especially under QEMU emulation).
-func dial(t *testing.T, ctx context.Context, addr string) *mms.Client {
+func dial(t *testing.T, ctx context.Context, addr string, opts ...iso.Option) *mms.Client {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		client, err := iso.Dial(ctx, addr)
+		client, err := iso.Dial(ctx, addr, opts...)
 		if err == nil {
 			return client
 		}
@@ -259,7 +259,7 @@ func startAdapter(t *testing.T) *serverHandle {
 			stop()
 			t.Fatal("adapter exited before emitting readiness event")
 		}
-		validateAdapterMeta(t, m, "mms-v1", "libiec61850")
+		validateAdapterMeta(t, m, mustLoadFixture(t).Revision, "libiec61850")
 		t.Cleanup(stop)
 		return &serverHandle{addr: m.addr, stop: stop}
 	case <-startCtx.Done():
@@ -340,6 +340,35 @@ func startClientAdapter(t *testing.T, port int) <-chan clientResult {
 	return results
 }
 
+// clientRun is the outcome of one libiec61850 client adapter run against
+// the fixture-backed go-mms server.
+type clientRun struct {
+	results []clientResult
+	files   []string // file store contents after the run
+}
+
+var sharedRun struct {
+	once sync.Once
+	run  clientRun
+}
+
+// sharedClientRun runs the client adapter once per test binary; the
+// adapter's operation sequence is fixed, so every server-direction test
+// asserts on the same run. The server and adapter are bound to the first
+// caller's lifetime, but the run is complete before that test returns.
+func sharedClientRun(t *testing.T) clientRun {
+	t.Helper()
+	sharedRun.once.Do(func() {
+		srv := startGoMmsServer(t)
+		sharedRun.run.results = collectResults(t, startClientAdapter(t, srv.port))
+		sharedRun.run.files = srv.files.names()
+	})
+	if len(sharedRun.run.results) == 0 {
+		t.Fatal("client adapter produced no results")
+	}
+	return sharedRun.run
+}
+
 // collectResults drains the results channel into a slice and logs each result.
 func collectResults(t *testing.T, ch <-chan clientResult) []clientResult {
 	t.Helper()
@@ -376,16 +405,121 @@ func findOp(results []clientResult, operation string) (clientResult, bool) {
 // ---------------------------------------------------------------------------
 
 type fixtureFile struct {
+	Revision string `json:"revision"`
 	Identity struct {
 		Vendor   string `json:"vendor"`
 		Model    string `json:"model"`
 		Revision string `json:"revision"`
 	} `json:"identity"`
-	Domains map[string]fixtureDomain `json:"domains"`
+	Status struct {
+		Logical  int `json:"logical"`
+		Physical int `json:"physical"`
+	} `json:"status"`
+	Domains            map[string]fixtureDomain `json:"domains"`
+	InformationReports []fixtureReport          `json:"informationReports"`
+	Files              map[string]fixtureStored `json:"files"`
 }
 
 type fixtureDomain struct {
-	Variables map[string]fixtureVar `json:"variables"`
+	Variables map[string]fixtureVar     `json:"variables"`
+	Journals  map[string]fixtureJournal `json:"journals"`
+}
+
+type fixtureJournal struct {
+	Entries []fixtureJournalEntry `json:"entries"`
+}
+
+type fixtureJournalEntry struct {
+	EntryID        uint64      `json:"entryId"`
+	OccurrenceTime string      `json:"occurrenceTime"`
+	Tag            string      `json:"tag"`
+	Type           string      `json:"type"`
+	Value          interface{} `json:"value"`
+	ReasonCode     int         `json:"reasonCode"`
+}
+
+// entryIDBytes is the wire form of a fixture entryId: 8 little-endian bytes,
+// as libiec61850 writes its uint64 entry IDs.
+func entryIDBytes(id uint64) []byte {
+	b := make([]byte, 8)
+	binary.LittleEndian.PutUint64(b, id)
+	return b
+}
+
+func (e fixtureJournalEntry) time(t *testing.T) time.Time {
+	t.Helper()
+	tm, err := time.Parse(time.RFC3339Nano, e.OccurrenceTime)
+	if err != nil {
+		t.Fatalf("journal entry %d time %q: %v", e.EntryID, e.OccurrenceTime, err)
+	}
+	return tm
+}
+
+type fixtureReport struct {
+	VMDList   string   `json:"vmdList"`
+	Variables []string `json:"variables"`
+}
+
+type fixtureStored struct {
+	Content      *string `json:"content"`
+	Hex          *string `json:"hex"`
+	Size         *int    `json:"size"`
+	LastModified string  `json:"lastModified"`
+}
+
+// bytes returns the content of a fixture file. Generated files (size only)
+// hold byte i = i % 251.
+func (f fixtureStored) bytes() ([]byte, error) {
+	switch {
+	case f.Content != nil:
+		return []byte(*f.Content), nil
+	case f.Hex != nil:
+		return hex.DecodeString(*f.Hex)
+	case f.Size != nil:
+		b := make([]byte, *f.Size)
+		for i := range b {
+			b[i] = byte(i % 251)
+		}
+		return b, nil
+	}
+	return nil, fmt.Errorf("file has no content, hex or size")
+}
+
+// modTime is the zero time when the fixture gives no lastModified.
+func (f fixtureStored) modTime() time.Time {
+	t, _ := time.Parse(time.RFC3339, f.LastModified)
+	return t
+}
+
+// modMs is lastModified as a libiec61850 client reports it: milliseconds
+// since the epoch, 0 when the server omitted it.
+func (f fixtureStored) modMs() int64 {
+	if f.LastModified == "" {
+		return 0
+	}
+	return f.modTime().UnixMilli()
+}
+
+func mustLoadFixture(t *testing.T) *fixtureFile {
+	t.Helper()
+	fix, err := loadFixture(fixturePath(t))
+	if err != nil {
+		t.Fatalf("load fixture: %v", err)
+	}
+	return fix
+}
+
+func (f *fixtureFile) file(t *testing.T, name string) ([]byte, fixtureStored) {
+	t.Helper()
+	stored, ok := f.Files[name]
+	if !ok {
+		t.Fatalf("fixture has no file %q", name)
+	}
+	data, err := stored.bytes()
+	if err != nil {
+		t.Fatalf("fixture file %q: %v", name, err)
+	}
+	return data, stored
 }
 
 type fixtureVar struct {
@@ -398,7 +532,8 @@ type fixtureVar struct {
 }
 
 type goMmsServer struct {
-	port int
+	port  int
+	files *fixtureFileStore
 }
 
 // startGoMmsServer reads the fixture and starts a fixture-backed go-mms server
@@ -411,7 +546,16 @@ func startGoMmsServer(t *testing.T) *goMmsServer {
 		t.Fatalf("load fixture: %v", err)
 	}
 
-	srv := mms.NewServer(mms.ServerOptions{})
+	files, err := newFixtureFileStore(fix)
+	if err != nil {
+		t.Fatalf("fixture files: %v", err)
+	}
+	journals, err := newFixtureJournals(fix)
+	if err != nil {
+		t.Fatalf("fixture journals: %v", err)
+	}
+
+	srv := mms.NewServer(mms.ServerOptions{FileProvider: files, JournalProvider: journals})
 
 	srv.HandleIdentify(func(_ context.Context, _ mms.IdentifyRequest) (*mms.ServerIdentity, error) {
 		return &mms.ServerIdentity{
@@ -423,11 +567,19 @@ func startGoMmsServer(t *testing.T) *goMmsServer {
 
 	srv.HandleStatus(func(_ context.Context, _ mms.StatusRequest) (*mms.ServerStatus, error) {
 		return &mms.ServerStatus{
-			Logical:  mms.VMDLogicalStatusStateChangesAllowed,
-			Physical: mms.VMDPhysicalStatusOperational,
+			Logical:  mms.VMDLogicalStatus(fix.Status.Logical),
+			Physical: mms.VMDPhysicalStatus(fix.Status.Physical),
 		}, nil
 	})
 
+	vars := make(map[string]mms.Variable)
+	readRef := func(ref string) (*mms.Value, error) {
+		v, ok := vars[ref]
+		if !ok {
+			return nil, fmt.Errorf("unknown variable %q", ref)
+		}
+		return v.Read(context.Background())
+	}
 	for domainName, domain := range fix.Domains {
 		if err := srv.RegisterDomain(domainName); err != nil {
 			t.Fatalf("RegisterDomain %q: %v", domainName, err)
@@ -437,9 +589,34 @@ func startGoMmsServer(t *testing.T) *goMmsServer {
 			if err != nil {
 				t.Fatalf("build variable %s/%s: %v", domainName, varName, err)
 			}
+			if varName == "report-trigger" {
+				store := entry.Write
+				entry.Write = func(ctx context.Context, val *mms.Value) error {
+					if err := store(ctx, val); err != nil {
+						return err
+					}
+					return onReportTrigger(ctx, srv, fix, val, readRef)
+				}
+			}
+			vars[domainName+"/"+varName] = entry
 			if err := srv.RegisterVariable(entry); err != nil {
 				t.Fatalf("RegisterVariable %s/%s: %v", domainName, varName, err)
 			}
+		}
+	}
+
+	// Named-list reports refer to VMD-scoped lists the client can inspect.
+	for _, r := range fix.InformationReports {
+		if r.VMDList == "" {
+			continue
+		}
+		nvl := mms.NamedVariableList{Name: mms.ObjectName{Scope: mms.ObjectScopeVMD, ItemID: mms.ItemID(r.VMDList)}}
+		for _, ref := range r.Variables {
+			dom, item, _ := strings.Cut(ref, "/")
+			nvl.Variables = append(nvl.Variables, mms.VariableSpec{Name: mms.ObjectName{Scope: mms.ObjectScopeDomain, Domain: mms.DomainID(dom), ItemID: mms.ItemID(item)}})
+		}
+		if err := srv.RegisterNamedVariableList(nvl); err != nil {
+			t.Fatalf("RegisterNamedVariableList %s: %v", r.VMDList, err)
 		}
 	}
 
@@ -467,7 +644,7 @@ func startGoMmsServer(t *testing.T) *goMmsServer {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	return &goMmsServer{port: port}
+	return &goMmsServer{port: port, files: files}
 }
 
 func loadFixture(path string) (*fixtureFile, error) {
@@ -661,11 +838,15 @@ func parseTypeAndValue(v fixtureVar) (mms.TypeSpec, *mms.Value, error) {
 			}
 			ct, _ := comp["type"].(string)
 			cv := comp["value"]
+			name, _ := comp["name"].(string)
+			if name == "" {
+				name = fmt.Sprintf("comp%d", i)
+			}
 			compSpec, err := parseScalarTypeSpec(ct, 0)
 			if err != nil {
 				return mms.TypeSpec{}, nil, fmt.Errorf("structure[%d] type: %w", i, err)
 			}
-			tsElems = append(tsElems, mms.TypeSpecElement{Type: compSpec})
+			tsElems = append(tsElems, mms.TypeSpecElement{Name: name, Type: compSpec})
 			val, err := makeScalarValue(ct, cv)
 			if err != nil {
 				return mms.TypeSpec{}, nil, fmt.Errorf("structure[%d] value: %w", i, err)

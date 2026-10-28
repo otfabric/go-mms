@@ -862,6 +862,28 @@ func TestFileDirectoryAllPaginated(t *testing.T) {
 	}
 }
 
+// LIB61850-579: moreFollows=true with no entries must not panic or loop.
+func TestFileDirectoryAll_MoreFollowsEmptyPage(t *testing.T) {
+	fp := &emptyMoreFollowsProvider{}
+	ctx, cancel, client := fileTestSetup(t, fp)
+	defer cancel()
+	defer func() { _ = client.Close(ctx) }()
+
+	entries, err := client.FileDirectoryAll(ctx, "")
+	if err != nil {
+		t.Fatalf("FileDirectoryAll: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("entries = %d, want 0", len(entries))
+	}
+}
+
+type emptyMoreFollowsProvider struct{ memFileProvider }
+
+func (*emptyMoreFollowsProvider) List(context.Context, FileListRequest) (*FileListResult, error) {
+	return &FileListResult{MoreFollows: true}, nil
+}
+
 func TestFileDirectoryAllEmpty(t *testing.T) {
 	fp := newMemFileProvider()
 

@@ -108,32 +108,58 @@ and must not call back into the same `Client`.
 ### File services
 
 ```go
-func (c *Client) FileOpen(ctx context.Context, filename string, initialPosition uint32) (*FileOpenResult, error)
-func (c *Client) FileRead(ctx context.Context, handle FileHandle, ...) (*FileReadResult, error)
-func (c *Client) FileClose(ctx context.Context, handle FileHandle) error
-func (c *Client) FileDirectory(ctx context.Context, fileSpecification string, ...) ([]FileDirectoryEntry, error)
-func (c *Client) FileDelete(ctx context.Context, filename string) error
-func (c *Client) FileRename(ctx context.Context, currentFilename, newFilename string) error
+func (c *Client) FileOpen(ctx context.Context, fileName string, opts ...FileOpenOptions) (*FileOpenResult, error)
+func (c *Client) FileRead(ctx context.Context, frsmID int32) (*FileReadResult, error)
+func (c *Client) FileReadAll(ctx context.Context, frsmID int32) ([]byte, error)
+func (c *Client) FileClose(ctx context.Context, frsmID int32) error
+func (c *Client) FileDirectory(ctx context.Context, req FileDirectoryRequest) (*FileDirectoryResult, error)
+func (c *Client) FileDirectoryAll(ctx context.Context, fileSpec string) ([]FileDirectoryEntry, error)
+func (c *Client) FileDelete(ctx context.Context, fileName string) error
+func (c *Client) FileRename(ctx context.Context, currentName, newName string) error
 func (c *Client) ObtainFile(ctx context.Context, sourceFile, destinationFile string) error
-func (c *Client) DownloadFile(ctx context.Context, filename string, w io.Writer) error
+func (c *Client) DownloadFile(ctx context.Context, fileName string) ([]byte, *FileOpenResult, error)
 ```
+
+`FileOpen` takes an optional [FileOpenOptions]; the zero value starts at
+position 0. `FileDirectory` pages with `FileDirectoryRequest.ContinueAfter`;
+`FileDirectoryAll` walks the pages. `DownloadFile` is Open → ReadAll → Close
+and returns the bytes plus the FileOpen metadata.
 
 `ObtainFile` requests the server to copy `sourceFile` to `destinationFile` using its
 own `FileProvider`. The MMS segmented role-reversal protocol (server calling back to
 the client's file services) is not implemented; see [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md).
 
+#### Directory listings differ between servers
+
+MMS treats a file name as an opaque string and has no directory entry
+type, so servers organise listings in their own way. go-mms returns names
+exactly as received. Conventions seen on devices:
+
+- **Flattened.** One listing of the whole store, every file by its full path
+  with `/` separators (`COMTRADE/REC02.CFG`). libiec61850 servers do this.
+- **Per level.** Only the requested level. A subdirectory appears as an
+  entry of size 0 whose name ends in `\` (`COMTRADE\`); list it with another
+  `FileDirectory` call using that name.
+
+Code that walks a store should therefore treat a zero-size entry ending in
+`/` or `\` as a directory to list, and pass names back to the server
+unchanged rather than normalising separators.
+
+`lastModified` is optional in MMS and some devices omit it, for some or all
+entries. `FileDirectoryEntry.LastModified` and `FileOpenResult.LastModified`
+are then the zero time. On the server side, a provider that leaves
+`FileEntry.LastModified` or `FileAttributes.LastModified` zero has the field
+omitted from the response.
+
 ### Journal services
 
 ```go
-func (c *Client) ReadJournalTimeRange(ctx context.Context, domain, name string, from, to time.Time, maxEntries int) (*JournalResult, error)
-func (c *Client) ReadJournalStartAfter(ctx context.Context, domain, name string, entrySpec JournalEntry, maxEntries int) (*JournalResult, error)
+func (c *Client) ReadJournalTimeRange(ctx context.Context, domain, journal string, start, stop time.Time) (*JournalResult, error)
+func (c *Client) ReadJournalStartAfter(ctx context.Context, domain, journal string, afterTime time.Time, afterID []byte) (*JournalResult, error)
 ```
 
-### Low-level MMS transport
-
-```go
-func (c *Client) MMS() *mms.Client  // returns the underlying *mms.Client (go-mms)
-```
+When `JournalResult.MoreFollows` is true, call `ReadJournalStartAfter` with the
+last entry's `OccurrenceTime` and `EntryID` to retrieve the next page.
 
 ---
 

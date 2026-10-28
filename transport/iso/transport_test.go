@@ -112,6 +112,17 @@ func TestTransportCloseIdempotent(t *testing.T) {
 	}
 }
 
+func TestTransportCloseAfterPeerDisconnect(t *testing.T) {
+	clientConn, serverConn := tcpLoopbackTransport(t)
+	if err := serverConn.Close(); err != nil {
+		t.Fatalf("peer close: %v", err)
+	}
+	_, _ = clientConn.Receive(context.Background())
+	if err := clientConn.Close(); err != nil {
+		t.Fatalf("close after peer disconnect: %v", err)
+	}
+}
+
 func TestTransportSendAfterClose(t *testing.T) {
 	clientConn, serverConn := tcpLoopbackTransport(t)
 	defer func() { _ = serverConn.Close() }()
