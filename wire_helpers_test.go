@@ -21,7 +21,7 @@ func TestTypeSpecFromWire_AllTags(t *testing.T) {
 		{"integer", pdu.TypeSpecWire{Tag: 5, Size: 32}, ValueTypeInteger},
 		{"unsigned", pdu.TypeSpecWire{Tag: 6, Size: 16}, ValueTypeUnsigned},
 		{"float", pdu.TypeSpecWire{Tag: 7, FormatWidth: 32, ExpWidth: 8}, ValueTypeFloat},
-		{"oid", pdu.TypeSpecWire{Tag: 8}, ValueTypeObjectIdentifier},
+		{"oid", pdu.TypeSpecWire{Tag: 15}, ValueTypeObjectIdentifier},
 		{"octet", pdu.TypeSpecWire{Tag: 9, Size: 8}, ValueTypeOctetString},
 		{"visible", pdu.TypeSpecWire{Tag: 10, Size: 32}, ValueTypeVisibleString},
 		{"gentime", pdu.TypeSpecWire{Tag: 11}, ValueTypeGeneralizedTime},

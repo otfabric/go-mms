@@ -168,14 +168,28 @@ func TestGetVariableAccessAttributes_Edges(t *testing.T) {
 		t.Fatal("unmarshal")
 	}
 
-	// ObjectIdentifier type tag 15 is decoded on the wire but not mapped by typeSpecFromWire.
+	// objId is TypeDescription [15] NULL.
 	go func() {
 		id, _, _ := srv.handleDataRequest(ctx)
 		ts := berutil.EncodeTLV(0x8f, nil) // [15] NULL
 		srv.sendGetVarAccessResponse(ctx, id, false, ts)
 	}()
+	attrs, err := client.GetVariableAccessAttributes(ctx, name)
+	if err != nil {
+		t.Fatalf("objId typeSpec: %v", err)
+	}
+	if attrs.TypeSpec.Type != ValueTypeObjectIdentifier {
+		t.Fatalf("objId typeSpec = %v", attrs.TypeSpec.Type)
+	}
+
+	// [8] is not a TypeDescription alternative.
+	go func() {
+		id, _, _ := srv.handleDataRequest(ctx)
+		ts := berutil.EncodeTLV(0x88, nil)
+		srv.sendGetVarAccessResponse(ctx, id, false, ts)
+	}()
 	if _, err := client.GetVariableAccessAttributes(ctx, name); err == nil {
-		t.Fatal("typeSpecFromWire")
+		t.Fatal("typeSpec [8]: expected error")
 	}
 
 	client.mu.Lock()

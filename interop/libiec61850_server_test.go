@@ -17,8 +17,7 @@ import (
 )
 
 func TestServer_Identify(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	r, ok := findOp(results, "identify")
 	if !ok {
@@ -44,8 +43,7 @@ func TestServer_Identify(t *testing.T) {
 }
 
 func TestServer_GetNameList_Domains(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	var found bool
 	for _, r := range results {
@@ -66,8 +64,7 @@ func TestServer_GetNameList_Domains(t *testing.T) {
 }
 
 func TestServer_GetNameList_Variables(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	var varNames []string
 	for _, r := range results {
@@ -96,8 +93,7 @@ func TestServer_GetNameList_Variables(t *testing.T) {
 }
 
 func TestServer_Read_Boolean(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	r, ok := findResult(results, "read", "interop/boolean")
 	if !ok {
@@ -116,8 +112,7 @@ func TestServer_Read_Boolean(t *testing.T) {
 }
 
 func TestServer_Read_Integer(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	r, ok := findResult(results, "read", "interop/integer")
 	if !ok {
@@ -136,8 +131,7 @@ func TestServer_Read_Integer(t *testing.T) {
 }
 
 func TestServer_Read_Float32(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	r, ok := findResult(results, "read", "interop/float32")
 	if !ok {
@@ -156,8 +150,7 @@ func TestServer_Read_Float32(t *testing.T) {
 }
 
 func TestServer_Write_Float32(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	wr, ok := findResult(results, "write", "interop/float32")
 	if !ok {
@@ -185,8 +178,7 @@ func TestServer_Write_Float32(t *testing.T) {
 }
 
 func TestServer_Write_ReadOnly(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	wr, ok := findResult(results, "write", "interop/octet-string")
 	if !ok {
@@ -219,8 +211,7 @@ func TestServer_Write_ReadOnly(t *testing.T) {
 }
 
 func TestServer_Conclude(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	r, ok := findOp(results, "conclude")
 	if !ok {
@@ -232,8 +223,7 @@ func TestServer_Conclude(t *testing.T) {
 }
 
 func TestServer_Reconnect(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	var concludes int
 	for _, r := range results {
@@ -247,8 +237,7 @@ func TestServer_Reconnect(t *testing.T) {
 }
 
 func TestServer_Read_Unsigned(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	r, ok := findResult(results, "read", "interop/unsigned")
 	if !ok {
@@ -267,8 +256,7 @@ func TestServer_Read_Unsigned(t *testing.T) {
 }
 
 func TestServer_Read_VisibleString(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	var reads []clientResult
 	for _, r := range results {
@@ -292,8 +280,7 @@ func TestServer_Read_VisibleString(t *testing.T) {
 }
 
 func TestServer_Write_VisibleString(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	wr, ok := findResult(results, "write", "interop/visible-string")
 	if !ok {
@@ -321,8 +308,7 @@ func TestServer_Write_VisibleString(t *testing.T) {
 }
 
 func TestServer_Read_OctetString(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	r, ok := findResult(results, "read", "interop/octet-string")
 	if !ok {
@@ -341,8 +327,7 @@ func TestServer_Read_OctetString(t *testing.T) {
 }
 
 func TestServer_Read_BitString(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	r, ok := findResult(results, "read", "interop/bit-string")
 	if !ok {
@@ -361,8 +346,7 @@ func TestServer_Read_BitString(t *testing.T) {
 }
 
 func TestServer_Read_UTCTime(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	r, ok := findResult(results, "read", "interop/utc-time")
 	if !ok {
@@ -382,8 +366,7 @@ func TestServer_Read_UTCTime(t *testing.T) {
 }
 
 func TestServer_Read_Array(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	r, ok := findResult(results, "read", "interop/array")
 	if !ok {
@@ -413,8 +396,7 @@ func TestServer_Read_Array(t *testing.T) {
 }
 
 func TestServer_Read_Structure(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	r, ok := findResult(results, "read", "interop/structure")
 	if !ok {
@@ -447,8 +429,7 @@ func TestServer_Read_Structure(t *testing.T) {
 }
 
 func TestServer_GetVariableAccessAttributes(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	r, ok := findResult(results, "get-var-access-attr", "interop/boolean")
 	if !ok {
@@ -463,8 +444,7 @@ func TestServer_GetVariableAccessAttributes(t *testing.T) {
 }
 
 func TestServer_ReadMultiple(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	r, ok := findResult(results, "read-multiple", "interop")
 	if !ok {
@@ -497,8 +477,7 @@ func TestServer_ReadMultiple(t *testing.T) {
 }
 
 func TestServer_WriteMultiple(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	r, ok := findResult(results, "write-multiple", "interop")
 	if !ok {
@@ -510,8 +489,7 @@ func TestServer_WriteMultiple(t *testing.T) {
 }
 
 func TestServer_NVL(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	dr, ok := findResult(results, "define-nvl", "interop/testlist")
 	if !ok {
@@ -546,8 +524,7 @@ func TestServer_NVL(t *testing.T) {
 }
 
 func TestServer_Read_UnknownDomain(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	r, ok := findResult(results, "read", "unknown-domain/boolean")
 	if !ok {
@@ -556,12 +533,13 @@ func TestServer_Read_UnknownDomain(t *testing.T) {
 	if r.OK {
 		t.Fatal("expected read from unknown domain to fail, got ok=true")
 	}
-	t.Logf("read unknown domain: %s (expected)", r.Error)
+	if r.Error != "object-non-existent" {
+		t.Errorf("read unknown domain error = %q, want object-non-existent", r.Error)
+	}
 }
 
 func TestServer_Read_UnknownVariable(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	r, ok := findResult(results, "read", "interop/nonexistent")
 	if !ok {
@@ -570,12 +548,13 @@ func TestServer_Read_UnknownVariable(t *testing.T) {
 	if r.OK {
 		t.Fatal("expected read of unknown variable to fail, got ok=true")
 	}
-	t.Logf("read unknown variable: %s (expected)", r.Error)
+	if r.Error != "object-non-existent" {
+		t.Errorf("read unknown variable error = %q, want object-non-existent", r.Error)
+	}
 }
 
 func TestServer_Write_WrongType(t *testing.T) {
-	srv := startGoMmsServer(t)
-	results := collectResults(t, startClientAdapter(t, srv.port))
+	results := sharedClientRun(t).results
 
 	r, ok := findResult(results, "write", "interop/integer-wrong-type")
 	if !ok {

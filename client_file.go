@@ -12,8 +12,10 @@ import (
 
 // FileOpenResult holds the result of a [Client.FileOpen] call.
 type FileOpenResult struct {
-	FrsmID       int32
-	Size         int64
+	FrsmID int32
+	Size   int64
+	// LastModified is the zero time when the server omitted the optional
+	// lastModified attribute.
 	LastModified time.Time
 }
 
@@ -24,9 +26,17 @@ type FileReadResult struct {
 }
 
 // FileDirectoryEntry describes one file entry returned by [Client.FileDirectory].
+//
+// Name is returned exactly as the server sent it. MMS does not define a
+// path separator or a directory entry, and servers differ: some flatten
+// their store into full paths with forward slashes, others list only one
+// level and report a subdirectory as a zero-size entry whose name ends in
+// a backslash, to be listed with a further FileDirectory call.
 type FileDirectoryEntry struct {
-	Name         string
-	Size         int64
+	Name string
+	Size int64
+	// LastModified is the zero time when the server omitted the optional
+	// lastModified attribute.
 	LastModified time.Time
 }
 

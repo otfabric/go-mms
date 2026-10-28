@@ -72,8 +72,12 @@ func MarshalFileCloseRequest(invokeID codec.InvokeID, frsmID int32) ([]byte, err
 }
 
 // MarshalFileDeleteRequest builds a ConfirmedRequestPdu for FileDelete.
+//
+//	FileDeleteRequest ::= [76] IMPLICIT FileName
+//
+// The GraphicStrings of the FileName are the direct content of [76].
 func MarshalFileDeleteRequest(invokeID codec.InvokeID, fileName string) ([]byte, error) {
-	payload := encodeFileName(fileName)
+	payload := encodeFileNameInner(fileName)
 	return MarshalConfirmedRequest(invokeID, asn1util.TagNumFileDelete, true, payload)
 }
 
@@ -312,17 +316,22 @@ func MarshalFileOpenResponse(frsmID int32, size int64, lastModified time.Time) (
 		return nil, fmt.Errorf("pdu: file size %d exceeds MMS Unsigned32 range [0, %d]", size, uint32(math.MaxUint32))
 	}
 	frsmBytes := berutil.EncodeTLV(0x80, berutil.EncodeInt(int(frsmID)))
-
-	sizeBytes := berutil.EncodeTLV(0x80, berutil.EncodeUint32(uint32(size)))
-	timeStr := lastModified.UTC().Format("20060102150405Z")
-	timeBytes := berutil.EncodeTLV(0x81, []byte(timeStr))
-	attrInner := append(sizeBytes, timeBytes...)
-	attrBytes := berutil.EncodeTLV(0xa1, attrInner)
+	attrBytes := berutil.EncodeTLV(0xa1, encodeFileAttributes(size, lastModified))
 
 	payload := make([]byte, 0, len(frsmBytes)+len(attrBytes))
 	payload = append(payload, frsmBytes...)
 	payload = append(payload, attrBytes...)
 	return payload, nil
+}
+
+// encodeFileAttributes returns the FileAttributes content. A zero
+// lastModified means the time is unknown and the OPTIONAL field is omitted.
+func encodeFileAttributes(size int64, lastModified time.Time) []byte {
+	out := berutil.EncodeTLV(0x80, berutil.EncodeUint32(uint32(size)))
+	if !lastModified.IsZero() {
+		out = append(out, berutil.EncodeTLV(0x81, []byte(lastModified.UTC().Format("20060102150405Z")))...)
+	}
+	return out
 }
 
 // MarshalFileReadResponse encodes a FileRead response.
@@ -345,9 +354,12 @@ func MarshalFileReadResponse(data []byte, moreFollows bool) ([]byte, error) {
 // MarshalFileDirectoryResponse encodes a FileDirectory response.
 //
 //	FileDirectoryResponse ::= SEQUENCE {
-//	    listOfDirectoryEntry [0] IMPLICIT SEQUENCE OF DirectoryEntry,
+//	    listOfDirectoryEntry [0] SEQUENCE OF DirectoryEntry,
 //	    moreFollows          [1] IMPLICIT BOOLEAN DEFAULT TRUE OPTIONAL
 //	}
+//
+// The [0] tag on listOfDirectoryEntry is EXPLICIT, so the universal
+// SEQUENCE OF (0x30) is kept inside it: A0 { 30 { 30 entry, 30 entry } }.
 //
 //	DirectoryEntry ::= SEQUENCE {
 //	    fileName       [0] IMPLICIT FileName,
@@ -360,18 +372,13 @@ func MarshalFileDirectoryResponse(entries []FileDirectoryEntry, moreFollows bool
 			return nil, fmt.Errorf("pdu: file %q size %d exceeds MMS Unsigned32 range [0, %d]", e.FileName, e.Size, uint32(math.MaxUint32))
 		}
 		nameBytes := berutil.EncodeTLV(0xa0, encodeFileNameInner(e.FileName))
-
-		sizeBytes := berutil.EncodeTLV(0x80, berutil.EncodeUint32(uint32(e.Size)))
-		timeStr := e.LastModified.UTC().Format("20060102150405Z")
-		timeBytes := berutil.EncodeTLV(0x81, []byte(timeStr))
-		attrInner := append(sizeBytes, timeBytes...)
-		attrBytes := berutil.EncodeTLV(0xa1, attrInner)
+		attrBytes := berutil.EncodeTLV(0xa1, encodeFileAttributes(e.Size, e.LastModified))
 
 		entryInner := append(nameBytes, attrBytes...)
 		entriesBytes = append(entriesBytes, berutil.EncodeTLV(0x30, entryInner)...)
 	}
 
-	listBytes := berutil.EncodeTLV(0xa0, entriesBytes)
+	listBytes := berutil.EncodeTLV(0xa0, berutil.EncodeTLV(0x30, entriesBytes))
 	payload := listBytes
 	if moreFollows {
 		payload = append(payload, berutil.EncodeTLV(0x81, []byte{0xff})...)
@@ -501,7 +508,7 @@ func UnmarshalFileDirectoryResponse(data []byte) ([]FileDirectoryEntry, bool, er
 		offset += n
 		switch tag {
 		case 0xa0: // listOfDirectoryEntry
-			parsed, err := parseDirectoryEntries(inner)
+			parsed, err := parseDirectoryEntries(unwrapDirectoryList(inner))
 			if err != nil {
 				return nil, false, err
 			}
@@ -515,6 +522,23 @@ func UnmarshalFileDirectoryResponse(data []byte) ([]FileDirectoryEntry, bool, er
 		}
 	}
 	return entries, moreFollows, nil
+}
+
+// unwrapDirectoryList strips the universal SEQUENCE OF that the explicit
+// [0] tag of listOfDirectoryEntry carries. Peers that encode the tag
+// implicitly put the DirectoryEntry SEQUENCEs directly inside [0]; that
+// form is returned unchanged. The two are told apart by the first tag
+// inside the outer SEQUENCE: a DirectoryEntry starts with fileName [0],
+// the SEQUENCE OF wrapper with a DirectoryEntry SEQUENCE.
+func unwrapDirectoryList(data []byte) []byte {
+	tag, inner, n, err := berutil.DecodeTLVAt(data, 0)
+	if err != nil || tag != 0x30 || n != len(data) {
+		return data
+	}
+	if len(inner) > 0 && inner[0] != 0x30 {
+		return data
+	}
+	return inner
 }
 
 func parseDirectoryEntries(data []byte) ([]FileDirectoryEntry, error) {

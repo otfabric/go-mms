@@ -607,10 +607,10 @@ func TestClient_Read_UnknownDomain(t *testing.T) {
 	defer c.Close(ctx)
 
 	_, err := c.Read(ctx, mms.ReadRequest{DomainID: "unknown-domain", ItemID: "boolean"})
-	if err == nil {
-		t.Fatal("expected error reading from unknown domain, got nil")
+	var dae *mms.DataAccessError
+	if !errors.As(err, &dae) || dae.Code != mms.DataAccessErrorObjectNonExistent {
+		t.Fatalf("Read unknown domain = %v, want data-access-error object-non-existent", err)
 	}
-	t.Logf("Read unknown domain: %v (expected)", err)
 
 	rr, err := c.Read(ctx, mms.ReadRequest{DomainID: "interop", ItemID: "boolean"})
 	if err != nil {
@@ -629,10 +629,10 @@ func TestClient_Read_UnknownVariable(t *testing.T) {
 	defer c.Close(ctx)
 
 	_, err := c.Read(ctx, mms.ReadRequest{DomainID: "interop", ItemID: "nonexistent"})
-	if err == nil {
-		t.Fatal("expected error reading unknown variable, got nil")
+	var dae *mms.DataAccessError
+	if !errors.As(err, &dae) || dae.Code != mms.DataAccessErrorObjectNonExistent {
+		t.Fatalf("Read unknown variable = %v, want data-access-error object-non-existent", err)
 	}
-	t.Logf("Read unknown variable: %v (expected)", err)
 
 	rr, err := c.Read(ctx, mms.ReadRequest{DomainID: "interop", ItemID: "boolean"})
 	if err != nil {

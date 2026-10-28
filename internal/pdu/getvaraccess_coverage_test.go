@@ -221,3 +221,32 @@ func TestDecodeStructureAndArrayTypeSpec_Errors(t *testing.T) {
 		t.Fatalf("%+v %v", okComp, err)
 	}
 }
+
+// ISO 9506-2 TypeDescription: generalized-time [11] NULL, bcd [13]
+// Unsigned8, objId [15] NULL ([8] is not a TypeDescription alternative).
+func TestEncodeTypeSpec_TimeBCDObjID(t *testing.T) {
+	cases := []struct {
+		ts   TypeSpecWire
+		want []byte
+	}{
+		{TypeSpecWire{Tag: tsTagGeneralizedTime}, []byte{0x8b, 0x00}},
+		{TypeSpecWire{Tag: tsTagBCD, Size: 8}, []byte{0x8d, 0x01, 0x08}},
+		{TypeSpecWire{Tag: tsTagObjID}, []byte{0x8f, 0x00}},
+	}
+	for _, c := range cases {
+		got, err := EncodeTypeSpec(c.ts)
+		if err != nil {
+			t.Fatalf("EncodeTypeSpec(tag %d): %v", c.ts.Tag, err)
+		}
+		if string(got) != string(c.want) {
+			t.Errorf("EncodeTypeSpec(tag %d) = % x, want % x", c.ts.Tag, got, c.want)
+		}
+		back, err := DecodeTypeSpec(got)
+		if err != nil {
+			t.Fatalf("DecodeTypeSpec(% x): %v", got, err)
+		}
+		if back.Tag != c.ts.Tag || back.Size != c.ts.Size {
+			t.Errorf("round trip tag %d: got %+v", c.ts.Tag, back)
+		}
+	}
+}

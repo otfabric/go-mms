@@ -196,6 +196,17 @@ func EncodeObjectIdentifier(oid []int) ([]byte, error) {
 	if len(oid) < 2 {
 		return nil, fmt.Errorf("OID must have at least 2 arcs")
 	}
+	if oid[0] < 0 || oid[0] > 2 {
+		return nil, fmt.Errorf("OID first arc %d not in 0..2", oid[0])
+	}
+	if oid[1] < 0 || (oid[0] < 2 && oid[1] >= 40) {
+		return nil, fmt.Errorf("OID second arc %d out of range for first arc %d", oid[1], oid[0])
+	}
+	for i, arc := range oid[2:] {
+		if arc < 0 {
+			return nil, fmt.Errorf("OID arc %d is negative", i+2)
+		}
+	}
 	first := oid[0]*40 + oid[1]
 	var buf []byte
 	buf = appendBase128(buf, first)
@@ -214,7 +225,17 @@ func DecodeObjectIdentifier(data []byte) ([]int, error) {
 	if err != nil {
 		return nil, fmt.Errorf("OID first component: %w", err)
 	}
-	oid := []int{first / 40, first % 40}
+	// X.690 §8.19.4: the first subidentifier is 40*X+Y with X in 0..2;
+	// only X=2 allows Y >= 40.
+	var oid []int
+	switch {
+	case first < 40:
+		oid = []int{0, first}
+	case first < 80:
+		oid = []int{1, first - 40}
+	default:
+		oid = []int{2, first - 80}
+	}
 	offset := n
 	for offset < len(data) {
 		arc, n, err := decodeBase128(data, offset)

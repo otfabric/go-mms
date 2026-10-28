@@ -1,5 +1,64 @@
 # go-mms Releases
 
+## v1.1.0
+
+**Date:** 2026-10-28
+**Previous release:** v1.0.7
+
+## Summary
+
+Fixes FileDirectory against conforming servers ([#2](https://github.com/otfabric/go-mms/issues/2))
+and fifteen further wire and behaviour bugs. All of them were found by
+extending the tests to the whole public API: a new `e2e` package runs every
+exported method between a go-mms client and server, and the libiec61850
+interop suite now covers files, journals, reports, Status, alternate access,
+every NVL scope and both abort directions. Both suites fail when a new public
+method has no test. No exported API is added or removed; some error codes and
+edge behaviours change (see Changed).
+
+Requires the mms-interop v0.2.0 adapters (files, journals, reports, Status,
+alternate access, abort). CI pulls
+`ghcr.io/otfabric/mms-interop-libiec61850@sha256:0ce17d8471eda3a3ef8949a5819b44359a2aeaec23695fee06c5dbea083f0391`
+from that [release](https://github.com/otfabric/mms-interop/releases/tag/v0.2.0).
+
+## Changes
+
+### Fixed
+
+- **FileDirectory** ([#2](https://github.com/otfabric/go-mms/issues/2)) — `listOfDirectoryEntry [0]` is an EXPLICIT tag; the server now encodes the inner SEQUENCE OF, and the client accepts both forms.
+- **FileDelete request** — the file name is the direct content of `[76] IMPLICIT FileName`; the extra wrapper made libiec61850 reject the request.
+- **ReadJournal response** — entries include the mandatory `originatingApplication`; the client skips it on decode.
+- **TypeDescription objId** — the tag is `[15]`, not `[8]` (which does not exist). The server can now describe and register GeneralizedTime `[11]`, BCD `[13]` and ObjectIdentifier `[15]` variables; it previously failed to encode their type.
+- **OBJECT IDENTIFIER** — first-subidentifier decoding follows X.690 §8.19.4 (first arc 2 with a second arc ≥ 40 decoded wrongly); invalid arcs are rejected on encode.
+- **BinaryTime** — instants outside 1984-01-01…2163-06-05 fail to encode instead of silently wrapping the 16-bit day count. Applies to `NewBinaryTime` values and journal start, stop, after and occurrence times.
+- **FileOpen `initialPosition`** — the server ignored it; reads now start at the requested offset, and a position past the end returns File / position-invalid.
+- **Server responses and the negotiated PDU size** — FileRead, FileDirectory, GetNameList (including journals) and ReadJournal responses are sized to the negotiated maximum; lists continue on the next request with `moreFollows`. A response that cannot fit returns ServiceError Resource / other instead of an oversized PDU.
+- **PDU size checks** — client and server measured the session/presentation-framed frame instead of the MMS PDU, rejecting valid PDUs close to the limit.
+- **Client hang** — a request issued while the reader loop was exiting could wait until its context expired; it now fails immediately.
+- **Peer abort / release** — when the peer aborts or releases the association, or the connection drops, pending and later calls fail with an error matching `ErrClosed`.
+- **`ServerConn.Abort`** — sends ACSE ABRT and now also closes the connection; previously the association stayed open.
+- **`iso.Listener.Accept` cancellation** — returns as soon as the context is cancelled instead of after the next 500 ms poll.
+- **Unknown file times** — a zero `FileEntry.LastModified` or `FileAttributes.LastModified` is omitted from FileDirectory and FileOpen responses (the field is OPTIONAL). It was sent as `00010101000000Z`, which libiec61850 clients read as 18446744073709551616 ms.
+- **Empty / oversized alternate access** — a File/Read/Write `[5]` with no selectors, an empty component name, or a component longer than 1024 bytes is rejected (libiec61850 1.6.2.1 LIB61850-572 / LIB61850-566). `FileDirectoryAll` already stops on `moreFollows` with no entries (LIB61850-579).
+
+### Changed
+
+- **Unknown domain or variable in Read/Write** — the server answers DataAccessError `object-non-existent` (10) instead of `object-undefined` (4), matching libiec61850. Alternate-access mismatches keep `object-undefined`.
+- **GetNameList of an unknown domain** — the server returns ServiceError Access / object-non-existent instead of an empty list. Journal name lists are still delegated to the `JournalProvider`.
+
+### Tests
+
+- **`e2e/`** (runs in `go test ./...`) — every exported `Client`, `Server`, `ServerConn` method and `Value` constructor exercised between a go-mms client and server over ISO transport, including paging under small PDU sizes, both device directory conventions and entries without `lastModified` (checked on the wire), authentication, per-association variables, reports, UnsolicitedStatus and both abort directions. `TestAPICoverage` fails when a method or constructor has no test.
+- **`interop/`** — 117 tests against libiec61850 `v1.6.2.1-89-g6e265c54` in both directions (from 53). `TestInteropCoverage` fails when a public method or a dispatched server service has neither an interop test nor a documented exemption. Peer limitations (listOfVariable reports, FileOpen initial position, bulk NVL delete, ObtainFile role reversal) are asserted, not skipped.
+- Unit tests for the fixed encodings, and libiec61850-encoded wire vectors in `internal/pdu/peer_vectors_test.go`.
+
+### Docs
+
+- API.md: File and Journal signatures, directory listing conventions seen on devices (flattened `/` paths vs per-level listings with `dir\` entries) and optional `lastModified`; the same on the `FileDirectoryEntry` godoc.
+- INTEROP.md matrix and coverage guard, COMPLIANCE.md interop column, KNOWN_LIMITATIONS.md (BinaryTime range, Real/BooleanArray type descriptions, OID arcs, ObtainFile role reversal, client UnsolicitedStatus), ERRORS.md (`ErrClosed`, unknown-object codes).
+
+---
+
 ## v1.0.7
 
 **Date:** 2026-07-30

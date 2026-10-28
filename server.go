@@ -57,10 +57,11 @@ var (
 // These use the public DataAccessErrorCode constants and are independent
 // of the ConfirmedErrorPDU service-error codes above.
 const (
-	wireErrObjectUndefined  = DataAccessErrorObjectUndefined
-	wireErrAccessDenied     = DataAccessErrorObjectAccessDenied
-	wireErrTempUnavail      = DataAccessErrorTemporarilyUnavailable
-	wireErrTypeInconsistent = DataAccessErrorTypeInconsistent
+	wireErrObjectUndefined   = DataAccessErrorObjectUndefined
+	wireErrObjectNonExistent = DataAccessErrorObjectNonExistent
+	wireErrAccessDenied      = DataAccessErrorObjectAccessDenied
+	wireErrTempUnavail       = DataAccessErrorTemporarilyUnavailable
+	wireErrTypeInconsistent  = DataAccessErrorTypeInconsistent
 )
 
 // wireErrCode converts a DataAccessErrorCode to its validated MMS wire integer.
@@ -555,8 +556,8 @@ func (sc *ServerConn) listAssocVars(continueAfter string, maxNames int) servermo
 }
 
 // Abort sends a protocol-level MMS Abort PDU (ACSE ABRT wrapped in a
-// Session ABORT SPDU) to the connected client. This is a best-effort
-// send — the caller should close the transport regardless of the error.
+// Session ABORT SPDU) to the connected client and closes the connection.
+// The send is best-effort: the connection is closed even if it fails.
 // Returns [ErrServerConnClosed] if the connection was already closed.
 func (sc *ServerConn) Abort(ctx context.Context) error {
 	sc.mu.RLock()
@@ -566,7 +567,12 @@ func (sc *ServerConn) Abort(ctx context.Context) error {
 	}
 	sc.mu.RUnlock()
 
-	return sc.conn.SendAbort(ctx)
+	sendErr := sc.conn.SendAbort(ctx)
+	closeErr := sc.conn.Close()
+	if sendErr != nil {
+		return sendErr
+	}
+	return closeErr
 }
 
 // SendUnsolicitedStatus sends an UnsolicitedStatus unconfirmed PDU to
@@ -853,6 +859,10 @@ func (s *Server) handleGetNameList(ctx context.Context, body []byte) (int, bool,
 		return s.handleGetNameListJournal(ctx, req)
 	}
 
+	if req.Scope == pdu.ScopeDomain && !s.registry.HasDomain(req.DomainID) {
+		return 0, false, nil, errObjectNonExistent
+	}
+
 	var result servermodel.NameListResult
 	switch {
 	case req.ObjectClass == int(ObjectClassDomain) && req.Scope == pdu.ScopeVMD:
@@ -881,8 +891,13 @@ func (s *Server) handleGetNameList(ctx context.Context, body []byte) (int, bool,
 		return 0, false, nil, errUnsupportedFeature
 	}
 
-	respBytes, err := pdu.MarshalGetNameListResponse(result.Names, result.MoreFollows)
+	respBytes, err := fitList(len(result.Names), s.responseBudget(ctx), func(k int, truncated bool) ([]byte, error) {
+		return pdu.MarshalGetNameListResponse(result.Names[:k], truncated || result.MoreFollows)
+	})
 	if err != nil {
+		if errors.Is(err, errResponseTooLarge) {
+			return 0, false, nil, err
+		}
 		return 0, false, nil, fmt.Errorf("marshal getnamelist response: %w", err)
 	}
 	return asn1util.TagNumGetNameList, true, respBytes, nil
@@ -912,8 +927,13 @@ func (s *Server) handleGetNameListJournal(ctx context.Context, req *pdu.GetNameL
 		}
 	}
 
-	respBytes, err := pdu.MarshalGetNameListResponse(names, false)
+	respBytes, err := fitList(len(names), s.responseBudget(ctx), func(k int, truncated bool) ([]byte, error) {
+		return pdu.MarshalGetNameListResponse(names[:k], truncated)
+	})
 	if err != nil {
+		if errors.Is(err, errResponseTooLarge) {
+			return 0, false, nil, err
+		}
 		return 0, false, nil, fmt.Errorf("marshal getnamelist response: %w", err)
 	}
 	return asn1util.TagNumGetNameList, true, respBytes, nil
@@ -972,7 +992,7 @@ func (s *Server) handleRead(ctx context.Context, body []byte) (int, bool, []byte
 		wn := spec.Name
 		entry, ok := s.lookupVariable(ctx, wn.Scope, wn.DomainID, wn.ItemID)
 		if !ok {
-			accessResults = append(accessResults, &pdu.AccessResult{IsError: true, ErrorCode: wireErrCode(wireErrObjectUndefined)})
+			accessResults = append(accessResults, &pdu.AccessResult{IsError: true, ErrorCode: wireErrCode(wireErrObjectNonExistent)})
 			continue
 		}
 
@@ -1047,7 +1067,7 @@ func (s *Server) handleWrite(ctx context.Context, body []byte) (int, bool, []byt
 		wn := spec.Name
 		entry, ok := s.lookupVariable(ctx, wn.Scope, wn.DomainID, wn.ItemID)
 		if !ok {
-			results = append(results, pdu.WriteResult{Code: wireErrCode(wireErrObjectUndefined)})
+			results = append(results, pdu.WriteResult{Code: wireErrCode(wireErrObjectNonExistent)})
 			continue
 		}
 
@@ -1362,6 +1382,12 @@ func typeSpecToWire(ts TypeSpec) (pdu.TypeSpecWire, error) {
 		return pdu.TypeSpecWire{Tag: 17}, nil
 	case ValueTypeBinaryTime:
 		return pdu.TypeSpecWire{Tag: 12}, nil
+	case ValueTypeGeneralizedTime:
+		return pdu.TypeSpecWire{Tag: 11}, nil
+	case ValueTypeBCD:
+		return pdu.TypeSpecWire{Tag: 13, Size: ts.Size}, nil
+	case ValueTypeObjectIdentifier:
+		return pdu.TypeSpecWire{Tag: 15}, nil
 	case ValueTypeStructure:
 		comps := make([]pdu.StructComponentWire, len(ts.Elements))
 		for i, e := range ts.Elements {

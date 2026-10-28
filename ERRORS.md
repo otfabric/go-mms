@@ -89,7 +89,7 @@ sentinel is needed.
 
 | Sentinel | Category | When returned | Check with |
 |----------|----------|---------------|------------|
-| `ErrClosed` | Closed connection | Any client method after `Close`/`Abort`; pending requests cancelled during shutdown | `errors.Is(err, mms.ErrClosed)` |
+| `ErrClosed` | Closed connection | Any client method after `Close`/`Abort`, after the peer aborted or released the association, or after the connection was lost; pending requests are failed with it | `errors.Is(err, mms.ErrClosed)` |
 | `ErrInvokeTimeout` | Invoke timeout | Confirmed request timed out waiting for peer response | `errors.Is(err, mms.ErrInvokeTimeout)` |
 | `ErrConnectionRejected` | Association rejection | `NewClient`/`Dial` when the peer rejects the ACSE association | `errors.Is(err, mms.ErrConnectionRejected)` |
 | `ErrAssociationFailed` | Association failure | `NewClient`/`Dial` when the association handshake fails | `errors.Is(err, mms.ErrAssociationFailed)` |
@@ -167,6 +167,9 @@ within an otherwise successful response.
 | `DataAccessErrorObjectValueInvalid` | 11 | Object value invalid |
 
 Values 0–11 match the ISO 9506-2 `DataAccessError` wire encoding. The
+go-mms server answers a Read or Write of an unknown domain or variable with
+`ObjectNonExistent`, as libiec61850 does, and an alternate access that does
+not match the variable's type with `ObjectUndefined`. The
 deprecated aliases `DataAccessErrorTemporarilyUnavail`,
 `DataAccessErrorObjectAccessUnsup`, `DataAccessErrorTypeMismatch`
 (= `TypeUnsupported`) and `DataAccessErrorObjectExists`
@@ -274,8 +277,9 @@ _, err := client.Read(ctx, mms.ReadRequest{DomainID: "D", ItemID: "V"})
 var dae *mms.DataAccessError
 if errors.As(err, &dae) {
     fmt.Printf("data access error: %s\n", dae.Code)
-    if dae.Code == mms.DataAccessErrorObjectUndefined {
-        // variable does not exist on the server
+    switch dae.Code {
+    case mms.DataAccessErrorObjectNonExistent, mms.DataAccessErrorObjectUndefined:
+        // variable does not exist on the server (servers use either code)
     }
 }
 ```
