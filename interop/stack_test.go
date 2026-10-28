@@ -33,6 +33,12 @@ type peerStack struct {
 	// fixtures/capabilities.json knownLimitations and INTEROP.md); a
 	// go-mms bug is never skipped.
 	skips map[string]string
+
+	// iedOnly: the stack packages only IEC 61850 IED adapters
+	// (<name>-ied-server and friends), not the MMS contract adapters. The
+	// MMS contract suite skips; the IED server suite
+	// (ied_server_test.go) runs against <name>-ied-server instead.
+	iedOnly bool
 }
 
 // quirks records documented peer behaviours (capabilities.json
@@ -52,6 +58,16 @@ type quirks struct {
 	// values it would set (true, 77) stay at those of write-multiple
 	// (false, 0) for later reads and reports.
 	noWriteNVL bool
+	// noIdentify: the server cannot decode an Identify request and sends
+	// no response; the association stays usable.
+	noIdentify bool
+	// noConclude: the server cannot decode a Conclude request and sends
+	// no response, so Close ends at its context deadline.
+	noConclude bool
+	// disconnectOnUnknownName: a Read of a name the server does not have
+	// ends the connection (COTP DR) instead of returning a data access
+	// error.
+	disconnectOnUnknownName bool
 }
 
 const defaultStack = "libiec61850"
@@ -72,6 +88,12 @@ var peerStacks = map[string]peerStack{
 		name:     "iec61850-rust",
 		imageEnv: "IEC61850RUST_IMAGE",
 		skips:    iec61850RustSkips,
+	},
+	"iec61850bean": {
+		name:     "iec61850bean",
+		imageEnv: "IEC61850BEAN_IMAGE",
+		quirks:   quirks{noIdentify: true, noConclude: true, disconnectOnUnknownName: true},
+		iedOnly:  true,
 	},
 }
 
@@ -101,14 +123,18 @@ func (s peerStack) image() string {
 	return getEnv(s.imageEnv, "mms-interop-"+s.name+":local")
 }
 
-func (s peerStack) serverCommand() string { return s.name + "-mms-server" }
-func (s peerStack) clientCommand() string { return s.name + "-mms-client" }
+func (s peerStack) serverCommand() string    { return s.name + "-mms-server" }
+func (s peerStack) iedServerCommand() string { return s.name + "-ied-server" }
+func (s peerStack) clientCommand() string    { return s.name + "-mms-client" }
 
 // skipForStack skips t when the selected stack cannot run it. Subtests
 // inherit their parent's entry.
 func skipForStack(t *testing.T) {
 	t.Helper()
 	s := stack(t)
+	if s.iedOnly {
+		t.Skipf("%s: no MMS contract adapter (IEC 61850 IED adapters only; see TestIEDServer_*)", s.name)
+	}
 	name := t.Name()
 	for {
 		if reason, ok := s.skips[name]; ok {
