@@ -68,7 +68,6 @@ server logs a warning and skips them.
 | Transport protocol | TCP only (RFC 1006 TPKT framing). No native OSI transport, UDP, or serial support. |
 | TLS | Supported via `iso.WithTLSConfig`, but DTLS and other non-TCP-TLS variants are not supported. |
 | Custom transports | The `Transport` interface allows arbitrary implementations, but the library does not provide any beyond `transport/iso`. |
-| go-cotp deadlines (worked around) | go-cotp v1.0.4 `ReadTSDU`/`WriteTSDU` arm a both-direction `SetDeadline` and clear it afterwards, which breaks full-duplex use (a write's deadline aborts the concurrent read and vice versa). `transport/iso` works around it: go-cotp gets a wrapper that ignores deadlines after the COTP handshake, and the transport applies per-direction read/write deadlines itself. Custom transports built directly on go-cotp need the same care. |
 
 ## Behavioral Limitations
 
