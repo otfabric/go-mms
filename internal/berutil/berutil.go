@@ -90,7 +90,7 @@ func DecodeTLV(data []byte) (tag byte, content []byte, err error) {
 // DecodeTLVAt decodes a TLV at a given offset, returning the tag,
 // content, and the total number of bytes consumed (tag + length + value).
 func DecodeTLVAt(data []byte, offset int) (tag byte, content []byte, consumed int, err error) {
-	if offset >= len(data) {
+	if offset < 0 || offset >= len(data) {
 		return 0, nil, 0, fmt.Errorf("offset %d beyond data length %d", offset, len(data))
 	}
 	tag = data[offset]

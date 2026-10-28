@@ -10,9 +10,15 @@ import (
 )
 
 // ServiceTag reconstructs the single-byte BER tag from an asn1.RawValue
-// parsed from inside a confirmed request/response envelope.
+// parsed from inside a confirmed request/response envelope. A tag number
+// above 30 (long form) yields the long-form marker 0x1f in the number
+// bits, which matches no single-byte tag, instead of a truncated number.
 func ServiceTag(raw asn1.RawValue) byte {
-	tag := byte(raw.Class<<6) | byte(raw.Tag&0x1f)
+	num := byte(0x1f)
+	if raw.Tag <= 30 {
+		num = byte(raw.Tag)
+	}
+	tag := byte(raw.Class<<6) | num
 	if raw.IsCompound {
 		tag |= 0x20
 	}

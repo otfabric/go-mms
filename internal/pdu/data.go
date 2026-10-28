@@ -113,7 +113,9 @@ func MarshalData(v *DataValue) ([]byte, error) {
 		return berutil.EncodeTLV(TagDataObjId, content), nil
 
 	case TagDataGenTime:
-		ts := v.Time.UTC().Format("20060102150405Z")
+		// Fractional seconds (accepted on decode) are kept; whole
+		// seconds encode without a fraction as before.
+		ts := v.Time.UTC().Format("20060102150405.999999999Z")
 		return berutil.EncodeTLV(TagDataGenTime, []byte(ts)), nil
 
 	case TagDataBCD:
@@ -470,8 +472,9 @@ func encodeUTCTime(t time.Time, quality uint8) []byte {
 	buf := make([]byte, 8)
 	secs := uint32(t.Unix())
 	binary.BigEndian.PutUint32(buf[0:4], secs)
-	ns := t.Nanosecond()
-	frac := uint32(float64(ns) / 1e9 * float64(1<<24))
+	// Round to the nearest 2^-24 s; together with the rounding in
+	// decodeUTCTime this makes decode→encode lossless.
+	frac := min((uint64(t.Nanosecond())<<24+5e8)/1e9, 1<<24-1)
 	buf[4] = byte(frac >> 16)
 	buf[5] = byte(frac >> 8)
 	buf[6] = byte(frac)
@@ -485,7 +488,7 @@ func decodeUTCTime(data []byte) (time.Time, uint8, error) {
 	}
 	secs := binary.BigEndian.Uint32(data[0:4])
 	frac := uint32(data[4])<<16 | uint32(data[5])<<8 | uint32(data[6])
-	nanos := int64(float64(frac) / float64(1<<24) * 1e9)
+	nanos := int64((uint64(frac)*1e9 + 1<<23) >> 24)
 	return time.Unix(int64(secs), nanos).UTC(), data[7], nil
 }
 
@@ -509,9 +512,18 @@ var (
 
 // encodeBinaryTimeChecked encodes msEpoch (ms since the Unix epoch) as
 // TimeOfDay, rejecting instants the 6-byte form cannot represent.
+//
+// Values in [0, msPerDay) are encoded in the 4-octet form (milliseconds
+// since midnight, no date), which is what decodeBinaryTime returns for a
+// 4-octet value, so either form received from a peer can be sent back.
 func encodeBinaryTimeChecked(msEpoch int64) ([]byte, error) {
+	if msEpoch >= 0 && msEpoch < msPerDay {
+		buf := make([]byte, 4)
+		binary.BigEndian.PutUint32(buf, uint32(msEpoch))
+		return buf, nil
+	}
 	if msEpoch < binaryTimeMinMs || msEpoch > binaryTimeMaxMs {
-		return nil, fmt.Errorf("pdu: binary time %s outside 1984-01-01..2163-06-05",
+		return nil, fmt.Errorf("pdu: binary time %s outside 1984-01-01..2163-06-05 (and not a 4-octet time of day)",
 			time.UnixMilli(msEpoch).UTC().Format(time.RFC3339))
 	}
 	return encodeBinaryTime(msEpoch), nil
@@ -529,7 +541,15 @@ func encodeBinaryTime(msEpoch int64) []byte {
 	return buf
 }
 
+// msPerDay bounds the milliseconds-since-midnight field of TimeOfDay.
+const msPerDay = 24 * 60 * 60 * 1000
+
 func decodeBinaryTime(data []byte) (int64, error) {
+	if len(data) == 4 || len(data) == 6 {
+		if ms := binary.BigEndian.Uint32(data[0:4]); ms >= msPerDay {
+			return 0, fmt.Errorf("binary time: %d ms since midnight exceeds one day", ms)
+		}
+	}
 	switch len(data) {
 	case 4:
 		ms := int64(binary.BigEndian.Uint32(data))

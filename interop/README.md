@@ -15,13 +15,17 @@ Tests start adapter containers, wait for the readiness event, exercise the `go-m
 
 ```bash
 # Build the adapter images first (in mms-interop)
-cd ../mms-interop && make build-libiec61850 ADAPTER_VERSION=v0.2.0
+cd ../mms-interop && make build-libiec61850 build-dscsystems build-iec61850-rust
 
 # Run all interop tests
 LIBIEC61850_IMAGE=mms-interop-libiec61850:local make interop
 
-# Or using the published v0.2.0 image (CI pins the digest in interop.yml)
-LIBIEC61850_IMAGE=ghcr.io/otfabric/mms-interop-libiec61850:v0.2.0 make interop
+# Another peer stack, or all of them (see INTEROP.md#peer-stacks)
+MMS_INTEROP_STACK=dscsystems make interop
+make interop-all
+
+# Or using the published v0.3.0 images (CI pins the digests in interop.yml)
+LIBIEC61850_IMAGE=ghcr.io/otfabric/mms-interop-libiec61850:v0.3.0 make interop
 ```
 
 ## Environment variables

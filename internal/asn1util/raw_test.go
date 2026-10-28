@@ -198,3 +198,17 @@ func TestWrapContextTag_RoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestEncodeTagNumber_Large(t *testing.T) {
+	for n, want := range map[int][]byte{
+		0:         {0x00},
+		127:       {0x7f},
+		128:       {0x81, 0x00},
+		1 << 21:   {0x81, 0x80, 0x80, 0x00},
+		1<<31 - 1: {0x87, 0xff, 0xff, 0xff, 0x7f},
+	} {
+		if got := encodeTagNumber(n); string(got) != string(want) {
+			t.Errorf("encodeTagNumber(%d) = %x, want %x", n, got, want)
+		}
+	}
+}

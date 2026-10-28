@@ -18,6 +18,8 @@ import (
 var apiCoverage = map[string][]string{
 	"Client.Abort":                          {"TestClient_Abort"},
 	"Client.Close":                          {"TestClient_Close", "TestServer_Connections"},
+	"Client.Done":                           {"TestClient_Done_Err_Reconnect"},
+	"Client.Err":                            {"TestClient_Done_Err_Reconnect"},
 	"Client.DefineNamedVariableList":        {"TestClient_NamedVariableLists", "TestClient_DeleteAllNVLs"},
 	"Client.DeleteAllDomainNVLs":            {"TestClient_DeleteAllNVLs"},
 	"Client.DeleteAllVMDNVLs":               {"TestClient_DeleteAllNVLs"},
@@ -69,6 +71,7 @@ var apiCoverage = map[string][]string{
 	"Server.RegisterVariable":          {"TestServer_RegisterDomain_RegisterVariable"},
 	"Server.Serve":                     {"TestServer_Serve"},
 	"Server.SetVariableRead":           {"TestServer_SetVariableRead"},
+	"Server.Shutdown":                  {"TestServer_Shutdown", "TestServer_Shutdown_InFlight"},
 
 	"ServerConn.Abort":                 {"TestServerConn_Abort"},
 	"ServerConn.AuthToken":             {"TestServerConn_AuthToken"},
@@ -76,7 +79,10 @@ var apiCoverage = map[string][]string{
 	"ServerConn.SendInformationReport": {"TestServerConn_SendInformationReport", "TestClient_OnInformationReport"},
 	"ServerConn.SendUnsolicitedStatus": {"TestServerConn_SendUnsolicitedStatus"},
 
+	"DefaultRetryPolicy":    {"TestClient_Done_Err_Reconnect"},
+	"IsRetryable":           {"TestClient_Done_Err_Reconnect"},
 	"NewClient":             {"TestClient_NewClient"},
+	"Retry":                 {"TestClient_Done_Err_Reconnect"},
 	"NewDataAccessError":    {"TestValues_DataAccessError"},
 	"NewServer":             {"TestServer_ListenAndServe", "TestServer_RegisterDomain_RegisterVariable"},
 	"SelectComponent":       {"TestClient_ReadVariables_WriteVariables"},

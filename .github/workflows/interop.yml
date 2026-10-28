@@ -11,18 +11,25 @@ permissions:
   contents: read
   packages: read
 
-# Digest from https://github.com/otfabric/mms-interop/releases/tag/v0.2.0
-# (manifest.json images.libiec61850). Bump both the digest and the
-# interop/testdata/interop.json fixture copy when mms-interop publishes a
-# new adapter.
+# Adapter images from the mms-interop v0.3.0 release (manifest.json images.*),
+# pinned by digest. When mms-interop publishes new adapters, bump the
+# digests below and the interop/testdata/interop.json fixture copy
+# together.
 env:
-  LIBIEC61850_IMAGE: ghcr.io/otfabric/mms-interop-libiec61850@sha256:0ce17d8471eda3a3ef8949a5819b44359a2aeaec23695fee06c5dbea083f0391
+  MMS_INTEROP_RELEASE: v0.3.0
+  LIBIEC61850_IMAGE: ghcr.io/otfabric/mms-interop-libiec61850@sha256:18e7e5c249f74e708a0699bd64732cd238ad9579574431a16b27b9c6000232a0
+  DSCSYSTEMS_IMAGE: ghcr.io/otfabric/mms-interop-dscsystems@sha256:f0b233737c1bd6e9cc6cfe7338bb287ed0e5b4a6b589b7496ae2409501dc6deb
+  IEC61850RUST_IMAGE: ghcr.io/otfabric/mms-interop-iec61850-rust@sha256:ebd09921ef9b22ed9a318256eb2fac74268dde7f18a17f9e8300aba46c624110
 
 jobs:
-  libiec61850:
-    name: libiec61850 MMS interop
+  interop:
+    name: ${{ matrix.stack }} MMS interop
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [libiec61850, dscsystems, iec61850-rust]
 
     steps:
       - uses: actions/checkout@v4
@@ -39,6 +46,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run interop suite
+        env:
+          MMS_INTEROP_STACK: ${{ matrix.stack }}
         run: make interop
 
       - name: Collect Docker diagnostics
@@ -52,6 +61,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: go-mms-interop-diagnostics
+          name: go-mms-interop-diagnostics-${{ matrix.stack }}
           path: artifacts/
           if-no-files-found: ignore

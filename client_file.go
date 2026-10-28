@@ -54,7 +54,7 @@ func (c *Client) FileOpen(ctx context.Context, fileName string, opts ...FileOpen
 
 	reqBytes, err := pdu.MarshalFileOpenRequest(invokeID, fileName, opt.InitialPosition)
 	if err != nil {
-		return nil, fmt.Errorf("mms: marshal file-open request: %w", err)
+		return nil, invalidArgf("mms: marshal file-open request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -64,14 +64,14 @@ func (c *Client) FileOpen(ctx context.Context, fileName string, opts ...FileOpen
 
 	if confirmed.ServiceKind != pdu.ServiceFileOpen {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected FileOpen response, got %s", confirmed.ServiceKind),
 		}
 	}
 
 	result, err := pdu.UnmarshalFileOpenResponse(confirmed.ServiceData.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("mms: %w", err)
+		return nil, decodeErrorf("mms: %w", err)
 	}
 
 	return &FileOpenResult{
@@ -88,7 +88,7 @@ func (c *Client) FileRead(ctx context.Context, frsmID int32) (*FileReadResult, e
 
 	reqBytes, err := pdu.MarshalFileReadRequest(invokeID, frsmID)
 	if err != nil {
-		return nil, fmt.Errorf("mms: marshal file-read request: %w", err)
+		return nil, invalidArgf("mms: marshal file-read request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -98,14 +98,14 @@ func (c *Client) FileRead(ctx context.Context, frsmID int32) (*FileReadResult, e
 
 	if confirmed.ServiceKind != pdu.ServiceFileRead {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected FileRead response, got %s", confirmed.ServiceKind),
 		}
 	}
 
 	result, err := pdu.UnmarshalFileReadResponse(confirmed.ServiceData.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("mms: %w", err)
+		return nil, decodeErrorf("mms: %w", err)
 	}
 
 	return &FileReadResult{
@@ -120,7 +120,7 @@ func (c *Client) FileClose(ctx context.Context, frsmID int32) error {
 
 	reqBytes, err := pdu.MarshalFileCloseRequest(invokeID, frsmID)
 	if err != nil {
-		return fmt.Errorf("mms: marshal file-close request: %w", err)
+		return invalidArgf("mms: marshal file-close request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -130,7 +130,7 @@ func (c *Client) FileClose(ctx context.Context, frsmID int32) error {
 
 	if confirmed.ServiceKind != pdu.ServiceFileClose {
 		return &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected FileClose response, got %s", confirmed.ServiceKind),
 		}
 	}
@@ -144,7 +144,7 @@ func (c *Client) FileDelete(ctx context.Context, fileName string) error {
 
 	reqBytes, err := pdu.MarshalFileDeleteRequest(invokeID, fileName)
 	if err != nil {
-		return fmt.Errorf("mms: marshal file-delete request: %w", err)
+		return invalidArgf("mms: marshal file-delete request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -154,7 +154,7 @@ func (c *Client) FileDelete(ctx context.Context, fileName string) error {
 
 	if confirmed.ServiceKind != pdu.ServiceFileDelete {
 		return &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected FileDelete response, got %s", confirmed.ServiceKind),
 		}
 	}
@@ -168,7 +168,7 @@ func (c *Client) FileRename(ctx context.Context, currentName, newName string) er
 
 	reqBytes, err := pdu.MarshalFileRenameRequest(invokeID, currentName, newName)
 	if err != nil {
-		return fmt.Errorf("mms: marshal file-rename request: %w", err)
+		return invalidArgf("mms: marshal file-rename request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -178,7 +178,7 @@ func (c *Client) FileRename(ctx context.Context, currentName, newName string) er
 
 	if confirmed.ServiceKind != pdu.ServiceFileRename {
 		return &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected FileRename response, got %s", confirmed.ServiceKind),
 		}
 	}
@@ -195,7 +195,7 @@ func (c *Client) ObtainFile(ctx context.Context, sourceFile, destinationFile str
 
 	reqBytes, err := pdu.MarshalObtainFileRequest(invokeID, sourceFile, destinationFile)
 	if err != nil {
-		return fmt.Errorf("mms: marshal obtain-file request: %w", err)
+		return invalidArgf("mms: marshal obtain-file request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -205,7 +205,7 @@ func (c *Client) ObtainFile(ctx context.Context, sourceFile, destinationFile str
 
 	if confirmed.ServiceKind != pdu.ServiceObtainFile {
 		return &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected ObtainFile response, got %s", confirmed.ServiceKind),
 		}
 	}
@@ -219,7 +219,7 @@ func (c *Client) FileDirectory(ctx context.Context, req FileDirectoryRequest) (*
 	invokeID := c.nextInvokeID()
 	reqBytes, err := pdu.MarshalFileDirectoryRequest(invokeID, req.FileSpec, req.ContinueAfter)
 	if err != nil {
-		return nil, fmt.Errorf("mms: marshal file-directory request: %w", err)
+		return nil, invalidArgf("mms: marshal file-directory request: %w", err)
 	}
 
 	confirmed, err := c.sendConfirmed(ctx, invokeID, reqBytes)
@@ -229,14 +229,14 @@ func (c *Client) FileDirectory(ctx context.Context, req FileDirectoryRequest) (*
 
 	if confirmed.ServiceKind != pdu.ServiceFileDirectory {
 		return nil, &ProtocolError{
-			Phase:   "mms",
+			Phase:   PhaseMMS,
 			Message: fmt.Sprintf("expected FileDirectory response, got %s", confirmed.ServiceKind),
 		}
 	}
 
 	wireEntries, moreFollows, err := pdu.UnmarshalFileDirectoryResponse(confirmed.ServiceData.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("mms: %w", err)
+		return nil, decodeErrorf("mms: %w", err)
 	}
 
 	entries := make([]FileDirectoryEntry, len(wireEntries))
@@ -314,7 +314,7 @@ func (c *Client) FileDirectoryAll(ctx context.Context, fileSpec string) ([]FileD
 		}
 		if result.ContinueAfter == prevToken {
 			return nil, &ProtocolError{
-				Phase:   "mms",
+				Phase:   PhaseMMS,
 				Message: fmt.Sprintf("file directory: pagination stalled (continuation token %q did not advance)", result.ContinueAfter),
 			}
 		}

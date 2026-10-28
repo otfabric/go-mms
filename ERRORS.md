@@ -1,108 +1,70 @@
 # Error Taxonomy
 
 go-mms uses Go's standard error model with sentinel values and typed errors.
-All errors returned by the library wrap one of the sentinel values or a typed
-error struct that can be inspected with `errors.As`. Use `errors.Is` for
-category checks and `errors.As` to extract structured detail.
+Use `errors.Is` for category checks and `errors.As` to extract structured
+detail. **Never compare error strings**: messages are for humans and may
+change between releases (v1.2.0 added the ISO 9506-2 code name to
+`ServiceError.Error()`, for example).
 
-## Error Categories
+## Classification
 
-### Closed connection
+Errors are classified by attaching sentinel *kinds* without changing the
+message. An internal wrapper exposes them through `Unwrap() []error`, so a
+single error can match several sentinels and still match everything in its
+original chain (transport errors, `context` errors, typed errors):
 
-Operation attempted on a client or server connection that has already been
-closed (via `Close` or `Abort`).
+| Situation | Matches |
+|-----------|---------|
+| `NewClient` / `iso.Dial` association failure of any kind | `ErrAssociationFailed` (plus the cause, e.g. `ErrConnectionRejected`, `ErrDecodeFailed`, `*ProtocolError`, `context.DeadlineExceeded`) |
+| Peer rejected the ACSE association | `ErrConnectionRejected` and `ErrAssociationFailed` |
+| Invalid negotiated MMS version in the Initiate response | `ErrNegotiationFailed`, `ErrAssociationFailed`, `*ProtocolError` (phase `mms`) |
+| Request after `Close`/`Abort`, or after the association ended | `ErrClosed` |
+| Pending request failed because the connection was lost | `ErrClosed` (plus the transport error) |
+| Connection ended by an undecodable PDU | `ErrClosed` and `ErrDecodeFailed` |
+| Connection ended by a PDU larger than the negotiated maximum | `ErrClosed` and `ErrInvalidPDU` |
+| Request write failed | `ErrClosed` (the transport is closed; other pending requests fail too) |
+| Request deadline (context or `DialOptions.RequestTimeout`) | `ErrInvokeTimeout` and `context.DeadlineExceeded` |
+| Request context cancelled | `context.Canceled` |
+| Invalid caller argument or option | `ErrInvalidArgument` (nothing is sent) |
+| Malformed response to a request | `ErrDecodeFailed` |
+| ConfirmedErrorPDU | `*ServiceError`, `ErrServiceRejected` |
+| RejectPDU | `*RejectError`, `*ProtocolError` (phase `mms`), `ErrProtocol` |
+| `Server.Serve` association failure | `ErrAssociationFailed` (or `*AuthenticationError`) |
+| `Server.Serve` association ended abnormally | `ErrClosed` |
+| `Serve` / `ListenAndServe` after `Server.Shutdown` | `ErrServerClosed` |
 
-### Association rejection
-
-The remote peer rejected the ISO/ACSE association request during connection
-setup.
-
-### Association failure
-
-The association handshake failed for a reason other than explicit rejection
-(e.g., transport error during setup).
-
-### Negotiation failure
-
-The MMS Initiate handshake completed but parameter negotiation failed
-(e.g., invalid negotiated version).
-
-### Protocol violation
-
-Wire-level protocol error at any ISO stack layer (session, presentation,
-ACSE, or MMS). Covers unexpected PDU types, invoke ID mismatches, malformed
-responses, and reject PDUs from the peer.
-
-### Decode failure
-
-A received PDU could not be parsed. The `*DecodeError` typed error carries
-the byte offset and tag where parsing failed.
-
-### Invalid PDU
-
-A PDU is structurally invalid (reserved for malformed PDU detection).
-
-### Remote service error
-
-The remote peer returned a `ConfirmedErrorPDU`, indicating the requested
-MMS service was rejected at the application level. The `*ServiceError`
-typed error carries the error class, error code, and invoke ID.
-
-### Per-variable data access error
-
-An individual variable within a multi-variable Read or Write response
-reported an access error. This is distinct from a `ServiceError` — the
-overall Read/Write succeeded, but one or more variables had an access-level
-failure (e.g., object undefined, access denied).
-
-### Unsupported
-
-The requested operation or feature is not supported by the library.
-
-### Invoke timeout
-
-A confirmed request timed out waiting for a response from the peer.
-
-### Authentication failure
-
-The server-side authenticator rejected the client's credentials during
-association establishment. The `*AuthenticationError` typed error carries
-the rejection reason.
-
-### Server connection closed
-
-An operation was attempted on a `ServerConn` that has already been closed
-(the `Serve` call that created it has returned).
-
-### File access denied
-
-A `FileProvider` or `JournalProvider` implementation reported a permission
-error. Used server-side to map provider errors to MMS service error codes.
-
-### Timeout / cancellation
-
-Context deadline exceeded or cancelled. These use the standard
-`context.DeadlineExceeded` and `context.Canceled` errors; no custom
-sentinel is needed.
+`Client.Err()` returns the reason the association ended; it always matches
+`ErrClosed`.
 
 ## Sentinel Errors
 
-| Sentinel | Category | When returned | Check with |
-|----------|----------|---------------|------------|
-| `ErrClosed` | Closed connection | Any client method after `Close`/`Abort`, after the peer aborted or released the association, or after the connection was lost; pending requests are failed with it | `errors.Is(err, mms.ErrClosed)` |
-| `ErrInvokeTimeout` | Invoke timeout | Confirmed request timed out waiting for peer response | `errors.Is(err, mms.ErrInvokeTimeout)` |
-| `ErrConnectionRejected` | Association rejection | `NewClient`/`Dial` when the peer rejects the ACSE association | `errors.Is(err, mms.ErrConnectionRejected)` |
-| `ErrAssociationFailed` | Association failure | `NewClient`/`Dial` when the association handshake fails | `errors.Is(err, mms.ErrAssociationFailed)` |
-| `ErrNegotiationFailed` | Negotiation failure | `NewClient`/`Dial` when MMS Initiate parameter negotiation fails | `errors.Is(err, mms.ErrNegotiationFailed)` |
-| `ErrInvalidPDU` | Invalid PDU | A received PDU is structurally invalid | `errors.Is(err, mms.ErrInvalidPDU)` |
-| `ErrDecodeFailed` | Decode failure | PDU decoding failed; also unwrapped from `*DecodeError` | `errors.Is(err, mms.ErrDecodeFailed)` |
-| `ErrUnsupported` | Unsupported | Requested feature or operation is not supported | `errors.Is(err, mms.ErrUnsupported)` |
-| `ErrServiceRejected` | Remote service error | Peer returned a ConfirmedErrorPDU; also unwrapped from `*ServiceError` | `errors.Is(err, mms.ErrServiceRejected)` |
-| `ErrDataAccess` | Data access error | Per-variable access error in Read/Write; also unwrapped from `*DataAccessError` | `errors.Is(err, mms.ErrDataAccess)` |
-| `ErrProtocol` | Protocol violation | Protocol-level error; also unwrapped from `*ProtocolError` | `errors.Is(err, mms.ErrProtocol)` |
-| `ErrServerConnClosed` | Server connection closed | `ServerConn.SendInformationReport` after the connection is closed | `errors.Is(err, mms.ErrServerConnClosed)` |
-| `ErrAuthenticationFailed` | Authentication failure | Server-side `Serve` when the authenticator rejects the client; also unwrapped from `*AuthenticationError` | `errors.Is(err, mms.ErrAuthenticationFailed)` |
-| `ErrFileAccessDenied` | File access denied | `FileProvider`/`JournalProvider` implementations signal permission errors; server maps it to MMS error class "file", code "file-access-denied" | `errors.Is(err, mms.ErrFileAccessDenied)` |
+| Sentinel | When returned | Check with |
+|----------|---------------|------------|
+| `ErrClosed` | Any client method after `Close`/`Abort`, after the peer concluded, released or aborted the association, or after the connection was lost or failed to decode; pending requests fail with it. `Server.Serve` when an established association ends abnormally | `errors.Is(err, mms.ErrClosed)` |
+| `ErrInvokeTimeout` | A confirmed request's deadline expired (also matches `context.DeadlineExceeded`) | `errors.Is(err, mms.ErrInvokeTimeout)` |
+| `ErrConnectionRejected` | `NewClient`/`Dial` when the peer rejects the ACSE association | `errors.Is(err, mms.ErrConnectionRejected)` |
+| `ErrAssociationFailed` | `NewClient`/`Dial` when the association fails for any reason; `Server.Serve` when receiving or accepting the association fails (including `ServerOptions.AssociationTimeout`) | `errors.Is(err, mms.ErrAssociationFailed)` |
+| `ErrNegotiationFailed` | `NewClient`/`Dial` when MMS Initiate parameter negotiation fails | `errors.Is(err, mms.ErrNegotiationFailed)` |
+| `ErrInvalidPDU` | A received PDU exceeds the negotiated maximum PDU size (the client then closes the association) | `errors.Is(err, mms.ErrInvalidPDU)` |
+| `ErrDecodeFailed` | PDU decoding failed; also unwrapped from `*DecodeError` | `errors.Is(err, mms.ErrDecodeFailed)` |
+| `ErrUnsupported` | Requested feature or operation is not supported | `errors.Is(err, mms.ErrUnsupported)` |
+| `ErrServiceRejected` | Peer returned a ConfirmedErrorPDU; also unwrapped from `*ServiceError` | `errors.Is(err, mms.ErrServiceRejected)` |
+| `ErrDataAccess` | Per-variable access error in Read/Write; also unwrapped from `*DataAccessError` | `errors.Is(err, mms.ErrDataAccess)` |
+| `ErrProtocol` | Protocol-level error; also unwrapped from `*ProtocolError` and `*RejectError` | `errors.Is(err, mms.ErrProtocol)` |
+| `ErrServerConnClosed` | `ServerConn` methods after the connection is closed | `errors.Is(err, mms.ErrServerConnClosed)` |
+| `ErrAuthenticationFailed` | Server-side `Serve` when the authenticator rejects the client; also unwrapped from `*AuthenticationError` | `errors.Is(err, mms.ErrAuthenticationFailed)` |
+| `ErrFileAccessDenied` | `FileProvider`/`JournalProvider` implementations signal permission errors; server maps it to MMS error class "file", code "file-access-denied" | `errors.Is(err, mms.ErrFileAccessDenied)` |
+| `ErrServerClosed` | `Server.Serve` and `Server.ListenAndServe` after `Server.Shutdown` | `errors.Is(err, mms.ErrServerClosed)` |
+| `ErrInvalidArgument` | A caller-supplied argument or option is invalid (empty names, nil values, mismatched slices, values that cannot be encoded, bad selectors); the request is not sent | `errors.Is(err, mms.ErrInvalidArgument)` |
+
+Timeouts and cancellation also match the standard `context.DeadlineExceeded`
+and `context.Canceled`.
+
+### Phases
+
+`ProtocolError.Phase` is one of the constants `PhaseSession`
+(`"session"`), `PhasePresentation` (`"presentation"`), `PhaseACSE`
+(`"acse"`) or `PhaseMMS` (`"mms"`).
 
 ## Typed Errors
 
@@ -119,6 +81,19 @@ confirmed service request (Read, Write, GetNameList, etc.).
 
 - **Unwraps to:** `ErrServiceRejected`
 - **Check with:** `errors.As(err, &se)` and/or `errors.Is(err, mms.ErrServiceRejected)`
+- **`CodeName()`** returns the ISO 9506-2 name of `Code` within `Class`
+  (e.g. `"object-non-existent"` for class Access, code 2), or `""` when the
+  code is not defined for the class and for class Others. `Error()` includes
+  it, e.g. `mms: service error: class=Access code=2 (object-non-existent) invokeID=7`.
+  Switch on `Class` and `Code`, not on the message.
+
+**Server side.** An Identify or Status handler (`HandleIdentify`,
+`HandleStatus`) that returns a `*ServiceError` (possibly wrapped) has its
+`Class` and `Code` sent in the ConfirmedErrorPDU; other handler errors are
+sent as class Access, code 1. `FileProvider` and `JournalProvider` errors
+are mapped by kind (`fs.ErrNotExist`, `fs.ErrPermission`,
+`ErrFileAccessDenied`, other). A Status request with a malformed body is
+answered with class Service, code other (was class Resource).
 
 ### `*DecodeError`
 
@@ -147,6 +122,11 @@ within an otherwise successful response.
 
 - **Unwraps to:** `ErrDataAccess`
 - **Check with:** `errors.As(err, &dae)` and/or `errors.Is(err, mms.ErrDataAccess)`
+
+**Server side.** A `Variable.Read` or `Variable.Write` callback that
+returns a `*DataAccessError` (possibly wrapped) with a valid code (0–11) has
+that code sent in the access result. Any other callback error is sent as
+`DataAccessErrorTemporarilyUnavailable`.
 
 #### `DataAccessErrorCode` values
 
@@ -182,7 +162,7 @@ of the ISO stack.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `Phase` | `string` | ISO stack layer: `"session"`, `"presentation"`, `"acse"`, or `"mms"` |
+| `Phase` | `string` | ISO stack layer: `PhaseSession`, `PhasePresentation`, `PhaseACSE` or `PhaseMMS` |
 | `Message` | `string` | Human-readable description |
 
 - **Unwraps to:** `ErrProtocol`
@@ -191,10 +171,42 @@ of the ISO stack.
 Common `*ProtocolError` situations:
 - Unexpected PDU type in a confirmed response
 - Invoke ID mismatch between request and response
-- Peer sent a Reject PDU
+- Peer sent a Reject PDU (returned as `*RejectError`, which unwraps to a `*ProtocolError`)
 - Missing MMS Initiate Response in accepted association
 - Pagination stall in `GetNameListAll`
 - Connection closed before conclude response
+
+### `*RejectError`
+
+Returned when the peer answers a confirmed request with an MMS RejectPDU.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `Type` | `RejectType` | Which PDU kind was rejected (the rejectReason CHOICE alternative) |
+| `Reason` | `int` | Reject code within `Type` (e.g. 1 = unrecognized-service for `RejectConfirmedRequest`) |
+| `InvokeID` | `InvokeID` | Invoke ID echoed by the peer, valid when `HasInvokeID` |
+| `HasInvokeID` | `bool` | Whether the RejectPDU carried an invoke ID |
+
+- **Unwraps to:** `*ProtocolError` with `Phase == PhaseMMS`, and through it
+  `ErrProtocol`. Code written for earlier releases that checked
+  `errors.Is(err, mms.ErrProtocol)` or `errors.As(err, &pe)` keeps working.
+- **Check with:** `errors.As(err, &re)`
+
+`RejectType` values (`String()` returns the ISO 9506-2 name):
+
+| Constant | Value | Name |
+|----------|------:|------|
+| `RejectConfirmedRequest` | 1 | `confirmed-requestPDU` |
+| `RejectConfirmedResponse` | 2 | `confirmed-responsePDU` |
+| `RejectConfirmedError` | 3 | `confirmed-errorPDU` |
+| `RejectUnconfirmed` | 4 | `unconfirmedPDU` |
+| `RejectPDUError` | 5 | `pdu-error` |
+| `RejectCancelRequest` | 6 | `cancel-requestPDU` |
+| `RejectCancelResponse` | 7 | `cancel-responsePDU` |
+| `RejectCancelError` | 8 | `cancel-errorPDU` |
+| `RejectConcludeRequest` | 9 | `conclude-requestPDU` |
+| `RejectConcludeResponse` | 10 | `conclude-responsePDU` |
+| `RejectConcludeError` | 11 | `conclude-errorPDU` |
 
 ### `*AuthenticationError`
 
@@ -238,6 +250,7 @@ Every typed error implements `Unwrap()` returning its sentinel:
 *DecodeError         → ErrDecodeFailed
 *DataAccessError     → ErrDataAccess
 *ProtocolError       → ErrProtocol
+*RejectError         → *ProtocolError (phase mms) → ErrProtocol
 *AuthenticationError → ErrAuthenticationFailed
 ```
 
@@ -246,7 +259,9 @@ matches both the bare sentinel and the typed error that wraps it.
 
 Transport and context errors are wrapped with `fmt.Errorf("mms: ...: %w", err)`,
 preserving the original error for `errors.Is` checks (e.g.,
-`context.DeadlineExceeded`, `context.Canceled`, `io.EOF`).
+`context.DeadlineExceeded`, `context.Canceled`, `io.EOF`). Sentinel kinds
+(see [Classification](#classification)) are added on top without changing
+the message.
 
 ## Usage Examples
 
@@ -265,8 +280,11 @@ if errors.Is(err, mms.ErrClosed) {
 _, err := client.Read(ctx, mms.ReadRequest{DomainID: "D", ItemID: "V"})
 var se *mms.ServiceError
 if errors.As(err, &se) {
-    fmt.Printf("service error: class=%s code=%d invokeID=%d\n",
-        se.Class, se.Code, se.InvokeID)
+    fmt.Printf("service error: class=%s code=%d (%s) invokeID=%d\n",
+        se.Class, se.Code, se.CodeName(), se.InvokeID)
+    if se.Class == mms.ErrorClassAccess && se.Code == 2 { // object-non-existent
+        // ...
+    }
 }
 ```
 
@@ -291,7 +309,7 @@ ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 defer cancel()
 
 _, err := client.Read(ctx, mms.ReadRequest{DomainID: "D", ItemID: "V"})
-if errors.Is(err, context.DeadlineExceeded) {
+if errors.Is(err, mms.ErrInvokeTimeout) { // also matches context.DeadlineExceeded
     log.Println("request timed out")
 }
 if errors.Is(err, context.Canceled) {
@@ -309,12 +327,40 @@ if errors.As(err, &pe) {
 }
 ```
 
+### Checking for a Reject PDU
+
+```go
+_, err := client.Identify(ctx)
+var re *mms.RejectError
+if errors.As(err, &re) {
+    fmt.Printf("rejected: %s reason=%d\n", re.Type, re.Reason)
+}
+```
+
+### Checking for an invalid argument
+
+```go
+_, err := client.Read(ctx, mms.ReadRequest{DomainID: "", ItemID: "V"})
+if errors.Is(err, mms.ErrInvalidArgument) {
+    // caller bug; nothing was sent and the association is unaffected
+}
+```
+
+### Detecting a lost association
+
+```go
+<-client.Done()
+err := client.Err() // matches mms.ErrClosed; wraps the cause
+```
+
 ### Checking for association rejection during connect
 
 ```go
 client, err := mms.NewClient(ctx, transport, opts)
 if errors.Is(err, mms.ErrConnectionRejected) {
     log.Println("server rejected the association")
+} else if errors.Is(err, mms.ErrAssociationFailed) {
+    log.Println("association failed:", err)
 }
 ```
 
@@ -373,6 +419,24 @@ if errors.As(err, &authErr) {
 }
 ```
 
+### Server shutdown
+
+```go
+go func() { _ = srv.Shutdown(shutdownCtx) }()
+if err := srv.ListenAndServe(ctx, ln); !errors.Is(err, mms.ErrServerClosed) {
+    log.Fatal(err)
+}
+```
+
+### Server-side service error from a handler
+
+```go
+srv.HandleIdentify(func(ctx context.Context, _ mms.IdentifyRequest) (*mms.ServerIdentity, error) {
+    // Sent on the wire as class Access, code 3 (object-access-denied).
+    return nil, &mms.ServiceError{Class: mms.ErrorClassAccess, Code: 3}
+})
+```
+
 ### Server-side file access denied
 
 ```go
@@ -389,10 +453,12 @@ func (p *myProvider) Open(ctx context.Context, name string, opts mms.FileOpenOpt
 
 ```
 err from client method
+├── errors.Is(err, mms.ErrInvalidArgument)
+│   └── Caller bug — nothing was sent; fix the arguments
 ├── errors.Is(err, mms.ErrClosed)
-│   └── Client was closed — reconnect or exit
-├── errors.Is(err, context.DeadlineExceeded)
-│   └── Request timed out — retry or widen deadline
+│   └── Association ended — client.Err() has the cause; reconnect (mms.Retry) or exit
+├── errors.Is(err, mms.ErrInvokeTimeout)  (also context.DeadlineExceeded)
+│   └── Request timed out — retry or widen deadline; the association stays up
 ├── errors.Is(err, context.Canceled)
 │   └── Caller cancelled — usually intentional
 ├── errors.Is(err, mms.ErrServiceRejected)
@@ -400,11 +466,14 @@ err from client method
 ├── errors.Is(err, mms.ErrDataAccess)
 │   └── errors.As(err, &dae) → inspect dae.Code
 ├── errors.Is(err, mms.ErrProtocol)
+│   ├── errors.As(err, &re) → RejectPDU: inspect re.Type, re.Reason
 │   └── errors.As(err, &pe) → inspect pe.Phase, pe.Message
 ├── errors.Is(err, mms.ErrDecodeFailed)
 │   └── errors.As(err, &de) → inspect de.Offset, de.Tag
 ├── errors.Is(err, mms.ErrConnectionRejected)
 │   └── Peer rejected association — check credentials / config
+├── errors.Is(err, mms.ErrAssociationFailed)
+│   └── Association could not be established — mms.IsRetryable(err) says whether to retry
 └── other
     └── Transport-level or unexpected error — inspect err.Error()
 ```
