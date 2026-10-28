@@ -3,7 +3,9 @@
 package pdu
 
 import (
+	"bytes"
 	"encoding/asn1"
+	"encoding/hex"
 	"fmt"
 	"testing"
 	"time"
@@ -117,6 +119,185 @@ func TestUnmarshalFileOpenResponse_Validation(t *testing.T) {
 			t.Errorf("size = %d, want 1024", r.Size)
 		}
 	})
+}
+
+// fileDirectoryExplicitHex is a two-entry FileDirectory-Response body in
+// the ISO 9506-2 encoding, where listOfDirectoryEntry [0] is an explicit
+// tag around a universal SEQUENCE OF (issue #2). libiec61850 and
+// production IEDs send this form.
+const fileDirectoryExplicitHex = "a05530533027a00e190c5245434f524430312e434647a11580020400810f32303230" +
+	"303130323033303430355a3028a00e190c5245434f524430312e444154a116800301" +
+	"0000810f32303230303130323033303430355a"
+
+func TestFileDirectoryResponse_ExplicitListOfDirectoryEntry(t *testing.T) {
+	want := []FileDirectoryEntry{
+		{FileName: "RECORD01.CFG", Size: 1024, LastModified: time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)},
+		{FileName: "RECORD01.DAT", Size: 65536, LastModified: time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)},
+	}
+	wire, err := hex.DecodeString(fileDirectoryExplicitHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("encode", func(t *testing.T) {
+		got, err := MarshalFileDirectoryResponse(want, false)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if !bytes.Equal(got, wire) {
+			t.Fatalf("encoding mismatch\n got  %x\n want %x", got, wire)
+		}
+	})
+
+	t.Run("decode", func(t *testing.T) {
+		got, more, err := UnmarshalFileDirectoryResponse(wire)
+		if err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if more {
+			t.Error("moreFollows = true, want false")
+		}
+		assertDirectoryEntries(t, got, want)
+	})
+}
+
+// Peers that encode listOfDirectoryEntry as an implicit tag put the
+// DirectoryEntry SEQUENCEs directly inside [0]. go-mms itself sent this
+// form up to v1.0.7, so the decoder keeps accepting it.
+func TestFileDirectoryResponse_ImplicitListAccepted(t *testing.T) {
+	when := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	entry := func(name string, size uint32) []byte {
+		attrs := berutil.EncodeTLV(0xa1, append(
+			berutil.EncodeTLV(0x80, berutil.EncodeUint32(size)),
+			berutil.EncodeTLV(0x81, []byte(when.Format("20060102150405Z")))...))
+		return berutil.EncodeTLV(0x30, append(encodeFileNameTag(0xa0, name), attrs...))
+	}
+
+	tests := []struct {
+		name string
+		list []byte
+		want []FileDirectoryEntry
+	}{
+		{"empty", nil, nil},
+		{"one entry", entry("a.cfg", 1), []FileDirectoryEntry{{FileName: "a.cfg", Size: 1, LastModified: when}}},
+		{"two entries", append(entry("a.cfg", 1), entry("b.dat", 2)...), []FileDirectoryEntry{
+			{FileName: "a.cfg", Size: 1, LastModified: when},
+			{FileName: "b.dat", Size: 2, LastModified: when},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _, err := UnmarshalFileDirectoryResponse(berutil.EncodeTLV(0xa0, tt.list))
+			if err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			assertDirectoryEntries(t, got, tt.want)
+		})
+	}
+}
+
+func TestFileDirectoryResponse_EmptyExplicitList(t *testing.T) {
+	encoded, err := MarshalFileDirectoryResponse(nil, false)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if want := []byte{0xa0, 0x02, 0x30, 0x00}; !bytes.Equal(encoded, want) {
+		t.Fatalf("encoding = %x, want %x", encoded, want)
+	}
+	got, _, err := UnmarshalFileDirectoryResponse(encoded)
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("entries = %d, want 0", len(got))
+	}
+}
+
+// lastModified is OPTIONAL in FileAttributes and real IEDs omit it.
+func TestFileDirectoryResponse_LastModifiedOmitted(t *testing.T) {
+	noTime := berutil.EncodeTLV(0x30, append(
+		encodeFileNameTag(0xa0, "NOTIME.DAT"),
+		berutil.EncodeTLV(0xa1, berutil.EncodeTLV(0x80, berutil.EncodeUint32(512)))...))
+	withTime := berutil.EncodeTLV(0x30, append(
+		encodeFileNameTag(0xa0, "TIME.DAT"),
+		berutil.EncodeTLV(0xa1, append(
+			berutil.EncodeTLV(0x80, berutil.EncodeUint32(7)),
+			berutil.EncodeTLV(0x81, []byte("20200102030405Z"))...))...))
+	body := berutil.EncodeTLV(0xa0, berutil.EncodeTLV(0x30, append(noTime, withTime...)))
+
+	got, _, err := UnmarshalFileDirectoryResponse(body)
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	assertDirectoryEntries(t, got, []FileDirectoryEntry{
+		{FileName: "NOTIME.DAT", Size: 512},
+		{FileName: "TIME.DAT", Size: 7, LastModified: time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)},
+	})
+}
+
+// A zero LastModified is "unknown": the server omits [1] rather than
+// sending year 0001.
+func TestFileAttributes_ZeroLastModifiedOmitted(t *testing.T) {
+	dir, err := MarshalFileDirectoryResponse([]FileDirectoryEntry{{FileName: "NOTIME.DAT", Size: 512}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDir := berutil.EncodeTLV(0xa0, berutil.EncodeTLV(0x30, berutil.EncodeTLV(0x30, append(
+		encodeFileNameTag(0xa0, "NOTIME.DAT"),
+		berutil.EncodeTLV(0xa1, berutil.EncodeTLV(0x80, berutil.EncodeUint32(512)))...))))
+	if !bytes.Equal(dir, wantDir) {
+		t.Errorf("directory response = % x, want % x", dir, wantDir)
+	}
+
+	open, err := MarshalFileOpenResponse(3, 512, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantOpen := append(berutil.EncodeTLV(0x80, []byte{3}),
+		berutil.EncodeTLV(0xa1, berutil.EncodeTLV(0x80, berutil.EncodeUint32(512)))...)
+	if !bytes.Equal(open, wantOpen) {
+		t.Errorf("open response = % x, want % x", open, wantOpen)
+	}
+	r, err := UnmarshalFileOpenResponse(open)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.FrsmID != 3 || r.Size != 512 || !r.LastModified.IsZero() {
+		t.Errorf("open result = %+v", r)
+	}
+}
+
+// FileName is opaque: both separator conventions seen on devices, and a
+// subdirectory reported as a zero-size entry ending in a backslash, pass
+// through unchanged.
+func TestFileDirectoryResponse_NamesVerbatim(t *testing.T) {
+	when := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	entries := []FileDirectoryEntry{
+		{FileName: "COMTRADE/REC02.CFG", Size: 10, LastModified: when},
+		{FileName: "COMTRADE\\", Size: 0},
+		{FileName: "LOGS\\EVENTS.LOG", Size: 3},
+	}
+	body, err := MarshalFileDirectoryResponse(entries, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := UnmarshalFileDirectoryResponse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDirectoryEntries(t, got, entries)
+}
+
+func assertDirectoryEntries(t *testing.T, got, want []FileDirectoryEntry) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("entries = %d, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i].FileName != want[i].FileName || got[i].Size != want[i].Size || !got[i].LastModified.Equal(want[i].LastModified) {
+			t.Errorf("entry[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
 }
 
 func TestParseDirectoryEntries_BadTag(t *testing.T) {

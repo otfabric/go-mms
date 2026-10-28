@@ -599,6 +599,12 @@ func EncodeTypeSpec(ts TypeSpecWire) ([]byte, error) {
 		return berutil.EncodeTLV(0x90, encodeSmallInt(ts.Size)), nil // [16] Integer32
 	case tsTagUTCTime:
 		return berutil.EncodeTLV(0x91, nil), nil // [17] NULL
+	case tsTagGeneralizedTime:
+		return berutil.EncodeTLV(0x8b, nil), nil // [11] NULL
+	case tsTagBCD:
+		return berutil.EncodeTLV(0x8d, encodeSmallInt(ts.Size)), nil // [13] Unsigned8
+	case tsTagObjID:
+		return berutil.EncodeTLV(0x8f, nil), nil // [15] NULL
 	case tsTagBinaryTime:
 		b := byte(0x00)
 		if ts.BinTimeFull {

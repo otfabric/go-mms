@@ -49,9 +49,11 @@ func TestSendReceiveRaw_AndHooks(t *testing.T) {
 		t.Fatalf("recv: %v %v", got, err)
 	}
 
-	// Oversized PDU.
-	mt.sendToClient(make([]byte, 100))
-	if _, err := c.receiveRaw(ctx); err == nil {
+	// The negotiated limit applies to the MMS PDU, not the raw frame.
+	if err := c.checkPDUSize(make([]byte, 64)); err != nil {
+		t.Fatalf("PDU at the limit rejected: %v", err)
+	}
+	if err := c.checkPDUSize(make([]byte, 65)); err == nil {
 		t.Fatal("expected max PDU size error")
 	}
 

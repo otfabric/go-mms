@@ -4,6 +4,7 @@ package pdu
 
 import (
 	"encoding/asn1"
+	"encoding/hex"
 	"math"
 	"testing"
 	"time"
@@ -299,6 +300,9 @@ func FuzzUnmarshalFileDirectoryResponse(f *testing.F) {
 	}, false)
 	f.Add(seed)
 	f.Add([]byte{})
+	if explicit, err := hex.DecodeString(fileDirectoryExplicitHex); err == nil {
+		f.Add(explicit)
+	}
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		_, _, _ = UnmarshalFileDirectoryResponse(data)

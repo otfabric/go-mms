@@ -370,7 +370,9 @@ func NewUTCTimeWithQuality(t time.Time, quality uint8) *Value {
 }
 
 // NewBinaryTime creates a [Value] of type [ValueTypeBinaryTime].
-// The value is milliseconds since epoch.
+// The value is milliseconds since the Unix epoch. The MMS TimeOfDay
+// encoding counts days from 1984-01-01 in 16 bits, so only instants from
+// 1984-01-01 through 2163-06-05 can be sent; others fail to encode.
 func NewBinaryTime(ms int64) *Value {
 	return &Value{typ: ValueTypeBinaryTime, binaryTime: ms}
 }

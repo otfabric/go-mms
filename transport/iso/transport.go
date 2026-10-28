@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"io"
 	"net"
 	"sync"
 
@@ -61,7 +62,14 @@ func (t *cotpTransport) Close() error {
 	}
 	err := t.cotp.Close()
 	t.cotp = nil
-	if errors.Is(err, cotp.ErrClosed) {
+	// Local Close and a peer that already dropped the link are both
+	// success: the transport is gone. go-cotp reports the latter as
+	// ErrDisconnected (often wrapping io.EOF), not ErrClosed.
+	if err == nil ||
+		errors.Is(err, cotp.ErrClosed) ||
+		errors.Is(err, cotp.ErrDisconnected) ||
+		errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, io.EOF) {
 		return nil
 	}
 	return err

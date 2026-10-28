@@ -58,6 +58,12 @@ func NewListener(ln net.Listener, opts ...Option) *Listener {
 // connection is closed (by go-cotp) and Accept retries automatically.
 // Only listener-level or context-level errors cause Accept to return.
 func (l *Listener) Accept(ctx context.Context) (mms.Transport, error) {
+	if dl, ok := l.ln.(*net.TCPListener); ok {
+		// Wake a blocked Accept as soon as ctx is cancelled instead of at
+		// the next poll deadline.
+		stop := context.AfterFunc(ctx, func() { _ = dl.SetDeadline(time.Unix(1, 0)) })
+		defer stop()
+	}
 	for {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()

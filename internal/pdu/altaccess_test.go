@@ -3,6 +3,7 @@
 package pdu
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/otfabric/go-mms/internal/berutil"
@@ -200,6 +201,24 @@ func TestDecodeAlternateAccess_EmptyReturnsError(t *testing.T) {
 	_, err := encodeAlternateAccess(nil)
 	if err == nil {
 		t.Fatal("expected error for empty selectors")
+	}
+	if _, err := decodeAlternateAccess(nil); err == nil {
+		t.Fatal("expected error for empty [5] content")
+	}
+}
+
+func TestDecodeAlternateAccess_ComponentNameBounds(t *testing.T) {
+	if _, err := decodeAlternateAccess(berutil.EncodeTLV(tagSSComponent, nil)); err == nil {
+		t.Fatal("expected error for empty component")
+	}
+	tooLong := make([]byte, maxIdentifierLen+1)
+	if _, err := decodeAlternateAccess(berutil.EncodeTLV(tagSSComponent, tooLong)); err == nil {
+		t.Fatal("expected error for oversized component")
+	}
+	ok := bytes.Repeat([]byte{'a'}, maxIdentifierLen)
+	got, err := decodeAlternateAccess(berutil.EncodeTLV(tagSSComponent, ok))
+	if err != nil || len(got) != 1 || got[0].Component != string(ok) {
+		t.Fatalf("max-length component: %+v / %v", got, err)
 	}
 }
 

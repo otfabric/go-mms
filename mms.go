@@ -4,6 +4,7 @@ package mms
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -42,6 +43,7 @@ type Client struct {
 
 	readerCancel context.CancelFunc
 	readerDone   chan struct{} // closed when reader loop exits
+	readerErr    error         // why the reader loop exited; guarded by mu
 	concludeCh   chan struct{} // receives signal when ConcludeResponse arrives
 
 	reportMu      sync.RWMutex
@@ -472,6 +474,15 @@ func (c *Client) sendConfirmed(ctx context.Context, invokeID codec.InvokeID, mms
 	case <-ctx.Done():
 		c.tracker.Cancel(invokeID, ctx.Err())
 		return nil, fmt.Errorf("mms: %w", ctx.Err())
+	case <-c.readerDone:
+		// The reader may have delivered this response just before exiting.
+		select {
+		case resp = <-ch:
+		default:
+			err := c.readerExitErr()
+			c.tracker.Cancel(invokeID, err)
+			return nil, err
+		}
 	}
 
 	if resp.Err != nil {
@@ -563,6 +574,34 @@ func (c *Client) nextInvokeID() codec.InvokeID {
 	return c.tracker.NextID()
 }
 
+// readerExitErr reports why the reader loop exited. Requests issued after
+// that can never complete.
+func (c *Client) readerExitErr() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.readerErr != nil {
+		return c.readerErr
+	}
+	return ErrClosed
+}
+
+func (c *Client) stopReader(err error) {
+	c.mu.Lock()
+	c.readerErr = err
+	c.mu.Unlock()
+	c.tracker.CancelAll(err)
+}
+
+// checkPDUSize enforces the negotiated maximum on an MMS PDU. The limit
+// applies to the MMS PDU itself, not to the session/presentation framing
+// around it.
+func (c *Client) checkPDUSize(mmsPayload []byte) error {
+	if c.maxPDUSize > 0 && len(mmsPayload) > c.maxPDUSize {
+		return fmt.Errorf("mms: received PDU size %d exceeds negotiated max %d", len(mmsPayload), c.maxPDUSize)
+	}
+	return nil
+}
+
 func (c *Client) readerLoop(ctx context.Context) {
 	defer close(c.readerDone)
 
@@ -570,21 +609,31 @@ func (c *Client) readerLoop(ctx context.Context) {
 		rawData, err := c.receiveRaw(ctx)
 		if err != nil {
 			c.logger.Debug("mms: reader loop stopped", "error", err)
-			c.tracker.CancelAll(fmt.Errorf("mms: connection read: %w", err))
+			c.stopReader(fmt.Errorf("%w: connection read: %w", ErrClosed, err))
 			return
 		}
 
 		mmsPayload, err := isostack.DecodeDataResponse(rawData)
+		if errors.Is(err, isostack.ErrPeerReleased) {
+			c.logger.Info("mms: association ended by peer", "error", err)
+			c.stopReader(fmt.Errorf("%w: %w", ErrClosed, err))
+			return
+		}
 		if err != nil {
 			c.logger.Debug("mms: reader loop decode error", "error", err)
-			c.tracker.CancelAll(fmt.Errorf("mms: %w", err))
+			c.stopReader(fmt.Errorf("mms: %w", err))
+			return
+		}
+		if err := c.checkPDUSize(mmsPayload); err != nil {
+			c.logger.Debug("mms: reader loop PDU size error", "error", err)
+			c.stopReader(err)
 			return
 		}
 
 		kind, content, err := pdu.DecodePdu(mmsPayload)
 		if err != nil {
 			c.logger.Debug("mms: reader loop PDU error", "error", err)
-			c.tracker.CancelAll(fmt.Errorf("mms: decode PDU: %w", err))
+			c.stopReader(fmt.Errorf("mms: decode PDU: %w", err))
 			return
 		}
 
@@ -717,9 +766,6 @@ func (c *Client) receiveRaw(ctx context.Context) ([]byte, error) {
 	data, err := c.conn.Receive(ctx)
 	if err != nil {
 		return nil, err
-	}
-	if c.maxPDUSize > 0 && len(data) > c.maxPDUSize {
-		return nil, fmt.Errorf("mms: received PDU size %d exceeds negotiated max %d", len(data), c.maxPDUSize)
 	}
 	if c.opts.RawHook != nil {
 		c.opts.RawHook("recv", data)
@@ -2058,7 +2104,7 @@ func typeSpecFromWire(ts pdu.TypeSpecWire) (TypeSpec, error) {
 		return TypeSpec{Type: ValueTypeMmsString, Size: ts.Size}, nil
 	case 17: // utctime
 		return TypeSpec{Type: ValueTypeUTCTime}, nil
-	case 8: // objectidentifier
+	case 15: // objId
 		return TypeSpec{Type: ValueTypeObjectIdentifier}, nil
 	case 11: // generalizedtime
 		return TypeSpec{Type: ValueTypeGeneralizedTime}, nil

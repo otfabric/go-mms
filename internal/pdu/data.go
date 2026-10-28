@@ -93,7 +93,11 @@ func MarshalData(v *DataValue) ([]byte, error) {
 		return berutil.EncodeTLV(TagDataUTCTime, encodeUTCTime(v.Time, v.TimeQuality)), nil
 
 	case TagDataBinaryTime:
-		return berutil.EncodeTLV(TagDataBinaryTime, encodeBinaryTime(v.BinTimeMs)), nil
+		bt, err := encodeBinaryTimeChecked(v.BinTimeMs)
+		if err != nil {
+			return nil, err
+		}
+		return berutil.EncodeTLV(TagDataBinaryTime, bt), nil
 
 	case TagDataReal:
 		return berutil.EncodeTLV(TagDataReal, encodeASN1Real(v.Float)), nil
@@ -495,6 +499,23 @@ func decodeUTCTime(data []byte) (time.Time, uint8, error) {
 // date+time information.
 
 var epoch1984 = time.Date(1984, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// binaryTimeRange is the span the 6-byte form can carry: uint16 days
+// since 1984-01-01.
+var (
+	binaryTimeMinMs = epoch1984.UnixMilli()
+	binaryTimeMaxMs = epoch1984.AddDate(0, 0, 0xffff+1).UnixMilli() - 1
+)
+
+// encodeBinaryTimeChecked encodes msEpoch (ms since the Unix epoch) as
+// TimeOfDay, rejecting instants the 6-byte form cannot represent.
+func encodeBinaryTimeChecked(msEpoch int64) ([]byte, error) {
+	if msEpoch < binaryTimeMinMs || msEpoch > binaryTimeMaxMs {
+		return nil, fmt.Errorf("pdu: binary time %s outside 1984-01-01..2163-06-05",
+			time.UnixMilli(msEpoch).UTC().Format(time.RFC3339))
+	}
+	return encodeBinaryTime(msEpoch), nil
+}
 
 func encodeBinaryTime(msEpoch int64) []byte {
 	t := time.UnixMilli(msEpoch).UTC()

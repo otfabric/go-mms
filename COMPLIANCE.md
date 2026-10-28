@@ -8,31 +8,31 @@
 | Service | Client | Server | Public API | Encode Test | Decode Test | Negative Tests | Fuzzed | Interop vs C | Notes |
 |---------|:------:|:------:|:----------:|:-----------:|:-----------:|:--------------:|:------:|:------------:|-------|
 | Initiate | ✅ | ✅ | `NewClient`, `Server.Serve` | ✅ | ✅ | ✅ | ✅ | ✅ | Full handshake with parameter negotiation; `MarshalInitiateRequest`/`UnmarshalInitiateResponse` round-trip tested |
-| Conclude | ✅ | ✅ | `Client.Close` | ✅ | ✅ | ✅ | ❌ | ❌ | Graceful close with `ConcludeRequest`/`ConcludeResponse`; server handles both MMS Conclude and ISO Release |
-| Abort | ✅ | ✅ | `Client.Abort`, `ServerConn.Abort` | ✅ | N/A | ✅ | ❌ | ❌ | Client and server both send ACSE ABRT; server `SendAbort` is best-effort before transport close |
-| Identify | ✅ | ✅ | `Client.Identify`, `Server.HandleIdentify` | ✅ | ✅ | ✅ | ❌ | ❌ | Full request/response; server returns `ServiceError` when no handler registered |
-| Status | ✅ | ✅ | `Client.Status`, `Client.StatusWithOptions`, `Server.HandleStatus` | ✅ | ✅ | ✅ | ❌ | ❌ | Supports `ExtendedDerivation` flag; VMD logical/physical status |
+| Conclude | ✅ | ✅ | `Client.Close` | ✅ | ✅ | ✅ | ❌ | ✅ | Graceful close with `ConcludeRequest`/`ConcludeResponse`; server handles both MMS Conclude and ISO Release |
+| Abort | ✅ | ✅ | `Client.Abort`, `ServerConn.Abort` | ✅ | N/A | ✅ | ❌ | ✅ | Client and server both send ACSE ABRT; server `SendAbort` is best-effort before transport close |
+| Identify | ✅ | ✅ | `Client.Identify`, `Server.HandleIdentify` | ✅ | ✅ | ✅ | ❌ | ✅ | Full request/response; server returns `ServiceError` when no handler registered |
+| Status | ✅ | ✅ | `Client.Status`, `Client.StatusWithOptions`, `Server.HandleStatus` | ✅ | ✅ | ✅ | ❌ | ✅ | Supports `ExtendedDerivation` flag; VMD logical/physical status |
 | UnsolicitedStatus | N/A | ✅ | `ServerConn.SendUnsolicitedStatus` | ✅ | N/A | ✅ | ❌ | ❌ | Server-originated unconfirmed PDU; follows InformationReport pattern |
 | Cancel | N/A | ✅ | Handled in `serverconn.Conn` dispatch | ✅ | ✅ | ✅ | ❌ | ❌ | Server responds with CancelError (invoke-id-unknown) since requests are synchronous |
 | GetNameList | ✅ | ✅ | `Client.GetNameList`, `Client.GetNameListAll` | ✅ | ✅ | ✅ | ✅ | ✅ | All scopes (VMD/Domain/Association); pagination with `ContinueAfter`; stall detection; supports Domain, NamedVariable, NVL, Journal object classes; association-scope variable and NVL listing via per-connection storage |
-| GetVariableAccessAttributes | ✅ | ✅ | `Client.GetVariableAccessAttributes` | ✅ | ✅ | ✅ | ✅ | ✅ | Full TypeSpec decode including Boolean, Integer, Unsigned, Float, BitString, OctetString, VisibleString, MmsString, UTCTime, BinaryTime, Array, Structure, NamedType, GeneralizedTime, BCD, ObjectIdentifier |
+| GetVariableAccessAttributes | ✅ | ✅ | `Client.GetVariableAccessAttributes` | ✅ | ✅ | ✅ | ✅ | ✅ | Full TypeSpec decode including Boolean, Integer, Unsigned, Float, BitString, OctetString, VisibleString, MmsString, UTCTime, BinaryTime, Array, Structure, NamedType, GeneralizedTime [11], BCD [13], ObjectIdentifier [15]; the server encodes the same set (Real and BooleanArray have no TypeDescription in ISO 9506-2) |
 | Read | ✅ | ✅ | `Client.Read`, `ReadMultiple`, `ReadObject`, `ReadVariables`, `ReadComponent`, `ReadByIndex`, `ReadArrayElement`, `ReadArrayRange`, `ReadNamedVariableList` | ✅ | ✅ | ✅ | ✅ | ✅ | Single/multi-variable; alternate access (component, index, index-range); NVL read by listName; `SpecificationWithResult`; per-variable `DataAccessError` |
 | Write | ✅ | ✅ | `Client.Write`, `WriteObject`, `WriteVariables`, `WriteComponent`, `WriteArrayElement`, `WriteNamedVariableList` | ✅ | ✅ | ✅ | ✅ | ✅ | Single/multi-variable; alternate access; NVL write by listName; partial-success semantics |
-| DefineNamedVariableList | ✅ | ✅ | `Client.DefineNamedVariableList`, `Server.RegisterNamedVariableList` | ✅ | ✅ | ✅ | ✅ | ❌ | All scopes; alternate access in member specs; server-side dynamic define via client request |
-| GetNamedVariableListAttributes | ✅ | ✅ | `Client.GetNamedVariableListAttributes` | ✅ | ✅ | ✅ | ✅ | ❌ | Returns deletable flag + member list with alternate access |
-| DeleteNamedVariableList | ✅ | ✅ | `Client.DeleteNamedVariableList`, `DeleteAllDomainNVLs`, `DeleteAllVMDNVLs` | ✅ | ✅ | ✅ | ✅ | ❌ | Returns `NumberMatched`/`NumberDeleted`; server handles all four `scopeOfDelete` values: 0 (specific), 1 (aa-specific), 2 (domain bulk), 3 (VMD bulk); client helpers cover 0, 2, 3 |
-| InformationReport | ✅ | ✅ | `Client.OnInformationReport`, `ServerConn.SendInformationReport`, `Server.Broadcast` | ✅ | ✅ | ✅ | ❌ | ❌ | Both list-of-variable and named-variable-list forms; concurrent with confirmed services; handler panic recovery |
-| FileOpen | ✅ | ✅ | `Client.FileOpen` | ✅ | ✅ | ✅ | ❌ | ❌ | FRSM state machine; returns frsmId, size, lastModified |
-| FileRead | ✅ | ✅ | `Client.FileRead`, `FileReadAll` | ✅ | ✅ | ✅ | ❌ | ❌ | Chunked read with `MoreFollows`; `FileReadAll` convenience |
-| FileClose | ✅ | ✅ | `Client.FileClose` | ✅ | ✅ | ✅ | ❌ | ❌ | Releases FRSM handle; auto-close on disconnect |
-| FileDirectory | ✅ | ✅ | `Client.FileDirectory`, `FileDirectoryAll` | ✅ | ✅ | ✅ | ❌ | ❌ | Pagination with `ContinueAfter`; `FileDirectoryAll` convenience with stall detection |
-| FileDelete | ✅ | ✅ | `Client.FileDelete` | ✅ | ✅ | ✅ | ❌ | ❌ | Maps `fs.ErrNotExist` → file-non-existent |
-| FileRename | ✅ | ✅ | `Client.FileRename` | ✅ | ✅ | ✅ | ❌ | ❌ | Collision tests included |
-| ObtainFile | ✅ | ✅ | `Client.ObtainFile` | ✅ | ✅ | ✅ | ❌ | ❌ | Server delegates to `FileProvider`; MMS segmented role-reversal (server→client FileOpen/FileRead/FileClose) is not implemented — see `KNOWN_LIMITATIONS.md` |
-| ReadJournal | ✅ | ✅ | `Client.ReadJournalTimeRange`, `ReadJournalStartAfter` | ✅ | ✅ | ✅ | ❌ | ❌ | Time-range and start-after cursors; pagination with `MoreFollows`; `JournalProvider` interface |
+| DefineNamedVariableList | ✅ | ✅ | `Client.DefineNamedVariableList`, `Server.RegisterNamedVariableList` | ✅ | ✅ | ✅ | ✅ | ✅ | All scopes; alternate access in member specs; server-side dynamic define via client request |
+| GetNamedVariableListAttributes | ✅ | ✅ | `Client.GetNamedVariableListAttributes` | ✅ | ✅ | ✅ | ✅ | ✅ | Returns deletable flag + member list with alternate access |
+| DeleteNamedVariableList | ✅ | ✅ | `Client.DeleteNamedVariableList`, `DeleteAllDomainNVLs`, `DeleteAllVMDNVLs` | ✅ | ✅ | ✅ | ✅ | ✅ | Returns `NumberMatched`/`NumberDeleted`; server handles all four `scopeOfDelete` values: 0 (specific), 1 (aa-specific), 2 (domain bulk), 3 (VMD bulk); client helpers cover 0, 2, 3 |
+| InformationReport | ✅ | ✅ | `Client.OnInformationReport`, `ServerConn.SendInformationReport`, `Server.Broadcast` | ✅ | ✅ | ✅ | ❌ | ✅ | Both list-of-variable and named-variable-list forms; concurrent with confirmed services; handler panic recovery |
+| FileOpen | ✅ | ✅ | `Client.FileOpen` | ✅ | ✅ | ✅ | ❌ | ✅ | FRSM state machine; returns frsmId, size, lastModified |
+| FileRead | ✅ | ✅ | `Client.FileRead`, `FileReadAll` | ✅ | ✅ | ✅ | ❌ | ✅ | Chunked read with `MoreFollows`; `FileReadAll` convenience |
+| FileClose | ✅ | ✅ | `Client.FileClose` | ✅ | ✅ | ✅ | ❌ | ✅ | Releases FRSM handle; auto-close on disconnect |
+| FileDirectory | ✅ | ✅ | `Client.FileDirectory`, `FileDirectoryAll` | ✅ | ✅ | ✅ | ❌ | ✅ | Pagination with `ContinueAfter`; `FileDirectoryAll` convenience with stall detection |
+| FileDelete | ✅ | ✅ | `Client.FileDelete` | ✅ | ✅ | ✅ | ❌ | ✅ | Maps `fs.ErrNotExist` → file-non-existent |
+| FileRename | ✅ | ✅ | `Client.FileRename` | ✅ | ✅ | ✅ | ❌ | ✅ | Collision tests included |
+| ObtainFile | ✅ | ✅ | `Client.ObtainFile` | ✅ | ✅ | ✅ | ❌ | ✅ | Server delegates to `FileProvider`; MMS segmented role-reversal (server→client FileOpen/FileRead/FileClose) is not implemented — see `KNOWN_LIMITATIONS.md` |
+| ReadJournal | ✅ | ✅ | `Client.ReadJournalTimeRange`, `ReadJournalStartAfter` | ✅ | ✅ | ✅ | ❌ | ✅ | Time-range and start-after cursors; pagination with `MoreFollows`; `JournalProvider` interface |
 | Reject PDU | ✅ | ✅ | Handled in `Client.processConfirmedPDU` | ✅ | ✅ | ✅ | ✅ | ❌ | Client decodes and surfaces as `ProtocolError`; server sends Reject for malformed requests |
-| ConfirmedError | ✅ | ✅ | `ServiceError`, `ErrorClass`, `ErrorCode` | ✅ | ✅ | ✅ | ✅ | ❌ | Client decodes into `*ServiceError`; server generates via `serverconn.ServiceError`; trailing-byte strictness |
-| DownloadFile | ✅ | ✅ | `Client.DownloadFile` | ✅ | ✅ | ✅ | ❌ | ❌ | Convenience: Open → ReadAll → Close |
+| ConfirmedError | ✅ | ✅ | `ServiceError`, `ErrorClass`, `ErrorCode` | ✅ | ✅ | ✅ | ✅ | ✅ | Client decodes into `*ServiceError`; server generates via `serverconn.ServiceError`; trailing-byte strictness |
+| DownloadFile | ✅ | ✅ | `Client.DownloadFile` | ✅ | ✅ | ✅ | ❌ | ✅ | Convenience: Open → ReadAll → Close |
 
 ## Protocol Layer Support
 
@@ -78,7 +78,9 @@
 | Race/concurrency tests | ~14 | `TestConcurrent*`, `TestDoubleClose*`, `TestClose*During*`; designed for `go test -race` |
 | Fuzz targets | 38 | `internal/pdu/fuzz_test.go` (31): DecodePdu, DataElement, TypeSpec, ObjectName, AccessResults, ReadResponse, WriteResponse, GetNameList, GetVarAccess, NVLAttrs, DeleteNVL, ConfirmedError, RejectPDU, ConfirmedResponse, FileOpenRequest, FileOpenResponse, FileReadResponse, FileDirectoryRequest, FileDirectoryResponse, ReadJournalRequest, ReadJournalResponse, GetNameListRequest, ReadRequestParsed, WriteRequestParsed, DefineNVLRequest, InformationReport, GeneralizedTime, BCD, ObjectIdentifier, Real, BooleanArray + `internal/berutil/fuzz_test.go` (4): TLV, Length, Integer, Unsigned + `internal/acse/fuzz_test.go` (1), `internal/session/fuzz_test.go` (1), `internal/presentation/fuzz_test.go` (1) |
 | Benchmarks | 20 | `internal/pdu/bench_test.go` (14) + `value_bench_test.go` (6) |
-| Interop tests | 8 | `internal/pdu/interop_test.go` — validates wire encoding against known-good BER patterns compatible with C reference implementation |
+| End-to-end API tests | 49 | `e2e/` — every exported `Client`, `Server` and `ServerConn` method and every `Value` constructor between a go-mms client and server over ISO transport; `TestAPICoverage` fails when a public method has no test |
+| Live interop tests | 117 | `interop/` (`-tags=interop`) — both directions against libiec61850 `v1.6.2.1-89-g6e265c54` via mms-interop; `TestInteropCoverage` guards the API and the server's service dispatch (see [INTEROP.md](INTEROP.md)) |
+| Wire-vector tests | 11 | `internal/pdu/interop_test.go`, `internal/pdu/peer_vectors_test.go` — BER patterns as encoded by libiec61850 |
 | Golden fixture tests | 33 | 27 in `internal/pdu/testdata/golden/` + 6 in `internal/codec/testdata/golden/`; regenerate with `-update-golden` flag |
 
 ## Known Gaps
@@ -92,11 +94,11 @@
 5. ~~No fuzz coverage for file/journal PDUs~~ — **Resolved.** 38 fuzz targets across all service categories.
 6. ~~Unsolicited Status~~ — **Resolved.** `ServerConn.SendUnsolicitedStatus()` sends UnconfirmedPDU with VMD status.
 7. ~~Cancel service~~ — **Resolved.** Server handles CancelRequestPDU and responds with CancelError (invoke-id-unknown, since requests are processed synchronously).
+8. ~~No live-wire interop testing~~ — **Resolved.** `interop/` runs both directions against libiec61850 through the mms-interop adapter images; see [INTEROP.md](INTEROP.md).
 
 ### Remaining Gaps
 
 | # | Gap | Priority | Impact | In C ref? | Description |
 |---|-----|:--------:|:------:|:---------:|-------------|
-| 1 | No live-wire interop testing | Medium-high | Quality | N/A | Interop tests use inline byte patterns. No automated harness connecting to a real MMS server or C reference. Requires Docker/CI infrastructure, not code porting. |
-| 2 | Semaphore, Event, Program Invocation services | Low | Completeness | Not in C either | ISO 9506-2 service groups with complex state machines. Zero implementations in the C reference (libIEC61850). Legacy MMS features rarely used in IEC 61850 deployments. Effort: very high (thousands of lines from standard alone). |
-| 3 | Segmented file transfer (ObtainFile) | Medium | Feature | **Fully in C** | C implements a multi-step state machine (~400 lines) with role reversal (server sends confirmed requests to client). Go currently delegates ObtainFile to FileProvider as a single synchronous operation. Requires new server→client confirmed request plumbing. Effort: ~500-800 lines. |
+| 1 | Semaphore, Event, Program Invocation services | Low | Completeness | Not in C either | ISO 9506-2 service groups with complex state machines. Zero implementations in the C reference (libIEC61850). Legacy MMS features rarely used in IEC 61850 deployments. Effort: very high (thousands of lines from standard alone). |
+| 2 | Segmented file transfer (ObtainFile) | Medium | Feature | **Fully in C** | C implements a multi-step state machine (~400 lines) with role reversal (server sends confirmed requests to client). Go currently delegates ObtainFile to FileProvider as a single synchronous operation. Requires new server→client confirmed request plumbing. Effort: ~500-800 lines. |

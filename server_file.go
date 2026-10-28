@@ -110,6 +110,13 @@ func (s *Server) handleFileOpen(ctx context.Context, body []byte) (int, bool, []
 		return 0, false, nil, fileError(err)
 	}
 
+	if req.InitialPosition > 0 {
+		if err := s.skipFileBytes(ctx, handle, int64(req.InitialPosition), attrs.Size); err != nil {
+			_ = s.fileProvider.Close(ctx, handle)
+			return 0, false, nil, err
+		}
+	}
+
 	sc := serverConnFromCtx(ctx)
 	if sc == nil {
 		_ = s.fileProvider.Close(ctx, handle)
@@ -122,6 +129,29 @@ func (s *Server) handleFileOpen(ctx context.Context, body []byte) (int, bool, []
 		return 0, false, nil, fmt.Errorf("marshal file-open response: %w", err)
 	}
 	return asn1util.TagNumFileOpen, true, payload, nil
+}
+
+// skipFileBytes advances a freshly opened handle to the FileOpen
+// initialPosition by reading and discarding through the provider.
+func (s *Server) skipFileBytes(ctx context.Context, handle FileHandle, n, size int64) error {
+	if n > size {
+		return &serverconn.ServiceError{ErrorClass: fileErrClassFile, ErrorCode: fileErrPositionInvalid}
+	}
+	for n > 0 {
+		chunk := int64(64 * 1024)
+		if n < chunk {
+			chunk = n
+		}
+		data, more, err := s.fileProvider.Read(ctx, handle, int(chunk))
+		if err != nil {
+			return fileError(err)
+		}
+		n -= int64(len(data))
+		if n > 0 && (!more || len(data) == 0) {
+			return &serverconn.ServiceError{ErrorClass: fileErrClassFile, ErrorCode: fileErrPositionInvalid}
+		}
+	}
+	return nil
 }
 
 func (s *Server) handleFileRead(ctx context.Context, body []byte) (int, bool, []byte, error) {
@@ -143,7 +173,9 @@ func (s *Server) handleFileRead(ctx context.Context, body []byte) (int, bool, []
 		return 0, false, nil, &serverconn.ServiceError{ErrorClass: fileErrClassFile, ErrorCode: fileErrOther}
 	}
 
-	maxBytes := 60000
+	// FileRead-Response payload: fileData [0] (tag + up to 4 length
+	// bytes) and moreFollows [1] (3 bytes).
+	maxBytes := s.responseBudget(ctx) - 8
 	data, moreFollows, err := s.fileProvider.Read(ctx, f.handle, maxBytes)
 	if err != nil {
 		return 0, false, nil, fileError(err)
@@ -264,8 +296,15 @@ func (s *Server) handleFileDirectory(ctx context.Context, body []byte) (int, boo
 		}
 	}
 
-	payload, err := pdu.MarshalFileDirectoryResponse(wireEntries, listResult.MoreFollows)
+	// Entries beyond the negotiated PDU size are left for the client's
+	// next request (continueAfter = last returned name).
+	payload, err := fitList(len(wireEntries), s.responseBudget(ctx), func(k int, truncated bool) ([]byte, error) {
+		return pdu.MarshalFileDirectoryResponse(wireEntries[:k], truncated || listResult.MoreFollows)
+	})
 	if err != nil {
+		if errors.Is(err, errResponseTooLarge) {
+			return 0, false, nil, err
+		}
 		return 0, false, nil, fmt.Errorf("marshal file-directory response: %w", err)
 	}
 	return asn1util.TagNumFileDirectory, true, payload, nil
@@ -274,6 +313,7 @@ func (s *Server) handleFileDirectory(ctx context.Context, body []byte) (int, boo
 const (
 	fileErrClassFile        = 11 // ServiceError errorClass "file" (CHOICE tag 11)
 	fileErrOther            = 0
+	fileErrPositionInvalid  = 5
 	fileErrFileAccessDenied = 6
 	fileErrFileNonExistent  = 7
 )
@@ -300,10 +340,12 @@ func fileError(err error) error {
 // The handle is valid until [FileProvider.Close] is called.
 type FileHandle any
 
-// FileEntry describes one file in a directory listing.
+// FileEntry describes one file in a directory listing. Name is sent as
+// is; the server does not interpret path separators.
 type FileEntry struct {
-	Name         string
-	Size         int64
+	Name string
+	Size int64
+	// LastModified is omitted from the response when it is the zero time.
 	LastModified time.Time
 }
 
@@ -345,6 +387,7 @@ type FileProvider interface {
 
 // FileAttributes describes file metadata returned when opening a file.
 type FileAttributes struct {
-	Size         int64
+	Size int64
+	// LastModified is omitted from the response when it is the zero time.
 	LastModified time.Time
 }

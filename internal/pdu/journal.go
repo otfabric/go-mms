@@ -47,11 +47,16 @@ func MarshalReadJournalTimeRange(invokeID codec.InvokeID, domain, journal string
 		return nil, err
 	}
 
-	startTime := berutil.EncodeTLV(0x80, encodeBinaryTime(start.UnixMilli()))
-	rangeStart := berutil.EncodeTLV(0xa1, startTime)
-
-	stopTime := berutil.EncodeTLV(0x80, encodeBinaryTime(stop.UnixMilli()))
-	rangeStop := berutil.EncodeTLV(0xa2, stopTime)
+	startBin, err := encodeBinaryTimeChecked(start.UnixMilli())
+	if err != nil {
+		return nil, fmt.Errorf("start time: %w", err)
+	}
+	stopBin, err := encodeBinaryTimeChecked(stop.UnixMilli())
+	if err != nil {
+		return nil, fmt.Errorf("stop time: %w", err)
+	}
+	rangeStart := berutil.EncodeTLV(0xa1, berutil.EncodeTLV(0x80, startBin))
+	rangeStop := berutil.EncodeTLV(0xa2, berutil.EncodeTLV(0x80, stopBin))
 
 	payload := make([]byte, 0, len(nameBytes)+len(rangeStart)+len(rangeStop))
 	payload = append(payload, nameBytes...)
@@ -77,7 +82,11 @@ func MarshalReadJournalStartAfter(invokeID codec.InvokeID, domain, journal strin
 		return nil, err
 	}
 
-	timeBin := berutil.EncodeTLV(0x80, encodeBinaryTime(afterTime.UnixMilli()))
+	afterBin, err := encodeBinaryTimeChecked(afterTime.UnixMilli())
+	if err != nil {
+		return nil, fmt.Errorf("after time: %w", err)
+	}
+	timeBin := berutil.EncodeTLV(0x80, afterBin)
 	entrySpec := berutil.EncodeTLV(0x81, afterID)
 	startAfter := berutil.EncodeTLV(0xa5, append(timeBin, entrySpec...))
 
@@ -261,10 +270,23 @@ func MarshalReadJournalResponse(entries []JournalEntryWire, moreFollows bool) ([
 	return payload, nil
 }
 
+// emptyOriginatingApplication is originatingApplication [1] wrapping an
+// ApplicationReference with all of its optional fields omitted.
+var emptyOriginatingApplication = []byte{0xa1, 0x02, 0x30, 0x00}
+
+//	JournalEntry ::= SEQUENCE {
+//	    entryIdentification    [0] IMPLICIT OCTET STRING,
+//	    originatingApplication [1] ApplicationReference,
+//	    entryContent           [2] IMPLICIT EntryContent
+//	}
 func marshalJournalEntry(e JournalEntryWire) ([]byte, error) {
 	entryIDBytes := berutil.EncodeTLV(0x80, e.EntryID)
 
-	occurrenceTimeBytes := berutil.EncodeTLV(0x80, encodeBinaryTime(e.OccurrenceTime.UnixMilli()))
+	occurrenceBin, err := encodeBinaryTimeChecked(e.OccurrenceTime.UnixMilli())
+	if err != nil {
+		return nil, fmt.Errorf("occurrence time: %w", err)
+	}
+	occurrenceTimeBytes := berutil.EncodeTLV(0x80, occurrenceBin)
 
 	var varBytes []byte
 	for _, v := range e.Variables {
@@ -278,8 +300,9 @@ func marshalJournalEntry(e JournalEntryWire) ([]byte, error) {
 	dataBody := berutil.EncodeTLV(0xa2, journalVars)
 	entryContent := berutil.EncodeTLV(0xa2, append(occurrenceTimeBytes, dataBody...))
 
-	entryInner := make([]byte, 0, len(entryIDBytes)+len(entryContent))
+	entryInner := make([]byte, 0, len(entryIDBytes)+len(emptyOriginatingApplication)+len(entryContent))
 	entryInner = append(entryInner, entryIDBytes...)
+	entryInner = append(entryInner, emptyOriginatingApplication...)
 	entryInner = append(entryInner, entryContent...)
 
 	return berutil.EncodeTLV(0x30, entryInner), nil
@@ -366,6 +389,7 @@ func parseJournalEntry(data []byte) (JournalEntryWire, error) {
 		switch tag {
 		case 0x80: // entryID
 			e.EntryID = append([]byte(nil), inner...)
+		case 0xa1: // originatingApplication: not exposed
 		case 0xa2: // entryContent
 			if err := parseEntryContent(inner, &e); err != nil {
 				return e, err

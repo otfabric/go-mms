@@ -188,11 +188,6 @@ func (c *Conn) Serve(ctx context.Context) error {
 			return fmt.Errorf("serverconn: receive: %w", err)
 		}
 
-		if c.mmsOpts.MaxPDUSize > 0 && len(data) > c.mmsOpts.MaxPDUSize {
-			c.logger.Warn("serverconn: PDU exceeds negotiated size", "size", len(data), "max", c.mmsOpts.MaxPDUSize)
-			continue
-		}
-
 		mmsPayload, err := isostack.DecodeDataResponse(data)
 		if err != nil {
 			// Could be FINISH/ABORT
@@ -200,6 +195,11 @@ func (c *Conn) Serve(ctx context.Context) error {
 				return c.handleRelease(ctx)
 			}
 			return fmt.Errorf("serverconn: decode data: %w", err)
+		}
+
+		if c.mmsOpts.MaxPDUSize > 0 && len(mmsPayload) > c.mmsOpts.MaxPDUSize {
+			c.logger.Warn("serverconn: PDU exceeds negotiated size", "size", len(mmsPayload), "max", c.mmsOpts.MaxPDUSize)
+			continue
 		}
 
 		kind, content, err := pdu.DecodePdu(mmsPayload)
@@ -247,7 +247,26 @@ func (c *Conn) handleConfirmedRequest(ctx context.Context, content []byte) error
 		return fmt.Errorf("serverconn: marshal response: %w", err)
 	}
 
+	if c.mmsOpts.MaxPDUSize > 0 && len(respPdu) > c.mmsOpts.MaxPDUSize {
+		c.logger.Warn("serverconn: response exceeds negotiated PDU size",
+			"invoke_id", invokeID, "size", len(respPdu), "max", c.mmsOpts.MaxPDUSize)
+		return c.sendError(ctx, invokeID, errorClassResource, errorCodeOther)
+	}
+
 	return c.sendData(ctx, respPdu)
+}
+
+// ServiceError class resource (3), code other (0): sent when a response
+// does not fit the negotiated PDU size.
+const (
+	errorClassResource = 3
+	errorCodeOther     = 0
+)
+
+// MaxPDUSize returns the negotiated maximum MMS PDU size, or the locally
+// configured maximum before the association is accepted.
+func (c *Conn) MaxPDUSize() int {
+	return c.mmsOpts.MaxPDUSize
 }
 
 func (c *Conn) sendError(ctx context.Context, invokeID codec.InvokeID, errorClass, errorCode int) error {
@@ -298,6 +317,11 @@ func (c *Conn) SendAbort(ctx context.Context) error {
 	defer c.sendMu.Unlock()
 	data := isostack.EncodeAbort()
 	return c.transport.Send(ctx, data)
+}
+
+// Close closes the transport, ending Serve.
+func (c *Conn) Close() error {
+	return c.transport.Close()
 }
 
 // handleCancelRequest handles CancelRequestPDU. Since requests are
