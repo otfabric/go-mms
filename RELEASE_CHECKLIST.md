@@ -13,7 +13,7 @@ the GitHub release from the top section of RELEASE.md (up to the first
       and in total, `scripts/coverage-gate.sh`), 2s fuzz pass over every
       target, armv7 compile.
 - [ ] `make interop` is green against the libiec61850 image pinned in
-      `.github/workflows/interop.yml`. When mms-interop publishes a new
+      `.github/workflows/interop.yml`. When iec61850-interop publishes a new
       adapter, bump that digest and `interop/testdata/interop.json`.
 - [ ] `TestAPICoverage` (e2e) and `TestInteropCoverage` (interop) list
       every new exported method.

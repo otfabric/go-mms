@@ -1,6 +1,6 @@
 # go-mms interoperability tests
 
-This package contains interoperability tests for `go-mms` against independent MMS implementations provided by [mms-interop](https://github.com/otfabric/mms-interop).
+This package contains interoperability tests for `go-mms` against independent MMS implementations provided by [iec61850-interop](https://github.com/otfabric/iec61850-interop).
 
 ## Test directions
 
@@ -15,29 +15,29 @@ Tests start adapter containers, wait for the readiness event, exercise the `go-m
 ## Running
 
 ```bash
-# Build the adapter images first (in mms-interop)
-cd ../mms-interop && make build-libiec61850 build-dscsystems build-iec61850-rust build-iec61850bean
+# Build the adapter images first (in iec61850-interop)
+cd ../iec61850-interop && make build-libiec61850 build-dscsystems build-iec61850-rust build-iec61850bean
 
 # Run all interop tests
-LIBIEC61850_IMAGE=mms-interop-libiec61850:local make interop
+LIBIEC61850_IMAGE=iec61850-interop-libiec61850:local make interop
 
 # Another peer stack, or all of them (see INTEROP.md#peer-stacks)
 MMS_INTEROP_STACK=dscsystems make interop
 make interop-all
 
-# Or using the published v0.4.0 images (CI pins the digests in interop.yml)
-LIBIEC61850_IMAGE=ghcr.io/otfabric/mms-interop-libiec61850:v0.4.0 make interop
+# Or using the published v1.0.1 images (CI pins the digests in interop.yml)
+LIBIEC61850_IMAGE=ghcr.io/otfabric/iec61850-interop-libiec61850:v1.0.1 make interop
 ```
 
 ## Environment variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `LIBIEC61850_IMAGE` | Docker image for the libiec61850 adapter | `mms-interop-libiec61850:local` |
+| `LIBIEC61850_IMAGE` | Docker image for the libiec61850 adapter | `iec61850-interop-libiec61850:local` |
 | `MMS_SERVER_BINARY` | Path to `libiec61850-mms-server` binary (skips Docker) | — |
 | `MMS_CLIENT_BINARY` | Path to `libiec61850-mms-client` binary (skips Docker) | — |
 | `MMS_FIXTURE` | Path to the fixture JSON file | `testdata/interop.json` |
-| `IEC61850BEAN_IMAGE` | Docker image for the iec61850bean IED adapter | `mms-interop-iec61850bean:local` |
+| `IEC61850BEAN_IMAGE` | Docker image for the iec61850bean IED adapter | `iec61850-interop-iec61850bean:local` |
 | `IED_SERVER_BINARY` | Path to `<stack>-ied-server` binary (skips Docker) | — |
 
 ## Fixture

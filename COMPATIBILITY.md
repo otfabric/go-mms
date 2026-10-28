@@ -58,7 +58,7 @@ deviation from the standard is not considered a breaking change.
 
 ## Peer implementations
 
-Each release is tested on the wire against the MMS stacks packaged by [mms-interop](https://github.com/otfabric/mms-interop) (v0.4.0 images, pinned by digest):
+Each release is tested on the wire against the MMS stacks packaged by [iec61850-interop](https://github.com/otfabric/iec61850-interop) (v1.0.1 images, pinned by digest):
 
 | Stack | Client direction (go-mms → peer server) | Server direction (peer client → go-mms) |
 |-------|:---:|:---:|
