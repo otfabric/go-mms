@@ -20,7 +20,22 @@ count=0
 for pkg in $pkgs; do
 	for target in $(go test -list '^Fuzz' "$pkg" | grep '^Fuzz' || true); do
 		echo "=== $pkg $target ($fuzztime)"
-		go test -run='^$' -fuzz="^${target}\$" -fuzztime="$fuzztime" "$pkg"
+		# On a slow machine the fuzz coordinator can time out on a short
+		# -fuzztime without finding anything ("context deadline exceeded",
+		# no failing input). Retry that case once; real failures write a
+		# failing input to testdata and are never retried.
+		if ! out=$(go test -run='^$' -fuzz="^${target}\$" -fuzztime="$fuzztime" "$pkg" 2>&1); then
+			if grep -q 'context deadline exceeded' <<<"$out" && ! grep -q 'Failing input written' <<<"$out"; then
+				echo "$out" | tail -3
+				echo "--- retrying $target (fuzz coordinator timeout)"
+				go test -run='^$' -fuzz="^${target}\$" -fuzztime="$fuzztime" "$pkg"
+			else
+				echo "$out"
+				exit 1
+			fi
+		else
+			echo "$out" | tail -2
+		fi
 		count=$((count + 1))
 	done
 done

@@ -44,7 +44,7 @@ MMS_INTEROP_STACK=dscsystems make interop
 # Every stack
 make interop-all
 
-# Published images (CI pins them in .github/workflows/interop.yml)
+# Published images (CI pins the mms-interop v0.3.0 digests in .github/workflows/interop.yml)
 MMS_INTEROP_STACK=iec61850-rust IEC61850RUST_IMAGE=ghcr.io/otfabric/mms-interop-iec61850-rust:v0.3.0 make interop
 ```
 
@@ -90,9 +90,9 @@ exist.
 
 | Stack | Upstream | Result | Quirks | Skipped |
 |-------|----------|--------|--------|---------|
-| libiec61850 | libiec61850 1.6.2.1 | 120 pass | VMD named-list reports only; FileOpen ignores the seek | — |
-| dscsystems | dscsystems/go-iec61850 (GPL, isolated container) | 112 pass, 8 skip | client drops FileOpen `lastModified`; no write to a named variable list | index-range alternate access (server refuses >1 element); client has no alternate access, association-specific NVLs or NVL write |
-| iec61850-rust | csp0924/iec61850-rust | pending mms-interop v0.3.0 | | no MMS file services |
+| libiec61850 | libiec61850 1.6.2.1-89-g6e265c54 | 120 pass | VMD named-list reports only; FileOpen ignores the seek | — |
+| dscsystems | dscsystems/go-iec61850 6bf3f37 (GPL, isolated container) | 112 pass, 8 skip | client drops FileOpen `lastModified`; no write to a named variable list | index-range alternate access (server refuses >1 element); client has no alternate access, association-specific NVLs or NVL write |
+| iec61850-rust | csp0924/iec61850-rust (d4e8952) | 120 pass | — (its known limitations match libiec61850's and are asserted: ObtainFile role reversal answered file-other, domain/VMD NVL deletion object-access-unsupported, client abort closes the transport, in-memory file store) | — |
 
 Skipped tests per stack:
 

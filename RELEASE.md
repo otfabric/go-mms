@@ -17,8 +17,10 @@ codec bugs (Cancel PDU tags, BinaryTime, UTCTime fractions, long-form tags).
 Every package now has ≥90% test coverage, enforced in CI. All API changes are
 additive.
 
-Interop runs against the mms-interop v0.2.0 libiec61850 adapter (unchanged
-digest).
+Interop runs against three MMS peers from the mms-interop
+[v0.3.0](https://github.com/otfabric/mms-interop/releases/tag/v0.3.0) images,
+pinned by digest: libiec61850 (120 pass), dscsystems/go-iec61850 (112 pass,
+8 skipped peer limitations) and iec61850-rust (120 pass).
 
 ## Changes
 
@@ -47,6 +49,7 @@ digest).
 - **UTCTime** — the fraction of a second round-trips losslessly.
 - **GeneralizedTime** — a fractional second accepted on decode is kept on encode (it was dropped); whole seconds encode as before.
 - **Long-form tags** — MMS PDUs with a long-form outer tag are rejected; tag numbers above 30 encode correctly.
+- **Deadline classification** — an I/O timeout caused by a context deadline is reported as `context.DeadlineExceeded` even when the connection deadline fires just before the context's timer (association timeout, ISO transport).
 - **Full-duplex deadlines** — go-cotp v1.0.4 arms a both-direction deadline around each read and write; a write deadline could cut a concurrent read (`read tpkt header: i/o timeout`). transport/iso now uses per-direction deadlines.
 - **`Client.Abort`** honours its context; closing a transport whose deadline already fired no longer returns a timeout error.
 - Server callback errors that are not wire errors no longer reach the error-code encoder (possible panic path).
