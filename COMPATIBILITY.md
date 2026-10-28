@@ -55,3 +55,16 @@ This library aims to be correct per the MMS standard (ISO 9506). Where the
 standard is ambiguous or conflicting implementations exist, the chosen behaviour
 is documented in `KNOWN_LIMITATIONS.md` and `COMPLIANCE.md`. Correcting a
 deviation from the standard is not considered a breaking change.
+
+## Peer implementations
+
+Each release is tested on the wire, in both directions, against the MMS
+stacks packaged by [mms-interop](https://github.com/otfabric/mms-interop):
+
+| Stack | Client direction (go-mms → peer server) | Server direction (peer client → go-mms) |
+|-------|:---:|:---:|
+| libiec61850 1.6.2.1 | ✓ | ✓ |
+| dscsystems/go-iec61850 | ✓ (no multi-element index range) | ✓ (peer client lacks alternate access, aa-scope NVLs, NVL write) |
+| csp0924/iec61850-rust | pending | pending |
+
+Per-test skips and the peer quirks behind them: [INTEROP.md](INTEROP.md#peer-stacks).

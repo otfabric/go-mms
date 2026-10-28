@@ -1,5 +1,69 @@
 # go-mms Releases
 
+## v1.2.0
+
+**Date:** 2026-10-28
+**Previous release:** v1.1.0
+
+## Summary
+
+Operability and quality release. Errors are classified so `errors.Is` /
+`errors.As` work across every failure path; a pluggable `Metrics` interface,
+configurable retry with backoff and jitter, `Server.Shutdown`, association and
+handshake timeouts and `Client.Done` / `Client.Err` are added. A cancelled
+request no longer tears down its association, and a silent peer can no longer
+block `iso.Listener.Accept`. Fuzzing found and this release fixes several
+codec bugs (Cancel PDU tags, BinaryTime, UTCTime fractions, long-form tags).
+Every package now has ≥90% test coverage, enforced in CI. All API changes are
+additive.
+
+Interop runs against the mms-interop v0.2.0 libiec61850 adapter (unchanged
+digest).
+
+## Changes
+
+### Added
+
+- **Errors** — `ErrServerClosed`, `ErrInvalidArgument`; `PhaseSession`, `PhasePresentation`, `PhaseACSE`, `PhaseMMS`; `RejectType` (with `String`) and `RejectError` for MMS Reject PDUs (it unwraps to the previous `*ProtocolError`, so `errors.Is(err, ErrProtocol)` still holds); `ServiceError.CodeName()` (ISO 9506-2 code names). Failures carry sentinel kinds without changing their messages: association → `ErrAssociationFailed`, negotiation → `ErrNegotiationFailed`, connection loss → `ErrClosed` (+ `ErrDecodeFailed` / `ErrInvalidPDU`), request deadline → `ErrInvokeTimeout` + `context.DeadlineExceeded`, argument validation → `ErrInvalidArgument`.
+- **Metrics** — `Metrics` interface (`ObserveRequest`, `ObserveConnection`), `NopMetrics`, `Role`, `Service`, `RequestEvent`, `ConnectionState`, `ConnectionEvent`; set via `DialOptions.Metrics` and `ServerOptions.Metrics`. OBSERVABILITY.md has a Prometheus adapter example.
+- **Retry** — `RetryPolicy` (attempts, exponential backoff, jitter, `Retryable`, `OnRetry`), `DefaultRetryPolicy`, `IsRetryable`, `Retry`; `iso.WithRetry` retries `DialTCP` and `Dial` (connect, TLS, COTP and association), honouring the context.
+- **Lifecycle** — `Client.Done`, `Client.Err`, `DialOptions.RequestTimeout`, `Server.Shutdown(ctx)` (closes listeners, waits for in-flight handlers, aborts associations; `Serve` / `ListenAndServe` then return `ErrServerClosed`), `ServerOptions.AssociationTimeout`, `iso.WithHandshakeTimeout`, `iso.WithDialer`.
+- `RawHookSend` / `RawHookRecv` constants for the raw PDU hook direction.
+
+### Changed
+
+- **Request cancellation** — a request whose context ends mid-write returns at once; the write completes in the background (an unstarted one is skipped) instead of closing the association.
+- **Association timeout** — `Serve` aborts an association that has not completed its handshake within 30s by default (`ServerOptions.AssociationTimeout`; negative disables). `Serve` also closes the transport when its context is cancelled.
+- **iso.Listener** — TLS and COTP handshakes run concurrently (up to 64 pending) with a 10s default timeout, so a peer that connects and stays silent no longer blocks other connections. Temporary accept errors (such as EMFILE) are retried with backoff.
+- **`ServiceError.Error()`** includes the code name, e.g. `(object-non-existent)`. Compare with `errors.As` and the `Class` / `Code` fields, never the string.
+- **Server error mapping** — a `*DataAccessError` returned by a Read/Write callback is sent with its code (other errors: temporarily-unavailable, as before); a `*ServiceError` from a handler is sent as returned; a malformed Status request gets the invalid-request service error.
+- **`Value.Equal`** compares floats bitwise (all NaNs equal, `+0` ≠ `-0`).
+- Logs carry `role` and `remote_addr`; requests are logged at debug level with `service`, `invoke_id`, `duration` and `error`. Messages are prefixed `mms:` / `iso:`.
+
+### Fixed
+
+- **Cancel PDUs** — cancel-Request/Response/Error use tags `[5]`, `[6]`, `[7]` (the tag constants were wrong).
+- **BinaryTime** — values below one day encode in the 4-octet TimeOfDay form (previously not re-encodable after decoding); the decoder rejects a millisecond-of-day ≥ 86 400 000.
+- **UTCTime** — the fraction of a second round-trips losslessly.
+- **GeneralizedTime** — a fractional second accepted on decode is kept on encode (it was dropped); whole seconds encode as before.
+- **Long-form tags** — MMS PDUs with a long-form outer tag are rejected; tag numbers above 30 encode correctly.
+- **Full-duplex deadlines** — go-cotp v1.0.4 arms a both-direction deadline around each read and write; a write deadline could cut a concurrent read (`read tpkt header: i/o timeout`). transport/iso now uses per-direction deadlines.
+- **`Client.Abort`** honours its context; closing a transport whose deadline already fired no longer returns a timeout error.
+- Server callback errors that are not wire errors no longer reach the error-code encoder (possible panic path).
+
+### Tests
+
+- Coverage ≥90% in every package and in total, enforced by `scripts/coverage-gate.sh` (`make coverage`, CI quality job).
+- `internal/chaos`: fault-injecting `net.Conn` / `net.Listener` (delays, chunked I/O, bandwidth limit, drops, resets, stalls). `e2e` chaos tests (lossy, drops with reconnect via `Retry`, slow peer) and a concurrent stress test under `-race`; `make chaos`.
+- 57 fuzz targets, including `FuzzValueCodec`, `FuzzServerDispatch`, `FuzzServerSession` and new session/presentation/ACSE, codec and BER targets; `scripts/fuzz.sh` discovers them (`make fuzz`, `make fuzz-short` in `make check` and CI).
+- Interop is stack-parametrized (`MMS_INTEROP_STACK`, `make interop-all`): one test body per scenario, run in CI against libiec61850, dscsystems/go-iec61850 and iec61850-rust from mms-interop v0.3.0. Peer limitations are explicit per-stack quirks or skips with reasons (INTEROP.md). New `TestClient_PeerDisconnect` (Done/Err) and `TestServer_Shutdown`.
+
+### Docs
+
+- ERRORS.md, OBSERVABILITY.md, TIMEOUT_AND_CLOSE.md, API.md, README.md, LIMITS.md, KNOWN_LIMITATIONS.md, COMPLIANCE.md, INTEROP.md, RACE_NOTES.md and RELEASE_CHECKLIST.md updated; PROGRESS.md replaced by a current-status summary. Removed stale PLAN.md, REQUIREMENTS.md, extract_c_functions.py and mms_functions.csv.
+
+---
+
 ## v1.1.0
 
 **Date:** 2026-10-28

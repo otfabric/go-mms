@@ -14,9 +14,13 @@
 //
 // Environment variables (all optional):
 //
-//	LIBIEC61850_IMAGE     Docker image for the libiec61850 adapter (default: mms-interop-libiec61850:local)
-//	MMS_SERVER_BINARY     Path to libiec61850-mms-server binary (skips Docker when set)
-//	MMS_CLIENT_BINARY     Path to libiec61850-mms-client binary (skips Docker when set)
+//	MMS_INTEROP_STACK     Peer stack: libiec61850 (default), dscsystems or iec61850-rust
+//	MMS_INTEROP_IMAGE     Adapter image for the selected stack (overrides the per-stack variable)
+//	LIBIEC61850_IMAGE     Image for libiec61850 (default: mms-interop-libiec61850:local)
+//	DSCSYSTEMS_IMAGE      Image for dscsystems (default: mms-interop-dscsystems:local)
+//	IEC61850RUST_IMAGE    Image for iec61850-rust (default: mms-interop-iec61850-rust:local)
+//	MMS_SERVER_BINARY     Path to the stack's <stack>-mms-server binary (skips Docker when set)
+//	MMS_CLIENT_BINARY     Path to the stack's <stack>-mms-client binary (skips Docker when set)
 //	MMS_FIXTURE           Path to fixture file (default: testdata/interop.json)
 package interop
 
@@ -46,7 +50,6 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	defaultLibIECImage  = "mms-interop-libiec61850:local"
 	defaultFixturePath  = "testdata/interop.json"
 	readyTimeout        = 30 * time.Second
 	clientResultTimeout = 60 * time.Second
@@ -93,9 +96,10 @@ func validateAdapterMeta(t *testing.T, m adapterReady, wantFixture, wantAdapter 
 type serverHandle struct {
 	addr string
 	stop func()
+	kill func() // stops the peer process (and its container) at once
 }
 
-// clientResult is one JSON Line emitted by the libiec61850 MMS client adapter.
+// clientResult is one JSON Line emitted by the MMS client adapter.
 type clientResult struct {
 	Operation string      `json:"operation"`
 	OK        bool        `json:"ok"`
@@ -183,6 +187,8 @@ func dockerStop(name string) {
 
 func startAdapter(t *testing.T) *serverHandle {
 	t.Helper()
+	skipForStack(t)
+	peer := stack(t)
 
 	port := freePort(t)
 	fixtureAbs := fixturePath(t)
@@ -192,6 +198,7 @@ func startAdapter(t *testing.T) *serverHandle {
 	cmdCtx, cmdCancel := context.WithCancel(context.Background())
 
 	var cmd *exec.Cmd
+	stopContainer := func() {}
 	if binary := os.Getenv("MMS_SERVER_BINARY"); binary != "" {
 		cmd = exec.CommandContext(cmdCtx, binary,
 			"--fixture", fixtureAbs,
@@ -199,13 +206,14 @@ func startAdapter(t *testing.T) *serverHandle {
 		)
 	} else {
 		containerName := dockerContainerName(t)
+		stopContainer = func() { dockerStop(containerName) }
 		t.Cleanup(func() { dockerStop(containerName) })
-		image := getEnv("LIBIEC61850_IMAGE", defaultLibIECImage)
 		cmd = exec.CommandContext(cmdCtx, "docker", "run", "--rm",
 			"--name", containerName,
 			"-p", port+":"+port,
 			"-v", fixtureAbs+":/fixtures/mms/interop.json:ro",
-			image,
+			"--entrypoint", peer.serverCommand(),
+			peer.image(),
 			"--fixture", "/fixtures/mms/interop.json",
 			"--port", port,
 		)
@@ -259,9 +267,13 @@ func startAdapter(t *testing.T) *serverHandle {
 			stop()
 			t.Fatal("adapter exited before emitting readiness event")
 		}
-		validateAdapterMeta(t, m, mustLoadFixture(t).Revision, "libiec61850")
+		validateAdapterMeta(t, m, mustLoadFixture(t).Revision, peer.name)
 		t.Cleanup(stop)
-		return &serverHandle{addr: m.addr, stop: stop}
+		kill := func() {
+			stopContainer()
+			stop()
+		}
+		return &serverHandle{addr: m.addr, stop: stop, kill: kill}
 	case <-startCtx.Done():
 		stop()
 		t.Fatal("timed out waiting for adapter readiness")
@@ -278,6 +290,7 @@ func startAdapter(t *testing.T) *serverHandle {
 // receives parsed JSON Lines from the adapter's stdout.
 func startClientAdapter(t *testing.T, port int) <-chan clientResult {
 	t.Helper()
+	peer := stack(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), clientResultTimeout)
 
@@ -288,11 +301,10 @@ func startClientAdapter(t *testing.T, port int) <-chan clientResult {
 			"--port", fmt.Sprintf("%d", port),
 		)
 	} else {
-		image := getEnv("LIBIEC61850_IMAGE", defaultLibIECImage)
 		cmd = exec.CommandContext(ctx, "docker", "run", "--rm",
 			"--add-host=host.docker.internal:host-gateway",
-			"--entrypoint", "libiec61850-mms-client",
-			image,
+			"--entrypoint", peer.clientCommand(),
+			peer.image(),
 			"--host", "host.docker.internal",
 			"--port", fmt.Sprintf("%d", port),
 		)
@@ -345,6 +357,10 @@ func startClientAdapter(t *testing.T, port int) <-chan clientResult {
 type clientRun struct {
 	results []clientResult
 	files   []string // file store contents after the run
+
+	shutdownErr error // Server.Shutdown after the run
+	servedErr   error // ListenAndServe's result after Shutdown
+	connsAfter  int   // associations left after Shutdown
 }
 
 var sharedRun struct {
@@ -358,10 +374,22 @@ var sharedRun struct {
 // caller's lifetime, but the run is complete before that test returns.
 func sharedClientRun(t *testing.T) clientRun {
 	t.Helper()
+	skipForStack(t)
 	sharedRun.once.Do(func() {
 		srv := startGoMmsServer(t)
 		sharedRun.run.results = collectResults(t, startClientAdapter(t, srv.port))
 		sharedRun.run.files = srv.files.names()
+
+		// End the run with a graceful shutdown.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		sharedRun.run.shutdownErr = srv.srv.Shutdown(ctx)
+		select {
+		case sharedRun.run.servedErr = <-srv.served:
+		case <-ctx.Done():
+			sharedRun.run.servedErr = ctx.Err()
+		}
+		sharedRun.run.connsAfter = len(srv.srv.Connections())
 	})
 	if len(sharedRun.run.results) == 0 {
 		t.Fatal("client adapter produced no results")
@@ -532,8 +560,10 @@ type fixtureVar struct {
 }
 
 type goMmsServer struct {
-	port  int
-	files *fixtureFileStore
+	port   int
+	files  *fixtureFileStore
+	srv    *mms.Server
+	served <-chan error // ListenAndServe's result
 }
 
 // startGoMmsServer reads the fixture and starts a fixture-backed go-mms server
@@ -627,7 +657,8 @@ func startGoMmsServer(t *testing.T) *goMmsServer {
 	port := ln.Addr().(*net.TCPAddr).Port
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() { _ = srv.ListenAndServe(ctx, ln) }()
+	served := make(chan error, 1)
+	go func() { served <- srv.ListenAndServe(ctx, ln) }()
 	t.Cleanup(cancel)
 
 	// Wait until the server goroutine is actually accepting TCP connections.
@@ -644,7 +675,7 @@ func startGoMmsServer(t *testing.T) *goMmsServer {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	return &goMmsServer{port: port, files: files}
+	return &goMmsServer{port: port, files: files, srv: srv, served: served}
 }
 
 func loadFixture(path string) (*fixtureFile, error) {

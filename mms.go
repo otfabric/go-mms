@@ -251,7 +251,8 @@ func (c *Client) buildISOParams() isostack.Params {
 	}
 }
 
-// Close performs a hard shutdown of the MMS connection.
+// Close performs an orderly shutdown of the MMS connection (Conclude).
+// Use [Client.Abort] for an immediate one.
 //
 // Shutdown sequence:
 //  1. Marks the client as closed — all new service calls return [ErrClosed].

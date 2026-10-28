@@ -24,14 +24,15 @@ import (
 func loopbackPair() (client, server Transport) {
 	c2s := make(chan []byte, 16)
 	s2c := make(chan []byte, 16)
-	cl := &chanTransport{send: c2s, recv: s2c}
-	sr := &chanTransport{send: s2c, recv: c2s}
+	cl := &chanTransport{send: c2s, recv: s2c, done: make(chan struct{})}
+	sr := &chanTransport{send: s2c, recv: c2s, done: make(chan struct{})}
 	return cl, sr
 }
 
 type chanTransport struct {
 	send chan []byte
 	recv chan []byte
+	done chan struct{} // closed by Close; unblocks Receive like a real transport
 
 	mu     sync.Mutex
 	closed bool
@@ -58,6 +59,8 @@ func (t *chanTransport) Receive(ctx context.Context) ([]byte, error) {
 			return nil, errors.New("transport closed")
 		}
 		return data, nil
+	case <-t.done:
+		return nil, errors.New("transport closed")
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -69,6 +72,9 @@ func (t *chanTransport) Close() error {
 	if !t.closed {
 		t.closed = true
 		close(t.send)
+		if t.done != nil {
+			close(t.done)
+		}
 	}
 	return nil
 }

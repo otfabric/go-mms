@@ -20,6 +20,7 @@ automation systems including IEC 61850.
   - [Installation](#installation)
   - [Client](#client)
   - [Server](#server)
+- [Operations](#operations)
 - [Architecture](#architecture)
 - [Out of Scope](#out-of-scope)
 - [Status](#status)
@@ -158,6 +159,56 @@ func main() {
 
 See [`examples/`](examples/) for complete runnable examples.
 
+## Operations
+
+- **Errors** — every error is classified with sentinels and typed errors
+  (`ErrClosed`, `ErrInvokeTimeout`, `ErrInvalidArgument`, `*ServiceError`,
+  `*RejectError`, ...). Use `errors.Is`/`errors.As`, never the message.
+  See [ERRORS.md](ERRORS.md).
+- **Timeouts** — `DialOptions.RequestTimeout` bounds each confirmed request;
+  `ServerOptions.AssociationTimeout` and `iso.WithHandshakeTimeout` bound
+  connection setup. See [TIMEOUT_AND_CLOSE.md](TIMEOUT_AND_CLOSE.md) and
+  [LIMITS.md](LIMITS.md).
+- **Reconnect and retry** — `Client.Done()`/`Client.Err()` report a lost
+  association; `iso.WithRetry(mms.DefaultRetryPolicy())` retries dialing,
+  and `mms.Retry` wraps any operation in backoff with jitter.
+- **Graceful shutdown** — `Server.Shutdown(ctx)` stops accepting, lets
+  in-flight requests finish and aborts the associations;
+  `ListenAndServe` then returns `mms.ErrServerClosed`.
+- **Metrics and logging** — implement `mms.Metrics` (`DialOptions.Metrics`,
+  `ServerOptions.Metrics`) to export request and connection events to
+  Prometheus or OpenTelemetry; `log/slog` loggers via `DialOptions.Logger`,
+  `ServerOptions.Logger` and `iso.WithLogger`. See
+  [OBSERVABILITY.md](OBSERVABILITY.md).
+
+```go
+client, err := iso.Dial(ctx, "10.0.0.1:102",
+	iso.WithRetry(mms.DefaultRetryPolicy()),
+	iso.WithClientDialOptions(mms.DialOptions{
+		RequestTimeout: 5 * time.Second,
+		Metrics:        myMetrics, // implements mms.Metrics
+	}),
+)
+if err != nil {
+	log.Fatal(err)
+}
+go func() {
+	<-client.Done()
+	log.Println("association lost:", client.Err())
+}()
+
+// Server: stop gracefully on SIGTERM.
+go func() {
+	<-sigterm
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(shutdownCtx)
+}()
+if err := srv.ListenAndServe(ctx, ln); !errors.Is(err, mms.ErrServerClosed) {
+	log.Fatal(err)
+}
+```
+
 ## Architecture
 
 go-mms implements the full ISO/OSI upper-layer stack required by MMS:
@@ -201,8 +252,14 @@ correct protocol encoding or decoding defects without being considered breaking
 changes — a standards-correct wire fix can change observable behaviour while
 remaining API-compatible.
 
-- **Well-tested**: 630+ unit tests, 42+ integration tests, 200+ negative
-  tests, 14 race/concurrency tests, 18 fuzz targets, 20 benchmarks.
+- **Well-tested**: 1,000+ unit tests, 60+ end-to-end tests, 200+ negative
+  tests, race/concurrency and chaos tests, 57 fuzz targets, 21 benchmarks.
+- **Quality gates** (CI `quality` job; coverage and the short fuzz pass are
+  also part of `make check`): ≥ 90% statement
+  coverage per package and in total (`make coverage`), a fuzz pass over
+  every target (`make fuzz-short`; `make fuzz` for longer runs), and chaos
+  tests under `-race` through a fault-injecting connection (`make chaos`).
+  See [PROGRESS.md](PROGRESS.md).
 - **Hardened**: strict decoder validation, bounds checking on all PDU
   fields, resource limits on negotiated parameters.
 - **Interop-verified**: client and server behaviour tested bidirectionally
@@ -214,10 +271,12 @@ remaining API-compatible.
 - [`examples/`](examples/) — runnable client and server examples
 - [`API.md`](API.md) — complete public API reference (types, methods, constants)
 - [`ERRORS.md`](ERRORS.md) — error taxonomy and handling guide
-- [`OBSERVABILITY.md`](OBSERVABILITY.md) — slog logging; MMS vs ISO logger separation
+- [`OBSERVABILITY.md`](OBSERVABILITY.md) — metrics interface (Prometheus example), slog logging
+- [`TIMEOUT_AND_CLOSE.md`](TIMEOUT_AND_CLOSE.md) — timeouts, cancellation, reconnect and shutdown
 - [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) · [`LIMITS.md`](LIMITS.md) — concurrency / outstanding-request behaviour and bounds
 - [`INTEROP.md`](INTEROP.md) — interoperability tests and MMS compatibility matrix
 - [`COMPLIANCE.md`](COMPLIANCE.md) — service support matrix with test coverage
+- [`PROGRESS.md`](PROGRESS.md) — current status and quality gates
 - [`RELEASE.md`](RELEASE.md) — changelog
 - [pkg.go.dev](https://pkg.go.dev/github.com/otfabric/go-mms) — generated API reference
 

@@ -18,3 +18,21 @@ jobs:
       codecov-name: go-mms
       go-versions: '["1.23","1.24","1.25","1.26"]'
     secrets: inherit
+
+  quality:
+    name: Quality gates (coverage ≥90%, fuzz, chaos)
+    runs-on: ubuntu-latest
+    env:
+      GOWORK: "off"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: Per-package coverage gate
+        run: scripts/coverage-gate.sh coverage.out
+      - name: Short fuzz pass
+        run: FUZZTIME=2s scripts/fuzz.sh
+      - name: Short chaos run (race)
+        run: make chaos CHAOS_DURATION=5s

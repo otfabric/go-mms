@@ -43,6 +43,9 @@ func dv(item string) mms.ObjectName {
 
 func readInts(t *testing.T, v *mms.Value) []int64 {
 	t.Helper()
+	if v == nil {
+		t.Fatal("no value (failed access result)")
+	}
 	elems, ok := v.ArrayElements()
 	if !ok {
 		elems, ok = v.Structure()
@@ -148,6 +151,39 @@ func TestClient_Abort(t *testing.T) {
 	defer c2.Close(ctx)
 	if _, err := c2.Read(ctx, mms.ReadRequest{DomainID: "interop", ItemID: "boolean"}); err != nil {
 		t.Fatalf("server unusable after a peer aborted: %v", err)
+	}
+}
+
+// TestClient_PeerDisconnect stops the libiec61850 server under an open
+// association: Done is closed, Err reports ErrClosed, and requests fail
+// with ErrClosed instead of hanging.
+func TestClient_PeerDisconnect(t *testing.T) {
+	h := startAdapter(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	c := dial(t, ctx, h.addr)
+	defer func() { _ = c.Abort(context.Background()) }()
+	if err := c.Err(); err != nil {
+		t.Fatalf("Err on a live association = %v", err)
+	}
+	select {
+	case <-c.Done():
+		t.Fatal("Done closed on a live association")
+	default:
+	}
+
+	h.kill()
+	select {
+	case <-c.Done():
+	case <-ctx.Done():
+		t.Fatal("Done not closed after the peer went away")
+	}
+	if err := c.Err(); !errors.Is(err, mms.ErrClosed) {
+		t.Errorf("Err = %v, want ErrClosed", err)
+	}
+	if _, err := c.Identify(ctx); !errors.Is(err, mms.ErrClosed) {
+		t.Errorf("Identify after disconnect = %v, want ErrClosed", err)
 	}
 }
 
@@ -555,18 +591,20 @@ func TestClient_DeleteAllNVLs_UnsupportedByPeer(t *testing.T) {
 // The libiec61850 server adapter sends only the named-list reports of the
 // fixture: libiec61850 mis-sizes listOfVariable reports with
 // domain-specific names (capabilities.json knownLimitations). The
-// listOfVariable form is covered in the go-mms server → libiec61850 client
+// listOfVariable form is then covered in the go-mms server → peer client
 // direction.
 func TestClient_InformationReport(t *testing.T) {
 	ctx, c := session(t)
 	fix := mustLoadFixture(t)
-	var named []fixtureReport
-	for _, r := range fix.InformationReports {
-		if r.VMDList != "" {
-			named = append(named, r)
+	if stack(t).quirks.namedListReportsOnly {
+		var named []fixtureReport
+		for _, r := range fix.InformationReports {
+			if r.VMDList != "" {
+				named = append(named, r)
+			}
 		}
+		fix.InformationReports = named
 	}
-	fix.InformationReports = named
 
 	var mu sync.Mutex
 	var reports []*mms.InformationReportIndication
@@ -774,7 +812,7 @@ func TestClient_FileOpenReadClose(t *testing.T) {
 // accordingly, but never seeks: it returns size-position bytes from offset
 // 0 (capabilities.json knownLimitations). The byte count proves the peer
 // decoded go-mms's initialPosition; content semantics are covered by the
-// Go↔Go e2e suite.
+// Go↔Go e2e suite and by peers that seek.
 func TestClient_FileOpen_InitialPosition(t *testing.T) {
 	ctx, c := session(t)
 	want, _ := mustLoadFixture(t).file(t, "REC01.DAT")
@@ -790,8 +828,13 @@ func TestClient_FileOpen_InitialPosition(t *testing.T) {
 	if len(got) != len(want)-4 {
 		t.Errorf("read %d bytes from offset 4, want %d", len(got), len(want)-4)
 	}
-	if !bytes.Equal(got, want[:len(want)-4]) {
-		t.Errorf("content from offset 4 = %x; expected libiec61850's unseeked %x — peer fixed? update knownLimitations", got, want[:len(want)-4])
+	switch {
+	case !stack(t).quirks.unseekedFileOpen:
+		if !bytes.Equal(got, want[4:]) {
+			t.Errorf("content from offset 4 = %x, want %x", got, want[4:])
+		}
+	case !bytes.Equal(got, want[:len(want)-4]):
+		t.Errorf("content from offset 4 = %x; expected the unseeked %x — peer fixed? update knownLimitations", got, want[:len(want)-4])
 	}
 	if err := c.FileClose(ctx, f.FrsmID); err != nil {
 		t.Fatalf("FileClose: %v", err)
