@@ -57,7 +57,7 @@ client-sent Cancel, client UnsolicitedStatus callback, segmented
 | Coverage gate | `make coverage` | `scripts/coverage-gate.sh`: fails when any package or the total is below `COVERAGE_MIN` (default 90%); examples excluded |
 | Fuzzing | `make fuzz` (15s per target), `make fuzz-short` (2s) | `scripts/fuzz.sh` discovers every `Fuzz*` target (57: PDU, BER, codec, ISO stack, value codec, server dispatch and session); `fuzz-ber`, `fuzz-pdu` restrict packages |
 | Chaos | `make chaos` (`CHAOS_DURATION`, default 30s; `CHAOS_SEED`, 0 = random) | `TestChaos_*`, `TestStress_*` under `-race` through `internal/chaos` (delays, chunked I/O, bandwidth limit, drops, resets, stalls); seed logged for replay |
-| Live interop | `make interop` (`-tags=interop`, Docker) | 120 tests, both directions against libiec61850 via mms-interop; `TestInteropCoverage` guard. See [INTEROP.md](INTEROP.md) |
+| Live interop | `make interop` (`-tags=interop`, Docker) | 120 tests, both directions against libiec61850 via iec61850-interop; `TestInteropCoverage` guard. See [INTEROP.md](INTEROP.md) |
 | Static checks | `make vet`, `make lint`, `make vuln`, `make test-armv7` | go vet, golangci-lint, govulncheck, 32-bit build of `internal/pdu` |
 
 `make check` runs fmt, tidy, vet, lint, vuln, test, test-race, coverage,

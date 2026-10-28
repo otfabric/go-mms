@@ -11,20 +11,20 @@ permissions:
   contents: read
   packages: read
 
-# Adapter images from the mms-interop v0.4.0 release (manifest.json images.*),
-# pinned by digest. When mms-interop publishes new adapters, bump the
+# Adapter images from the iec61850-interop v1.0.0 release (manifest.json images.*),
+# pinned by digest. When iec61850-interop publishes new adapters, bump the
 # digests below and the interop/testdata fixture copies (interop.json;
 # iec61850/values.json for iec61850bean) together.
 env:
-  MMS_INTEROP_RELEASE: v0.4.0
-  LIBIEC61850_IMAGE: ghcr.io/otfabric/mms-interop-libiec61850@sha256:966e17e37e7fb5c22b825443ce79565d51067705c8f8485fd63d4001b4bd31ff
-  DSCSYSTEMS_IMAGE: ghcr.io/otfabric/mms-interop-dscsystems@sha256:899e4d96605a921647e7c079db0b0a7f69c05d0582830b81607bc1a152a8d60a
-  IEC61850RUST_IMAGE: ghcr.io/otfabric/mms-interop-iec61850-rust@sha256:c46c83c6d7eaa9800bbe48fb6ca9d25a4e9338d0bfc6f31fbba7813d89e4445d
-  IEC61850BEAN_IMAGE: ghcr.io/otfabric/mms-interop-iec61850bean@sha256:ab2cda6a77ea054a04a736fdf1c36c5c8f50c766aa41cf5818bd11f3fadfac7d
+  MMS_INTEROP_RELEASE: v1.0.0
+  LIBIEC61850_IMAGE: ghcr.io/otfabric/iec61850-interop-libiec61850@sha256:966e17e37e7fb5c22b825443ce79565d51067705c8f8485fd63d4001b4bd31ff
+  DSCSYSTEMS_IMAGE: ghcr.io/otfabric/iec61850-interop-dscsystems@sha256:899e4d96605a921647e7c079db0b0a7f69c05d0582830b81607bc1a152a8d60a
+  IEC61850RUST_IMAGE: ghcr.io/otfabric/iec61850-interop-iec61850-rust@sha256:c46c83c6d7eaa9800bbe48fb6ca9d25a4e9338d0bfc6f31fbba7813d89e4445d
+  IEC61850BEAN_IMAGE: ghcr.io/otfabric/iec61850-interop-iec61850bean@sha256:ab2cda6a77ea054a04a736fdf1c36c5c8f50c766aa41cf5818bd11f3fadfac7d
 
 jobs:
   interop:
-    name: ${{ matrix.stack }} MMS interop
+    name: ${{ matrix.stack }} interop
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -62,5 +62,5 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: go-mms-interop-diagnostics-${{ matrix.stack }}
+          name: go-mms-iec61850-interop-diagnostics-${{ matrix.stack }}
           path: artifacts/

@@ -4,7 +4,7 @@
 
 // Package interop contains interoperability tests for go-mms.
 //
-// Tests in this package start mms-interop adapter containers (or local
+// Tests in this package start iec61850-interop adapter containers (or local
 // binaries), wait for the JSON readiness event, exercise the go-mms API,
 // and assert results. They own the full lifecycle: start, wait, run, teardown.
 //
@@ -16,9 +16,9 @@
 //
 //	MMS_INTEROP_STACK     Peer stack: libiec61850 (default), dscsystems or iec61850-rust
 //	MMS_INTEROP_IMAGE     Adapter image for the selected stack (overrides the per-stack variable)
-//	LIBIEC61850_IMAGE     Image for libiec61850 (default: mms-interop-libiec61850:local)
-//	DSCSYSTEMS_IMAGE      Image for dscsystems (default: mms-interop-dscsystems:local)
-//	IEC61850RUST_IMAGE    Image for iec61850-rust (default: mms-interop-iec61850-rust:local)
+//	LIBIEC61850_IMAGE     Image for libiec61850 (default: iec61850-interop-libiec61850:local)
+//	DSCSYSTEMS_IMAGE      Image for dscsystems (default: iec61850-interop-dscsystems:local)
+//	IEC61850RUST_IMAGE    Image for iec61850-rust (default: iec61850-interop-iec61850-rust:local)
 //	MMS_SERVER_BINARY     Path to the stack's <stack>-mms-server binary (skips Docker when set)
 //	MMS_CLIENT_BINARY     Path to the stack's <stack>-mms-client binary (skips Docker when set)
 //	MMS_FIXTURE           Path to fixture file (default: testdata/interop.json)

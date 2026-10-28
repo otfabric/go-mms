@@ -7,7 +7,7 @@
 //
 //	go-mms client → <stack>-ied-server
 //
-// The IED server serves the mms-interop IEC 61850 fixture (revision
+// The IED server serves the iec61850-interop IEC 61850 fixture (revision
 // iec61850-v3: interop.icd and values.json) built into the image. go-mms
 // reads it as plain MMS: logical device InteropLD of IED InteropIED is
 // domain InteropIEDInteropLD, and data attribute LN.DO.DA with functional
@@ -172,7 +172,7 @@ func mmsItem(t *testing.T, ref, fc string) string {
 // seededAttributes are the values.json references the IED adapters set
 // at start, with their functional constraint. GGIO1.DPS1.stVal and
 // MMTR1.TotVAh.actVal are in values.json but not seeded by the
-// iec61850bean adapter (mms-interop v0.4.0); their types are checked in
+// iec61850bean adapter (iec61850-interop v1.0.0); their types are checked in
 // TestIEDServer_GetVariableAccessAttributes.
 var seededAttributes = []struct{ ref, fc string }{
 	{"InteropLD/LLN0.Mod.stVal", "ST"},

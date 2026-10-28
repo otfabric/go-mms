@@ -42,7 +42,7 @@ Every package now has ≥90% test coverage, enforced in CI. All API changes are
 additive.
 
 Interop runs against three MMS peers from the mms-interop
-[v0.3.0](https://github.com/otfabric/mms-interop/releases/tag/v0.3.0) images,
+[v0.3.0](https://github.com/otfabric/iec61850-interop/releases/tag/v0.3.0) images,
 pinned by digest: libiec61850 (120 pass), dscsystems/go-iec61850 (112 pass,
 8 skipped peer limitations) and iec61850-rust (120 pass).
 
@@ -110,7 +110,7 @@ edge behaviours change (see Changed).
 Requires the mms-interop v0.2.0 adapters (files, journals, reports, Status,
 alternate access, abort). CI pulls
 `ghcr.io/otfabric/mms-interop-libiec61850@sha256:0ce17d8471eda3a3ef8949a5819b44359a2aeaec23695fee06c5dbea083f0391`
-from that [release](https://github.com/otfabric/mms-interop/releases/tag/v0.2.0).
+from that [release](https://github.com/otfabric/iec61850-interop/releases/tag/v0.2.0).
 
 ## Changes
 
@@ -400,7 +400,7 @@ The hand-rolled COTP CR/CC handshake, TPKT framing, and `cotpTransport` implemen
 - `libiec61850_client_test.go` — go-mms client ↔ libiec61850-mms-server adapter: 21 scenarios covering all primitive types, array, structure, multi-variable read/write, NVL define/read/delete, negative cases, and reconnect.
 - `libiec61850_server_test.go` — libiec61850-mms-client ↔ go-mms server: matching bidirectional coverage.
 
-Tests start Docker containers from the [mms-interop](https://github.com/otfabric/mms-interop) adapter images, wait for a JSON readiness event, run assertions, and tear down. No pre-running containers or manual steps are required. Gated behind `-tags=interop`; run with `make interop`.
+Tests start Docker containers from the [mms-interop](https://github.com/otfabric/iec61850-interop) adapter images, wait for a JSON readiness event, run assertions, and tear down. No pre-running containers or manual steps are required. Gated behind `-tags=interop`; run with `make interop`.
 
 **Added**: `make interop` target and CI workflow.
 
