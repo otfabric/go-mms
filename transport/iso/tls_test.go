@@ -23,11 +23,10 @@ import (
 )
 
 // tlsTestServer creates a minimal MMS server for TLS integration tests.
-// Self-contained so tls_test.go does not depend on integration_test.go helpers.
 func tlsTestServer(t *testing.T) *mms.Server {
 	t.Helper()
 	srv := mms.NewServer(mms.ServerOptions{
-		Logger: slog.New(slog.NewTextHandler(tlsTestLogWriter{t}, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Logger: slog.New(slog.NewTextHandler(newTestWriter(t), &slog.HandlerOptions{Level: slog.LevelDebug})),
 		MMS: mms.ServerMMSOptions{
 			MaxPDUSize:                65000,
 			MaxOutstandingCalling:     5,
@@ -51,14 +50,6 @@ func tlsTestServer(t *testing.T) *mms.Server {
 		t.Fatal(err)
 	}
 	return srv
-}
-
-type tlsTestLogWriter struct{ t *testing.T }
-
-func (w tlsTestLogWriter) Write(p []byte) (int, error) {
-	w.t.Helper()
-	w.t.Log(string(p))
-	return len(p), nil
 }
 
 func selfSignedCert(t *testing.T, cn string) (tls.Certificate, *x509.CertPool) {
@@ -308,7 +299,7 @@ func TestTLSWithAuthenticator(t *testing.T) {
 
 	var gotAuth *mms.AuthContext
 	srv := mms.NewServer(mms.ServerOptions{
-		Logger: slog.New(slog.NewTextHandler(tlsTestLogWriter{t}, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Logger: slog.New(slog.NewTextHandler(newTestWriter(t), &slog.HandlerOptions{Level: slog.LevelDebug})),
 		MMS: mms.ServerMMSOptions{
 			MaxPDUSize:                65000,
 			MaxOutstandingCalling:     5,
@@ -385,7 +376,7 @@ func TestTLSAuthenticatorReject(t *testing.T) {
 	serverCert, serverPool := selfSignedCert(t, "localhost")
 
 	srv := mms.NewServer(mms.ServerOptions{
-		Logger: slog.New(slog.NewTextHandler(tlsTestLogWriter{t}, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Logger: slog.New(slog.NewTextHandler(newTestWriter(t), &slog.HandlerOptions{Level: slog.LevelDebug})),
 		MMS: mms.ServerMMSOptions{
 			MaxPDUSize:                65000,
 			MaxOutstandingCalling:     5,
@@ -423,7 +414,7 @@ func TestTLSAuthenticatorReject(t *testing.T) {
 func TestPlaintextRemoteAddr(t *testing.T) {
 	var gotAuth *mms.AuthContext
 	srv := mms.NewServer(mms.ServerOptions{
-		Logger: slog.New(slog.NewTextHandler(tlsTestLogWriter{t}, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Logger: slog.New(slog.NewTextHandler(newTestWriter(t), &slog.HandlerOptions{Level: slog.LevelDebug})),
 		MMS:    mms.ServerMMSOptions{MaxPDUSize: 65000},
 		Authenticate: func(_ context.Context, auth *mms.AuthContext) (mms.AuthResult, error) {
 			gotAuth = auth
