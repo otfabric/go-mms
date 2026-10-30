@@ -13,14 +13,19 @@ permissions:
 
 jobs:
   ci:
-    uses: otfabric/.github/.github/workflows/go-ci.yml@v2
+    uses: otfabric/.github/.github/workflows/go-ci.yml@v2.1.0
     with:
+      run-govulncheck: true
+      coverage-min: "90"
+      fuzz-time: 10s
+      # 57 Fuzz targets at 10s each do not fit the default 15-minute job limit.
+      timeout-minutes: 25
       codecov-name: go-mms
       go-versions: '["1.23","1.24","1.25","1.26"]'
     secrets: inherit
 
   quality:
-    name: Quality gates (coverage ≥90%, fuzz, chaos)
+    name: Quality gates (per-package coverage ≥90%, chaos)
     runs-on: ubuntu-latest
     env:
       GOWORK: "off"
@@ -32,7 +37,5 @@ jobs:
           cache: true
       - name: Per-package coverage gate
         run: scripts/coverage-gate.sh coverage.out
-      - name: Short fuzz pass
-        run: FUZZTIME=5s scripts/fuzz.sh
       - name: Short chaos run (race)
         run: make chaos CHAOS_DURATION=5s
