@@ -113,7 +113,7 @@ test-armv7: ## Compile internal/pdu for linux/armv7 (catches 32-bit int overflow
 	@echo "Compiling ./internal/pdu for GOOS=linux GOARCH=arm GOARM=7"
 	@tmp=$$(mktemp); \
 	GOOS=linux GOARCH=arm GOARM=7 go test -c -o "$$tmp" ./internal/pdu/; \
-	rm -f "$$tmp"
+	rc=$$?; rm -f "$$tmp"; exit $$rc
 
 check: fmt tidy vet lint vuln test test-race coverage fuzz-short test-armv7 ## Run all pre-commit checks
 
