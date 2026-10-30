@@ -403,7 +403,10 @@ func TestMarshalDeleteNVLResponse_Errors(t *testing.T) {
 	if _, err := MarshalDeleteNVLResponse(-1, 0); err == nil {
 		t.Fatal("negative")
 	}
-	if _, err := MarshalDeleteNVLResponse(0, int(math.MaxUint32)+1); err == nil {
-		t.Fatal("overflow")
+	if math.MaxInt > math.MaxUint32 { // a 32-bit int cannot hold the value
+		over := int64(math.MaxUint32) + 1
+		if _, err := MarshalDeleteNVLResponse(0, int(over)); err == nil {
+			t.Fatal("overflow")
+		}
 	}
 }
