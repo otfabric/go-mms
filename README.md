@@ -270,7 +270,9 @@ remaining API-compatible.
 
 - [`examples/`](examples/) — runnable client and server examples
 - [`API.md`](API.md) — complete public API reference (types, methods, constants)
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — layers, goroutines and ownership
 - [`ERRORS.md`](ERRORS.md) — error taxonomy and handling guide
+- [`TESTING.md`](TESTING.md) — test tiers, coverage policy, fuzz regression
 - [`OBSERVABILITY.md`](OBSERVABILITY.md) — metrics interface (Prometheus example), slog logging
 - [`TIMEOUT_AND_CLOSE.md`](TIMEOUT_AND_CLOSE.md) — timeouts, cancellation, reconnect and shutdown
 - [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) · [`LIMITS.md`](LIMITS.md) — concurrency / outstanding-request behaviour and bounds
