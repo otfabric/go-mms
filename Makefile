@@ -6,7 +6,7 @@ export GOWORK := off
 PKGS     := ./...
 FUZZTIME ?= 15s
 
-.PHONY: help interop-all test test-race test-verbose vet lint fmt fuzz fuzz-short fuzz-ber fuzz-pdu chaos bench tidy check clean coverage coverage-html coverage-clean interop test-armv7 vuln
+.PHONY: help interop-all test test-race test-verbose vet lint fmt fuzz fuzz-short fuzz-ber fuzz-pdu chaos bench tidy check clean coverage coverage-check coverage-html coverage-clean cross e2e interop test-armv7 vuln
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "%-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -57,6 +57,8 @@ coverage: ## Run tests with coverage and fail below COVERAGE_MIN (default 90%) p
 	@echo "Running coverage gate"
 	@set -o pipefail; scripts/coverage-gate.sh coverage.out | tee coverage.txt
 
+coverage-check: coverage ## Alias of coverage: fail below COVERAGE_MIN per package and in total
+
 coverage-html: coverage ## Generate HTML coverage report
 	@echo "Generating HTML coverage report"
 	@go tool cover -html=coverage.out -o coverage.html
@@ -77,6 +79,10 @@ fuzz-ber: ## Fuzz only BER utility decoders
 fuzz-pdu: ## Fuzz only PDU decoders
 	@scripts/fuzz.sh ./internal/pdu ./internal/codec
 
+e2e: ## Run the end-to-end suite (go-mms client against go-mms server over TCP) under -race
+	@echo "Running end-to-end tests"
+	@go test -race -count=1 -timeout 20m ./e2e
+
 CHAOS_DURATION ?= 30s
 CHAOS_SEED     ?= 0
 
@@ -94,6 +100,14 @@ tidy: ## Tidy and verify module files
 	@go mod tidy
 	@echo "Running go mod verify"
 	@go mod verify
+
+CROSS_PLATFORMS ?= linux/amd64 linux/arm64 linux/arm darwin/amd64 darwin/arm64 windows/amd64 windows/arm64 freebsd/amd64
+
+cross: ## Cross-compile without cgo for CROSS_PLATFORMS (build only, tests do not run)
+	@for p in $(CROSS_PLATFORMS); do \
+		echo "Building $$p"; \
+		CGO_ENABLED=0 GOOS=$${p%/*} GOARCH=$${p#*/} go build $(PKGS) || exit 1; \
+	done
 
 test-armv7: ## Compile internal/pdu for linux/armv7 (catches 32-bit int overflows)
 	@echo "Compiling ./internal/pdu for GOOS=linux GOARCH=arm GOARM=7"
