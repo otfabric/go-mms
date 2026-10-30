@@ -38,8 +38,8 @@ No pre-running containers. No manual steps. Tests are gated behind `-tags=intero
 ## Running
 
 ```bash
-# Build adapter images locally (in iec61850-interop)
-cd ../iec61850-interop && make build-libiec61850 build-dscsystems build-iec61850-rust build-iec61850bean
+# Build adapter images locally (the targets live in the sibling repository iec61850-interop)
+make -C ../iec61850-interop build-libiec61850 build-dscsystems build-iec61850-rust build-iec61850bean
 
 # One stack (default libiec61850)
 MMS_INTEROP_STACK=dscsystems make interop
