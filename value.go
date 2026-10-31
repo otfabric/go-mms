@@ -350,7 +350,8 @@ func NewVisibleString(s string) *Value {
 	return &Value{typ: ValueTypeVisibleString, stringVal: s}
 }
 
-// NewMmsString creates a [Value] of type [ValueTypeMmsString].
+// NewMmsString creates a [Value] of type [ValueTypeMmsString]. s must be
+// valid UTF-8: MMSString is a UTF8String, so encoding anything else fails.
 func NewMmsString(s string) *Value {
 	return &Value{typ: ValueTypeMmsString, stringVal: s}
 }

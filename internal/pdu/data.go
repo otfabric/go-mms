@@ -4,14 +4,21 @@ package pdu
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"time"
+	"unicode/utf8"
 
 	"github.com/otfabric/go-mms/internal/berutil"
 )
 
 const maxDataNestingDepth = 64
+
+// errMmsStringUTF8 reports an MMSString that is not valid UTF-8. ISO 9506-2
+// defines MMSString as a UTF8String, so such content is malformed on the
+// wire and is refused in both directions.
+var errMmsStringUTF8 = errors.New("pdu: mms string is not valid UTF-8")
 
 // MMS Data CHOICE tags (context-specific implicit), per ISO 9506-2.
 const (
@@ -87,6 +94,9 @@ func MarshalData(v *DataValue) ([]byte, error) {
 		return berutil.EncodeTLV(TagDataVisibleStr, []byte(v.Str)), nil
 
 	case TagDataMmsString:
+		if !utf8.ValidString(v.Str) {
+			return nil, errMmsStringUTF8
+		}
 		return berutil.EncodeTLV(TagDataMmsString, []byte(v.Str)), nil
 
 	case TagDataUTCTime:
@@ -255,6 +265,9 @@ func decodeDataContentWithDepth(tag byte, content []byte, depth int) (*DataValue
 		return &DataValue{Tag: tag, Str: string(content)}, nil
 
 	case TagDataMmsString:
+		if !utf8.Valid(content) {
+			return nil, errMmsStringUTF8
+		}
 		return &DataValue{Tag: tag, Str: string(content)}, nil
 
 	case TagDataUTCTime:
