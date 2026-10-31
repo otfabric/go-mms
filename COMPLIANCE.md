@@ -83,7 +83,7 @@
 | Live interop tests | 120 | `interop/` (`-tags=interop`) — both directions against libiec61850 `v1.6.2.1-89-g6e265c54` via iec61850-interop; `TestInteropCoverage` guards the API and the server's service dispatch (see [INTEROP.md](INTEROP.md)) |
 | Wire-vector tests | 11 | `internal/pdu/interop_test.go`, `internal/pdu/peer_vectors_test.go` — BER patterns as encoded by libiec61850 |
 | Golden fixture tests | 33 | 27 in `internal/pdu/testdata/golden/` + 6 in `internal/codec/testdata/golden/`; regenerate with `-update-golden` flag |
-| Coverage gate | ≥ 90% | `make coverage` (`scripts/coverage-gate.sh`) fails when any package or the total is below `COVERAGE_MIN` (default 90); run by the CI `quality` job |
+| Coverage gate | ≥ 90% | `make coverage` (`scripts/coverage-gate.sh`) fails when any package or the total is below `COVER_PKG_MIN` (default 90); run by the CI `quality` job |
 
 ## Known Gaps
 

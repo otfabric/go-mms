@@ -22,7 +22,7 @@ This repository follows **otfabric/engineering policy 1.1**, profile **protocol-
 
 ## Hard rules
 
-1. Never lower `COVERAGE_MIN` (90, per package and in total, `scripts/coverage-gate.sh`), add lint suppressions, or skip/delete tests to make CI pass.
+1. Never lower `COVER_PKG_MIN` (90, per package and in total, `scripts/coverage-gate.sh`), add lint suppressions, or skip/delete tests to make CI pass.
 2. Never invent protocol semantics; cite the specification clause.
 3. Interop claims only from passing runs against the pinned iec61850-interop images.
 4. Exported API changes are breaking for go-iec61850: this library stays on v0 or v1, and a breaking change is listed in RELEASE.md.

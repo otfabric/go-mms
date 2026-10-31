@@ -17,7 +17,7 @@ Run `make help` for the list of targets.
 ## Tests
 
 - `make test`, `make test-race`: unit and end-to-end tests.
-- `make coverage`: fails below `COVERAGE_MIN` (default 90), per package and in total. Do not lower it.
+- `make coverage`: fails below `COVER_PKG_MIN` (default 90), per package and in total. Do not lower it.
 - `make fuzz`: every fuzz target for `FUZZTIME` (default 15s). `make fuzz-ber` and `make fuzz-pdu` run the decoder targets only.
 - `make chaos`: chaos and stress tests under the race detector.
 - `make interop`, `make interop-all`: tests against independent stacks, see [INTEROP.md](INTEROP.md).

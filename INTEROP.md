@@ -212,7 +212,7 @@ Docker):
 | Target | What it runs |
 |--------|--------------|
 | `make test` / `make test-race` | Unit and `e2e` tests (go-mms client ↔ go-mms server) |
-| `make coverage` | `scripts/coverage-gate.sh`: fails below `COVERAGE_MIN` (default 90%) per package or in total |
+| `make coverage` | `scripts/coverage-gate.sh`: fails below `COVER_PKG_MIN` (default 90%) per package or in total |
 | `make fuzz` / `make fuzz-short` | `scripts/fuzz.sh`: every `Fuzz*` target, discovered with `go test -list`, for `FUZZTIME` (default 15s; 2s for `fuzz-short`) |
 | `make chaos` | `TestChaos_*` / `TestStress_*` under `-race` through `internal/chaos` fault-injecting connections (delays, chunked I/O, bandwidth limit, drops, resets, stalls); `CHAOS_DURATION` (default 30s) and `CHAOS_SEED` (0 = random; the seed is logged for replay), passed as `MMS_CHAOS_DURATION` / `MMS_CHAOS_SEED` |
 

@@ -36,6 +36,6 @@ jobs:
           go-version: "1.26"
           cache: true
       - name: Per-package coverage gate
-        run: scripts/coverage-gate.sh coverage.out
+        run: make coverage-pkg-check
       - name: Short chaos run (race)
         run: make chaos CHAOS_DURATION=5s

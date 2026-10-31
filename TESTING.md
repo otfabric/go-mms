@@ -50,15 +50,33 @@ variables and results are in [INTEROP.md](INTEROP.md) and
 (`interop/coverage_test.go`) fails when an exported method has no interop test
 or written exemption.
 
-There is no `*_REQUIRE_*` switch. A missing Docker or image fails the test
-rather than skipping it. `t.Skip` in the suite is used only where the selected
-peer does not support the scenario, so a green run of one stack does not cover
-every test. Read the skips in the output.
+A missing Docker or image fails the test rather than skipping it. `t.Skip` in
+the suite is used only where the selected peer does not support the scenario,
+so a green run of one stack does not cover every test. Read the skips in the
+output.
+
+`MMS_INTEROP_REQUIRE_CALLS=1` turns the skip for a client adapter that answers
+`unsupported` into a failure, so an adapter image that loses a call cannot pass
+unnoticed. `interop.yml` sets it for every stack except dscsystems, whose client
+has six documented gaps.
+
+## Goroutine leaks
+
+Packages that start goroutines (root, `transport/iso`, `internal/serverconn`,
+and `e2e`) run `goleak.VerifyTestMain` in `leak_main_test.go`: a goroutine left
+running after the tests fails the package. `go.uber.org/goleak` is a test-only
+dependency.
+
+## Extended tier
+
+`.github/workflows/nightly.yml` runs every Fuzz target for 2 minutes
+(`make fuzz FUZZTIME=2m`) and the chaos suite for 10 minutes under the race
+detector with a random seed (`make chaos CHAOS_DURATION=10m`).
 
 ## Coverage policy
 
 `scripts/coverage-gate.sh` fails when the total or any package with statements
-is below `COVERAGE_MIN` (default 90). `ci.yml` applies the same floor to the
+is below `COVER_PKG_MIN` (90, `make coverage-pkg-check`). `ci.yml` applies the same floor to the
 shared workflow with `coverage-min: "90"`. Do not lower it.
 
 The only exclusion is `examples/`: example programs are not library code.

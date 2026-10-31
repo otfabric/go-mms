@@ -6,7 +6,11 @@ export GOWORK := off
 PKGS     := ./...
 FUZZTIME ?= 15s
 
-.PHONY: help interop-all test test-race test-verbose vet lint fmt fuzz fuzz-short fuzz-ber fuzz-pdu chaos bench tidy check clean coverage coverage-check coverage-html coverage-clean cross e2e interop test-armv7 vuln
+# Per-package and total floor (TEST-012), enforced by scripts/coverage-gate.sh.
+# Lowest package when set: internal/pdu, 95.5 % with -coverpkg.
+COVER_PKG_MIN := 90
+
+.PHONY: help interop-all test test-race test-verbose vet lint fmt fuzz fuzz-short fuzz-ber fuzz-pdu chaos bench tidy check clean coverage coverage-check coverage-pkg-check coverage-html coverage-clean cross e2e interop test-armv7 vuln
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "%-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -53,11 +57,13 @@ fmt: ## Format all Go source files
 	@echo "Running go fmt"
 	@go fmt $(PKGS)
 
-coverage: ## Run tests with coverage and fail below COVERAGE_MIN (default 90%) per package and in total
+coverage: ## Run tests with coverage and fail below COVER_PKG_MIN per package and in total
 	@echo "Running coverage gate"
-	@set -o pipefail; scripts/coverage-gate.sh coverage.out | tee coverage.txt
+	@set -o pipefail; COVER_PKG_MIN=$(COVER_PKG_MIN) scripts/coverage-gate.sh coverage.out | tee coverage.txt
 
-coverage-check: coverage ## Alias of coverage: fail below COVERAGE_MIN per package and in total
+coverage-check: coverage ## Alias of coverage: fail below COVER_PKG_MIN per package and in total
+
+coverage-pkg-check: coverage ## Alias of coverage: fail below COVER_PKG_MIN per package and in total
 
 coverage-html: coverage ## Generate HTML coverage report
 	@echo "Generating HTML coverage report"

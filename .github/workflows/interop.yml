@@ -49,6 +49,8 @@ jobs:
       - name: Run interop suite
         env:
           MMS_INTEROP_STACK: ${{ matrix.stack }}
+          # Only the dscsystems client has documented gaps (TESTING.md).
+          MMS_INTEROP_REQUIRE_CALLS: ${{ matrix.stack != 'dscsystems' && '1' || '' }}
         run: make interop
 
       - name: Collect Docker diagnostics
