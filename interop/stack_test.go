@@ -150,9 +150,14 @@ func skipForStack(t *testing.T) {
 
 // skipUnsupported skips t when the client adapter reported that its stack
 // has no call for the operation (contract: "error":"unsupported").
+// MMS_INTEROP_REQUIRE_CALLS turns the skip into a failure, for stacks whose
+// client is known to have every call: an image that loses one must not pass.
 func skipUnsupported(t *testing.T, r clientResult) {
 	t.Helper()
 	if !r.OK && r.Error == "unsupported" {
+		if os.Getenv("MMS_INTEROP_REQUIRE_CALLS") != "" {
+			t.Fatalf("%s client has no call for %s %q (MMS_INTEROP_REQUIRE_CALLS is set)", stack(t).name, r.Operation, r.Target)
+		}
 		t.Skipf("%s client has no call for %s %q", stack(t).name, r.Operation, r.Target)
 	}
 }

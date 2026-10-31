@@ -308,11 +308,15 @@ func associateMockClient(t *testing.T) (*Client, *mockServer, *mockTransport, co
 
 func closeMockClient(t *testing.T, client *Client, srv *mockServer, ctx context.Context) {
 	t.Helper()
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		_, _, _ = srv.handleDataRequest(ctx)
 		srv.sendConcludeResponse(ctx)
 	}()
 	_ = client.Close(ctx)
+	srv.transport.shutdown() // a client already closed sends no Conclude
+	<-done
 }
 
 func TestClientAPIs_ProtocolAndValidation(t *testing.T) {

@@ -27,13 +27,24 @@ type mockTransport struct {
 	closed   bool
 	toServer chan []byte
 	toClient chan []byte
+	done     chan struct{}
+	doneOnce sync.Once
 }
+
+var errMockShutdown = errors.New("mock transport shut down")
 
 func newMockTransport() *mockTransport {
 	return &mockTransport{
 		toServer: make(chan []byte, 10),
 		toClient: make(chan []byte, 10),
+		done:     make(chan struct{}),
 	}
+}
+
+// shutdown ends the transport for the client's reader and the mock server,
+// as a dropped connection would.
+func (m *mockTransport) shutdown() {
+	m.doneOnce.Do(func() { close(m.done) })
 }
 
 func (m *mockTransport) Send(ctx context.Context, data []byte) error {
@@ -56,6 +67,8 @@ func (m *mockTransport) Receive(ctx context.Context) ([]byte, error) {
 	select {
 	case data := <-m.toClient:
 		return data, nil
+	case <-m.done:
+		return nil, errMockShutdown
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -76,6 +89,8 @@ func (m *mockTransport) receiveFromClient(ctx context.Context) ([]byte, error) {
 	select {
 	case data := <-m.toServer:
 		return data, nil
+	case <-m.done:
+		return nil, errMockShutdown
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -91,6 +106,7 @@ type mockServer struct {
 }
 
 func newMockServer(t *testing.T, mt *mockTransport) *mockServer {
+	t.Cleanup(mt.shutdown)
 	return &mockServer{
 		t:         t,
 		transport: mt,
@@ -168,6 +184,9 @@ func (s *mockServer) handleAssociation(ctx context.Context) {
 func (s *mockServer) handleDataRequest(ctx context.Context) (codec.InvokeID, pdu.ServiceKind, []byte) {
 	s.t.Helper()
 	data, err := s.transport.receiveFromClient(ctx)
+	if errors.Is(err, errMockShutdown) {
+		return 0, 0, nil // the test is over
+	}
 	if err != nil {
 		s.t.Errorf("server: receive data: %v", err)
 		return 0, 0, nil

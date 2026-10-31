@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: MIT
 #
 # coverage-gate.sh runs the tests with a coverage profile and fails when
-# the total or any package with statements is below COVERAGE_MIN percent
+# the total or any package with statements is below COVER_PKG_MIN percent
 # (default 90). Example programs are excluded. Works with bash 3.2.
 #
 # Usage: scripts/coverage-gate.sh [profile]   (default: coverage.out)
 set -euo pipefail
 
-min="${COVERAGE_MIN:-90}"
+min="${COVER_PKG_MIN:-90}"
 profile="${1:-coverage.out}"
 
 pkgs=$(go list ./... | grep -Ev '/examples($|/)')
