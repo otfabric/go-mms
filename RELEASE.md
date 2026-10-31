@@ -1,5 +1,16 @@
 # go-mms Releases
 
+## v1.2.4
+
+**Date:** 2026-10-31
+**Previous release:** v1.2.3
+
+### Changed
+
+- Tests, CI and documents only. The coverage variable `COVERAGE_MIN` is now `COVER_PKG_MIN`. Compiled binaries are gone from git history, and tags were rewritten.
+
+---
+
 ## v1.2.3
 
 **Date:** 2026-10-31
