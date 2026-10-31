@@ -35,7 +35,7 @@ inject faults. Under `go test` they run for 500 ms with seed 1.
 
 | Variable | Meaning |
 |---|---|
-| `MMS_CHAOS_DURATION` | run time, a Go duration; `make chaos` sets it from `CHAOS_DURATION` (default 30s) |
+| `MMS_CHAOS_DURATION` | run time of each timed test, a Go duration; `make chaos` sets it from `CHAOS_DURATION` (default 30s). Three tests run one after the other, so raise `CHAOS_TIMEOUT` (default 30m) above three times this value |
 | `MMS_CHAOS_SEED` | seed; `0` picks a time-based seed; `make chaos` sets it from `CHAOS_SEED` (default 0) |
 
 Each run logs its seed. Replay a failure with
@@ -70,8 +70,9 @@ dependency.
 ## Extended tier
 
 `.github/workflows/nightly.yml` runs every Fuzz target for 2 minutes
-(`make fuzz FUZZTIME=2m`) and the chaos suite for 10 minutes under the race
-detector with a random seed (`make chaos CHAOS_DURATION=10m`).
+(`make fuzz FUZZTIME=2m`) and the chaos suite under the race detector with a
+random seed, 10 minutes for each of its three timed tests
+(`make chaos CHAOS_DURATION=10m CHAOS_TIMEOUT=40m`).
 
 ## Coverage policy
 

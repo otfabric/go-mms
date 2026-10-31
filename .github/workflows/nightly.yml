@@ -30,11 +30,12 @@ jobs:
 
   chaos:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Three tests at 10 minutes each, plus the build.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Chaos and stress (random seed)
-        run: make chaos CHAOS_DURATION=10m
+        run: make chaos CHAOS_DURATION=10m CHAOS_TIMEOUT=40m

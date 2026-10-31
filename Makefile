@@ -91,11 +91,14 @@ e2e: ## Run the end-to-end suite (go-mms client against go-mms server over TCP) 
 
 CHAOS_DURATION ?= 30s
 CHAOS_SEED     ?= 0
+# Three tests run for CHAOS_DURATION each, one after the other: keep this
+# above 3 x CHAOS_DURATION.
+CHAOS_TIMEOUT  ?= 30m
 
-chaos: ## Run chaos and stress tests under -race for CHAOS_DURATION (default 30s) with a random seed (CHAOS_SEED=0)
+chaos: ## Run chaos and stress tests under -race for CHAOS_DURATION each (default 30s) with a random seed (CHAOS_SEED=0)
 	@echo "Running chaos tests ($(CHAOS_DURATION), seed $(CHAOS_SEED))"
 	@MMS_CHAOS_DURATION=$(CHAOS_DURATION) MMS_CHAOS_SEED=$(CHAOS_SEED) \
-		go test -race -run 'Chaos|Stress' -count=1 -v -timeout 30m ./e2e
+		go test -race -run 'Chaos|Stress' -count=1 -v -timeout $(CHAOS_TIMEOUT) ./e2e
 
 bench: ## Run all benchmarks
 	@echo "Running benchmarks"
