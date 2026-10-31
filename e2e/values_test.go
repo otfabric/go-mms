@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	mms "github.com/otfabric/go-mms"
+	"github.com/otfabric/go-mms/internal/chaos"
 )
 
 // Every value type survives read, write and read-back over the wire, and
@@ -78,5 +79,28 @@ func TestValues_DataAccessError(t *testing.T) {
 	}
 	if v := mms.NewDataAccessError(mms.DataAccessErrorObjectNonExistent); v.Type() != mms.ValueTypeDataAccessError {
 		t.Errorf("NewDataAccessError type = %v", v.Type())
+	}
+}
+
+// An MmsString that is not valid UTF-8 cannot leave either side, and the
+// failed encode neither hangs the caller nor breaks the association.
+func TestMmsStringInvalidUTF8(t *testing.T) {
+	cs := startChaosServer(t, chaos.Config{}, mms.ServerOptions{})
+	c := dial(t, cs.addr)
+	bad := mms.NewMmsString("\xa5")
+
+	if _, err := c.WriteObject(timeout(t), domName("v0"), bad); err == nil {
+		t.Error("WriteObject of invalid UTF-8 succeeded")
+	}
+
+	cs.mu.Lock()
+	cs.vals["v1"] = bad
+	cs.mu.Unlock()
+	if v, err := c.ReadObject(timeout(t), domName("v1")); err == nil {
+		t.Errorf("ReadObject of invalid UTF-8 = %v", v)
+	}
+
+	if _, err := c.ReadObject(timeout(t), domName("v2")); err != nil {
+		t.Errorf("association unusable after the rejected values: %v", err)
 	}
 }

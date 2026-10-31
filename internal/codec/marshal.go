@@ -14,7 +14,7 @@ import (
 // top-level MMS PDU tag. The pduTag must be one of the asn1util.Tag*
 // constants (e.g., TagInitiateRequest, TagConfirmedRequest).
 func MarshalMmsPdu(pduTag byte, payload any) ([]byte, error) {
-	content, err := asn1.Marshal(payload)
+	content, err := marshalChecked(payload)
 	if err != nil {
 		return nil, fmt.Errorf("codec: marshal PDU content: %w", err)
 	}
@@ -55,7 +55,7 @@ const tagUniversalSequence byte = 0x30
 //
 // It validates that asn1.Marshal produced exactly one complete SEQUENCE TLV.
 func MarshalSequenceContent(value any) ([]byte, error) {
-	encoded, err := asn1.Marshal(value)
+	encoded, err := marshalChecked(value)
 	if err != nil {
 		return nil, fmt.Errorf("codec: marshal sequence: %w", err)
 	}

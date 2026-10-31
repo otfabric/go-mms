@@ -3,6 +3,7 @@
 package pdu
 
 import (
+	"errors"
 	"math"
 	"testing"
 	"time"
@@ -695,5 +696,27 @@ func TestDecodeBinaryTime_RejectsOverlongDay(t *testing.T) {
 		if _, err := decodeBinaryTime(in); err == nil {
 			t.Errorf("decodeBinaryTime(%x) accepted a time of day past midnight", in)
 		}
+	}
+}
+
+// ISO 9506-2 MMSString is a UTF8String: invalid content is malformed on
+// the wire and neither direction lets it through.
+func TestDataMmsStringRejectsInvalidUTF8(t *testing.T) {
+	if _, err := MarshalData(&DataValue{Tag: TagDataMmsString, Str: "\xa5"}); !errors.Is(err, errMmsStringUTF8) {
+		t.Errorf("MarshalData = %v, want errMmsStringUTF8", err)
+	}
+	wire := []byte{TagDataMmsString, 0x01, 0xa5}
+	if _, _, err := UnmarshalDataElement(wire, 0); !errors.Is(err, errMmsStringUTF8) {
+		t.Errorf("UnmarshalDataElement = %v, want errMmsStringUTF8", err)
+	}
+	// Nested, so a structure cannot smuggle one in.
+	nested := []byte{TagDataStructure, 0x03, TagDataMmsString, 0x01, 0xa5}
+	if _, _, err := UnmarshalDataElement(nested, 0); !errors.Is(err, errMmsStringUTF8) {
+		t.Errorf("nested UnmarshalDataElement = %v, want errMmsStringUTF8", err)
+	}
+	// VisibleString is byte-preserving: not part of this check.
+	vis := []byte{TagDataVisibleStr, 0x01, 0xa5}
+	if got, _, err := UnmarshalDataElement(vis, 0); err != nil || got.Str != "\xa5" {
+		t.Errorf("VisibleString = %+v, %v", got, err)
 	}
 }

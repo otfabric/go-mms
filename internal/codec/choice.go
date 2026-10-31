@@ -39,7 +39,7 @@ func UnmarshalImplicitSequence(raw asn1.RawValue, target any) error {
 		return fmt.Errorf("codec: implicit sequence tag 0x%02x is primitive", ServiceTag(raw))
 	}
 	sequence := berutil.EncodeTLV(0x30, raw.Bytes)
-	rest, err := asn1.Unmarshal(sequence, target)
+	rest, err := unmarshalChecked(sequence, target)
 	if err != nil {
 		return fmt.Errorf("codec: unmarshal implicit sequence: %w", err)
 	}
@@ -60,7 +60,7 @@ func UnmarshalExplicit(raw asn1.RawValue, target any) error {
 	if !raw.IsCompound {
 		return fmt.Errorf("codec: explicit wrapper tag 0x%02x is primitive", ServiceTag(raw))
 	}
-	rest, err := asn1.Unmarshal(raw.Bytes, target)
+	rest, err := unmarshalChecked(raw.Bytes, target)
 	if err != nil {
 		return fmt.Errorf("codec: unmarshal explicit: %w", err)
 	}
@@ -75,7 +75,7 @@ func UnmarshalExplicit(raw asn1.RawValue, target any) error {
 // where the tag itself carries meaning and the stdlib needs the complete
 // encoding to determine the type.
 func UnmarshalFull(raw asn1.RawValue, target any) error {
-	rest, err := asn1.Unmarshal(raw.FullBytes, target)
+	rest, err := unmarshalChecked(raw.FullBytes, target)
 	if err != nil {
 		return fmt.Errorf("codec: unmarshal full: %w", err)
 	}
