@@ -91,8 +91,8 @@ e2e: ## Run the end-to-end suite (go-mms client against go-mms server over TCP) 
 
 CHAOS_DURATION ?= 30s
 CHAOS_SEED     ?= 0
-# Three tests run for CHAOS_DURATION each, one after the other: keep this
-# above 3 x CHAOS_DURATION.
+# Four tests run for CHAOS_DURATION each, one after the other: keep this
+# above 4 x CHAOS_DURATION.
 CHAOS_TIMEOUT  ?= 30m
 
 chaos: ## Run chaos and stress tests under -race for CHAOS_DURATION each (default 30s) with a random seed (CHAOS_SEED=0)

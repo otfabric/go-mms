@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -310,4 +311,66 @@ func TestStress_Concurrent(t *testing.T) {
 		}
 	})
 	_ = runtime.NumGoroutine
+}
+
+// Associations whose CONNECT and ACCEPT SPDUs need the extended LI form
+// (long ACSE passwords) must survive fragmented, delayed reads and
+// writes; a wrong password must be refused, never mis-framed.
+func TestChaos_LargeAssociationChurn(t *testing.T) {
+	seed := chaosSeed(t)
+	cfg := chaos.Config{Seed: seed, ChunkReads: true, ChunkWrites: true, MaxDelay: 200 * time.Microsecond}
+	password := bytes.Repeat([]byte("k"), 2000)
+	cs := startChaosServer(t, cfg, mms.ServerOptions{
+		Authenticate: func(_ context.Context, a *mms.AuthContext) (mms.AuthResult, error) {
+			return mms.AuthResult{Accept: bytes.Equal(a.Password, password)}, nil
+		},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), chaosDuration())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	var accepted, refused atomic.Int64
+	for id := range 4 {
+		wg.Go(func() {
+			clientCfg := cfg
+			clientCfg.Seed = seed + uint64(id) + 1
+			for i := 0; ctx.Err() == nil; i++ {
+				pw := password
+				wrong := (id+i)%3 == 0
+				if wrong {
+					pw = append(bytes.Clone(password), 'x')
+				}
+				c, err := iso.Dial(timeout(t), cs.addr, iso.WithDialer(chaos.Dialer(clientCfg)),
+					iso.WithClientDialOptions(mms.DialOptions{ISO: mms.ISOOptions{Password: pw}}))
+				switch {
+				case wrong && err == nil:
+					_ = c.Abort(context.Background())
+					t.Errorf("client %d: wrong password accepted", id)
+					return
+				case wrong:
+					if !errors.Is(err, mms.ErrAssociationFailed) {
+						t.Errorf("client %d: wrong password: %v, want ErrAssociationFailed", id, err)
+						return
+					}
+					refused.Add(1)
+					continue
+				case err != nil:
+					t.Errorf("client %d: Dial: %v", id, err)
+					return
+				}
+				if _, err := c.Identify(timeout(t)); err != nil {
+					t.Errorf("client %d: Identify: %v", id, err)
+				}
+				if err := c.Close(timeout(t)); err != nil {
+					t.Errorf("client %d: Close: %v", id, err)
+				}
+				accepted.Add(1)
+			}
+		})
+	}
+	wg.Wait()
+	if accepted.Load() == 0 || refused.Load() == 0 {
+		t.Errorf("accepted %d, refused %d: want both", accepted.Load(), refused.Load())
+	}
+	t.Logf("%d associations accepted, %d refused", accepted.Load(), refused.Load())
 }

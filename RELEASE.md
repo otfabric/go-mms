@@ -1,5 +1,29 @@
 # go-mms Releases
 
+## v1.3.0
+
+**Date:** 2026-11-04
+**Previous release:** v1.2.4
+
+### Breaking
+
+- Requires Go 1.26 (was 1.23). Built on go-cotp v1.2.0 and go-tpkt v1.1.0. CI tests Go 1.26 and 1.27.
+
+### Fixed
+
+- An association whose session CONNECT or ACCEPT carried more than about 230 bytes of user data (for example an AARQ with a long ACSE password) was sent with a one-octet length indicator and could not be parsed by any peer, go-mms included. SPDUs now use the extended length form of ISO 8327-1 up to 65535 bytes, and the parser reads it.
+- Invoke IDs are Unsigned32: a negative or wider invoke ID from a peer was wrapped and could match another outstanding request; it is now rejected (the server answers with a Reject). Invoke IDs from 2^31 upwards, which carry a 0x00 pad octet, were refused and are now accepted.
+- A `UtcTime` value outside 1970-01-01..2106-02-07, including the zero `time.Time`, was written with wrapped seconds; encoding now fails with an error.
+- BER lengths of 16 MiB or more were truncated to three octets; integers outside the int32 range were truncated; context tags above 30 lost their tag number. All now encode correctly.
+- Negative alternate-access indices, DataAccessError codes and object classes, and file sizes outside Unsigned32, are rejected instead of wrapped.
+
+### Changed
+
+- Retry jitter is drawn from crypto/rand. Request writes that outlive the caller's context keep its values (`context.WithoutCancel`).
+- Tests: end-to-end long-password associations, a chaos test of large associations under fragmentation, invoke-ID range tests, and three new fuzz targets (BER integer and length round trips, session SPDU round trip); 60 fuzz targets in all.
+
+---
+
 ## v1.2.4
 
 **Date:** 2026-10-31

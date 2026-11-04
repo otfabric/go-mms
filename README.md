@@ -253,7 +253,7 @@ changes — a standards-correct wire fix can change observable behaviour while
 remaining API-compatible.
 
 - **Well-tested**: 1,000+ unit tests, 60+ end-to-end tests, 200+ negative
-  tests, race/concurrency and chaos tests, 57 fuzz targets, 21 benchmarks.
+  tests, race/concurrency and chaos tests, 60 fuzz targets, 21 benchmarks.
 - **Quality gates** (CI `quality` job; coverage and the short fuzz pass are
   also part of `make check`): ≥ 90% statement
   coverage per package and in total (`make coverage`), a fuzz pass over

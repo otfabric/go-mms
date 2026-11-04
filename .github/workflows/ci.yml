@@ -18,7 +18,7 @@ jobs:
       run-govulncheck: true
       coverage-min: "90"
       fuzz-time: 10s
-      # 57 Fuzz targets at 10s each do not fit the default 15-minute job limit.
+      # 60 Fuzz targets at 10s each do not fit the default 15-minute job limit.
       timeout-minutes: 25
       codecov-name: go-mms
       go-versions: '["1.26","1.27"]'
