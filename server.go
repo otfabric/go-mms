@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"sync"
 	"time"
 
@@ -620,8 +619,7 @@ func (sc *ServerConn) defineAssocNVL(entry *servermodel.NVLEntry) error {
 		return invalidArgf("mms: association NVL %q already defined", entry.ItemID)
 	}
 	sc.assocNVLs[entry.ItemID] = entry
-	sc.assocNVLOrder = append(sc.assocNVLOrder, entry.ItemID)
-	sort.Strings(sc.assocNVLOrder)
+	sc.assocNVLOrder = servermodel.InsertSorted(sc.assocNVLOrder, entry.ItemID)
 	return nil
 }
 
@@ -721,8 +719,7 @@ func (sc *ServerConn) registerAssocVar(entry *servermodel.VarEntry) error {
 		return invalidArgf("mms: association variable %q already defined", entry.ItemID)
 	}
 	sc.assocVars[entry.ItemID] = entry
-	sc.assocVarOrder = append(sc.assocVarOrder, entry.ItemID)
-	sort.Strings(sc.assocVarOrder)
+	sc.assocVarOrder = servermodel.InsertSorted(sc.assocVarOrder, entry.ItemID)
 	return nil
 }
 
