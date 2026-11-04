@@ -52,13 +52,32 @@ const (
 	RawHookRecv = "recv"
 )
 
-// TransportOptions configures the TPKT/COTP transport layer.
+// TransportOptions configures the TPKT/COTP transport layer. It is read
+// by transport/iso.Dial.
+//
+// Each selector left nil is sent as 00 01; a non-nil empty slice omits it
+// from the COTP CR. See transport/iso.WithCallingTSelector.
 type TransportOptions struct {
-	LocalTSelector  []byte
-	RemoteTSelector []byte
+	LocalTSelector  []byte // calling T-selector (0xC1)
+	RemoteTSelector []byte // called T-selector (0xC2)
 }
 
 // ISOOptions configures the ISO upper layers (session, presentation, ACSE).
+//
+// A client sends the addressing that libiec61850 and most IEC 61850
+// clients send, and that IEDs are configured for, unless set otherwise
+// (IEC 61850-8-1 Table 132 makes these SCL address parameters but
+// mandates no value):
+//
+//	S-selector      00 01 (calling and called)
+//	P-selector      00 00 00 01 (calling and called)
+//	AP-title        1.1.1.999 (calling), 1.1.1.999.1 (called)
+//	AE-qualifier    12 (calling and called)
+//
+// A nil selector or AP-title takes the default; a non-nil empty one is
+// omitted from the request. An AE-qualifier is sent only with its
+// AP-title: it is 12 when the AP-title is the default and the qualifier is
+// zero, and the configured value otherwise.
 type ISOOptions struct {
 	LocalAPTitle      APTitle
 	RemoteAPTitle     APTitle

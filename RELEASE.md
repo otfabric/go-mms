@@ -1,5 +1,37 @@
 # go-mms Releases
 
+## v1.4.0
+
+**Date:** 2026-11-04
+**Previous release:** v1.3.2
+
+### Changed
+
+- **A client now sends the ISO addressing IEC 61850 IEDs expect.** It used to omit every selector and the TPDU size unless configured, and an IED that requires them (an ABB REB500, otfabric/go-iec61850#28) refused the COTP CR with a Disconnect Request, reason 3 (address unknown). Defaults, the values libiec61850 sends:
+  - COTP CR: calling and called T-selector `00 01`, TPDU size 1024 (0xC0 = 0x0A).
+  - Session: calling and called S-selector `00 01`. Presentation: calling and called P-selector `00 00 00 01`.
+  - ACSE: calling AP-title `1.1.1.999`, called AP-title `1.1.1.999.1`, AE-qualifier 12 each.
+
+  A nil option takes the default; a non-nil empty selector or AP-title omits the parameter, as before (`iso.WithCalledTSelector([]byte{})`, `ISOOptions{LocalAPTitle: mms.APTitle{}}`, ...). `iso.WithMaxTPDULength(65531)` omits 0xC0 again. IEC 61850-8-1 mandates none of these values (§6.2.3.2.2 limits a T-selector to 4 octets; Table 132 lists them as SCL address parameters).
+- A client refuses a T-selector longer than 4 octets (IEC 61850-8-1 §6.2.3.2.2) before dialing.
+- A client accepts a CC whose responding T-selector differs from the called one (X.224 §13.3.4), for example an IED answering `0001` with `00000001` (go-cotp v1.3.0).
+- An `iso.Listener` returns the CR's T-selectors in the CC, as libiec61850 servers do. It still accepts any called selector unless `WithCalledTSelector` is set; the strict comparison is byte for byte, so `0001` and `00000001` differ.
+
+### Added
+
+- `iso.WithMaxTPDULength`, `iso.DefaultMaxTPDULength` (1024), `iso.MaxTSelectorLength` (4).
+
+### Tests
+
+- The CR a default client sends, byte for byte; selectors of 1, 2 and 4 octets, omitted selectors, TPDU sizes 1024, 2048 and omitted; a 5-octet selector refused before dialing; a differing responding selector accepted; a Listener echoing absent, 1-, 2- and 4-octet selectors; a strict Listener accepting a default client and refusing an omitted, 4-octet or different called selector with reason 3; `DialOptions.Transport` selectors used by `Dial`.
+- Upper-layer defaults, configured and omitted values, and the default calling AP-title and AE-qualifier decoded by a go-mms server.
+
+### Dependencies
+
+- go-cotp v1.3.0.
+
+---
+
 ## v1.3.2
 
 **Date:** 2026-11-04

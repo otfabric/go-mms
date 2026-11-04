@@ -201,6 +201,11 @@ func (w *testWriter) Write(p []byte) (int, error) {
 
 func connectClientServer(t *testing.T, srv *Server) *Client {
 	t.Helper()
+	return connectClientServerISO(t, srv, ISOOptions{})
+}
+
+func connectClientServerISO(t *testing.T, srv *Server, iso ISOOptions) *Client {
+	t.Helper()
 
 	clientConn, serverConn := loopbackPair()
 	ctx := context.Background()
@@ -211,6 +216,7 @@ func connectClientServer(t *testing.T, srv *Server) *Client {
 
 	client, err := NewClient(ctx, clientConn, DialOptions{
 		Logger: slog.New(slog.NewTextHandler(newTestWriter(t), &slog.HandlerOptions{Level: slog.LevelDebug})),
+		ISO:    iso,
 		MMS: MMSOptions{
 			MaxPDUSize:                65000,
 			MaxOutstandingCalling:     5,
@@ -1574,7 +1580,8 @@ func TestAuthenticatorNoneNilFields(t *testing.T) {
 		return &ServerIdentity{Vendor: "V", Model: "M", Revision: "1"}, nil
 	})
 
-	client := connectClientServer(t, srv)
+	// A non-nil empty AP-title omits the calling AP-title and AE-qualifier.
+	client := connectClientServerISO(t, srv, ISOOptions{LocalAPTitle: APTitle{}})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 

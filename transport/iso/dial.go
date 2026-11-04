@@ -19,10 +19,11 @@ import (
 // addr is a host:port string (e.g. "10.0.0.1:102"). The standard MMS port
 // is 102 for plaintext.
 //
-// Use [WithCallingTSelector] and [WithCalledTSelector] to configure TSAP
-// selectors. If not set, selectors are omitted from the COTP CR.
-//
-// TPDU size follows go-cotp RFC 1006 defaults (omitted/default size path).
+// The COTP CR carries a calling and a called T-selector (default 00 01
+// each, see [WithCallingTSelector] and [WithCalledTSelector]) and a TPDU
+// size (default [DefaultMaxTPDULength], see [WithMaxTPDULength]), as
+// IEC 61850 IEDs expect: some refuse a CR without them with a Disconnect
+// Request, reason 3 (address unknown).
 //
 // With [WithRetry], failed attempts are retried with backoff.
 func DialTCP(ctx context.Context, addr string, opts ...Option) (mms.Transport, error) {
@@ -59,6 +60,10 @@ func (o Options) retryPolicy(addr string) mms.RetryPolicy {
 }
 
 func dialOnce(ctx context.Context, addr string, o Options) (mms.Transport, error) {
+	cfg, err := o.clientCOTPConfig()
+	if err != nil {
+		return nil, err
+	}
 	dial := o.dialer
 	if dial == nil {
 		var d net.Dialer
@@ -79,11 +84,7 @@ func dialOnce(ctx context.Context, addr string, o Options) (mms.Transport, error
 		conn = tlsConn
 	}
 
-	cotpConn, err := cotp.Connect(ctx, conn, cotp.ClientConfig{
-		LocalSelector:  o.callingTSelector,
-		RemoteSelector: o.calledTSelector,
-		// MaxTPDULength 0 → go-cotp default (omit-size / RFC1006Compat path).
-	})
+	cotpConn, err := cotp.Connect(ctx, conn, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("iso: cotp connect %s: %w", addr, err)
 	}
@@ -94,8 +95,9 @@ func dialOnce(ctx context.Context, addr string, o Options) (mms.Transport, error
 // creates an MMS client in one call.
 //
 // It combines [DialTCP] with [mms.NewClient]. Use [WithClientDialOptions]
-// to pass MMS-level configuration; TSAP selectors from [mms.DialOptions]
-// are used automatically if ISO-level selectors are not set explicitly.
+// to pass MMS-level configuration; T-selectors from
+// [mms.DialOptions].Transport are used when [WithCallingTSelector] or
+// [WithCalledTSelector] are not set, and the defaults when neither is.
 // With [WithRetry], failed attempts (connect, handshakes and association)
 // are retried with backoff.
 func Dial(ctx context.Context, addr string, opts ...Option) (*mms.Client, error) {
@@ -126,4 +128,26 @@ func Dial(ctx context.Context, addr string, opts ...Option) (*mms.Client, error)
 		return nil, err
 	}
 	return client, nil
+}
+
+// clientCOTPConfig returns the CR parameters of a client: the configured
+// or default selectors and TPDU size.
+func (o Options) clientCOTPConfig() (cotp.ClientConfig, error) {
+	calling, err := clientTSelector(o.callingTSelector, "calling")
+	if err != nil {
+		return cotp.ClientConfig{}, err
+	}
+	called, err := clientTSelector(o.calledTSelector, "called")
+	if err != nil {
+		return cotp.ClientConfig{}, err
+	}
+	maxTPDU := o.maxTPDULength
+	if maxTPDU == 0 {
+		maxTPDU = DefaultMaxTPDULength
+	}
+	return cotp.ClientConfig{
+		LocalSelector:  calling,
+		RemoteSelector: called,
+		MaxTPDULength:  maxTPDU,
+	}, nil
 }

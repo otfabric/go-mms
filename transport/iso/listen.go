@@ -186,9 +186,12 @@ func (l *Listener) handshakeConn(ctx context.Context, conn net.Conn) (mms.Transp
 		conn = tlsConn
 	}
 
+	// Return the CR's selectors in the CC, as libiec61850 servers do; a
+	// configured called selector is enforced (see WithCalledTSelector).
 	cotpConn, err := cotp.Accept(ctx, conn, cotp.ServerConfig{
 		LocalSelector: l.opts.calledTSelector,
-		// MaxTPDULength 0 → go-cotp default (RFC1006 omit/default path).
+		MaxTPDULength: l.opts.maxTPDULength,
+		EchoSelectors: true,
 	})
 	if err != nil {
 		l.logWarn("iso: cotp handshake failed, closing connection", conn, err)

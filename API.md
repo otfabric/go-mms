@@ -628,6 +628,7 @@ func NewListener(ln net.Listener, opts ...Option) *Listener
 
 func WithCallingTSelector(sel []byte) Option
 func WithCalledTSelector(sel []byte) Option
+func WithMaxTPDULength(n int) Option
 func WithClientDialOptions(opts mms.DialOptions) Option
 func WithTLSConfig(cfg *tls.Config) Option
 func WithLogger(l *slog.Logger) Option
@@ -636,6 +637,19 @@ func WithDialer(dial func(ctx context.Context, network, addr string) (net.Conn, 
 func WithHandshakeTimeout(d time.Duration) Option
 ```
 
+- **CR parameters of a client.** Calling and called T-selector default to `00 01`
+  and the TPDU size to `DefaultMaxTPDULength` (1024, 0xC0 = 0x0A): the values
+  libiec61850 sends and IEDs expect (some refuse a CR without a called selector
+  with DR reason 3, address unknown). A non-nil empty selector omits the
+  parameter; a selector longer than `MaxTSelectorLength` (4, IEC 61850-8-1
+  §6.2.3.2.2) is refused before dialing; `WithMaxTPDULength(65531)` omits 0xC0
+  (the RFC 1006 default). `Dial` falls back to `mms.DialOptions.Transport`
+  selectors when the `With*TSelector` options are not set. A CC whose responding
+  selector differs from the called one is accepted.
+- **Listener.** Accepts any called selector and returns the CR's selectors in
+  the CC. `WithCalledTSelector` makes it strict: an absent or different called
+  selector (byte for byte, so `0001` ≠ `00000001`) is refused with DR reason 3.
+  `WithMaxTPDULength` caps the TPDU size accepted.
 - `WithRetry` makes `Dial`/`DialTCP` retry failed attempts (backoff with jitter,
   honouring `ctx`). For `Dial` one attempt covers TCP connect, TLS and COTP handshakes
   and the MMS association; permanent errors (`mms.IsRetryable`) return at once.
@@ -655,7 +669,7 @@ func WithHandshakeTimeout(d time.Duration) Option
 
 ```go
 type DialOptions struct {
-    Transport TransportOptions
+    Transport TransportOptions // LocalTSelector/RemoteTSelector, read by iso.Dial
     ISO       ISOOptions
     MMS       MMSOptions
     Logger    *slog.Logger // nil → silent discard; does not set iso.WithLogger
@@ -689,6 +703,13 @@ type ISOOptions struct {
     Password           []byte // ACSE password in AARQ; use TLS in production
 }
 ```
+
+Client defaults (libiec61850's; IEC 61850-8-1 Table 132 names these SCL address
+parameters but mandates no value): S-selector `00 01`, P-selector `00 00 00 01`,
+calling AP-title `1.1.1.999`, called AP-title `1.1.1.999.1`, AE-qualifiers `12`.
+A nil selector or AP-title takes the default, a non-nil empty one omits it. An
+AE-qualifier is sent only with its AP-title; with a default AP-title a zero
+qualifier becomes 12.
 
 ### MMSOptions
 

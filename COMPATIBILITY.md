@@ -56,6 +56,11 @@ standard is ambiguous or conflicting implementations exist, the chosen behaviour
 is documented in `KNOWN_LIMITATIONS.md` and `COMPLIANCE.md`. Correcting a
 deviation from the standard is not considered a breaking change.
 
+Default wire parameters are part of this behaviour. A minor release may change
+them to match what IEDs accept, with a RELEASE.md entry and a way to restore the
+previous value (v1.4.0: default T-, S- and P-selectors, AP-titles and TPDU size;
+an empty selector or AP-title omits the parameter again).
+
 ## Peer implementations
 
 Each release is tested on the wire against the MMS stacks packaged by [iec61850-interop](https://github.com/otfabric/iec61850-interop) (v1.1.1 images, pinned by digest):
