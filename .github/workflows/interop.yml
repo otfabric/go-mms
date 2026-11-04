@@ -46,6 +46,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Pull before the suite: the harness's 30 s readiness timeout covers
+      # only container start, not a slow registry download.
+      - name: Pull the peer image
+        env:
+          MMS_INTEROP_STACK: ${{ matrix.stack }}
+        run: |
+          case "$MMS_INTEROP_STACK" in
+            libiec61850)   img="$LIBIEC61850_IMAGE" ;;
+            dscsystems)    img="$DSCSYSTEMS_IMAGE" ;;
+            iec61850-rust) img="$IEC61850RUST_IMAGE" ;;
+            iec61850bean)  img="$IEC61850BEAN_IMAGE" ;;
+          esac
+          docker pull -q "$img"
+
       - name: Run interop suite
         env:
           MMS_INTEROP_STACK: ${{ matrix.stack }}
