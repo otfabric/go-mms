@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,6 +116,8 @@ func TestDialCRConfigured(t *testing.T) {
 			wantSize: new(uint8(0x0A))},
 		{name: "called only", opts: []iso.Option{iso.WithCallingTSelector([]byte{})},
 			wantCd: []byte{0x00, 0x01}, wantSize: new(uint8(0x0A))},
+		{name: "nil restores the default", opts: []iso.Option{iso.WithCalledTSelector(four), iso.WithCalledTSelector(nil)},
+			wantCalling: []byte{0, 1}, wantCd: []byte{0, 1}, wantSize: new(uint8(0x0A))},
 		{name: "tpdu 2048", opts: []iso.Option{iso.WithMaxTPDULength(2048)},
 			wantCalling: []byte{0, 1}, wantCd: []byte{0, 1}, wantSize: new(uint8(0x0B))},
 		{name: "tpdu omitted (RFC 1006)", opts: []iso.Option{iso.WithMaxTPDULength(65531)},
@@ -143,18 +146,25 @@ func sameSelector(got, want []byte) bool {
 // TestDialTSelectorTooLong: a client refuses a T-selector longer than
 // IEC 61850-8-1 allows before it opens a connection.
 func TestDialTSelectorTooLong(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	dialed := false
-	_, err := iso.DialTCP(ctx, "127.0.0.1:1",
-		iso.WithCalledTSelector([]byte{0, 0, 0, 0, 1}),
-		iso.WithDialer(func(context.Context, string, string) (net.Conn, error) {
-			dialed = true
-			return nil, errors.New("must not dial")
-		}),
-	)
-	if err == nil || dialed {
-		t.Fatalf("err = %v dialed = %v, want a configuration error before dialing", err, dialed)
+	five := []byte{0, 0, 0, 0, 1}
+	for name, opt := range map[string]iso.Option{
+		"called":  iso.WithCalledTSelector(five),
+		"calling": iso.WithCallingTSelector(five),
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			dialed := false
+			_, err := iso.DialTCP(ctx, "127.0.0.1:1", opt,
+				iso.WithDialer(func(context.Context, string, string) (net.Conn, error) {
+					dialed = true
+					return nil, errors.New("must not dial")
+				}),
+			)
+			if err == nil || dialed || !strings.Contains(err.Error(), name+" T-selector") {
+				t.Fatalf("err = %v dialed = %v, want a %s T-selector error before dialing", err, dialed, name)
+			}
+		})
 	}
 }
 
