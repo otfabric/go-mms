@@ -528,7 +528,7 @@ func TestServerConcurrentClients(t *testing.T) {
 	var wg sync.WaitGroup
 	errCh := make(chan error, numClients)
 
-	for i := 0; i < numClients; i++ {
+	for i := range numClients {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
@@ -1224,10 +1224,8 @@ func TestInfoReportConcurrentWithConfirmed(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// Send InformationReports from server in a goroutine.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 5; i++ {
+	wg.Go(func() {
+		for i := range 5 {
 			_ = sc.SendInformationReport(ctx, &InformationReportRequest{
 				Variables: []ObjectName{
 					{Scope: ObjectScopeVMD, ItemID: "event"},
@@ -1235,13 +1233,11 @@ func TestInfoReportConcurrentWithConfirmed(t *testing.T) {
 				Values: []*Value{NewInteger(int64(i))},
 			})
 		}
-	}()
+	})
 
 	// Run confirmed service calls concurrently.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 5; i++ {
+	wg.Go(func() {
+		for i := range 5 {
 			ident, err := client.Identify(ctx)
 			if err != nil {
 				t.Errorf("Identify %d: %v", i, err)
@@ -1251,7 +1247,7 @@ func TestInfoReportConcurrentWithConfirmed(t *testing.T) {
 				t.Errorf("Identify %d: vendor = %q", i, ident.Vendor)
 			}
 		}
-	}()
+	})
 
 	wg.Wait()
 
@@ -1535,8 +1531,7 @@ func TestAuthenticatorRejectsConnection(t *testing.T) {
 		if sErr == nil {
 			t.Fatal("expected serve to return error")
 		}
-		var authErr *AuthenticationError
-		if !errors.As(sErr, &authErr) {
+		if _, ok := errors.AsType[*AuthenticationError](sErr); !ok {
 			t.Fatalf("expected AuthenticationError, got %T: %v", sErr, sErr)
 		}
 		if !errors.Is(sErr, ErrAuthenticationFailed) {
@@ -1701,8 +1696,7 @@ func TestAuthenticatorRejectsViaError(t *testing.T) {
 
 	select {
 	case sErr := <-serveErr:
-		var authErr *AuthenticationError
-		if !errors.As(sErr, &authErr) {
+		if _, ok := errors.AsType[*AuthenticationError](sErr); !ok {
 			t.Fatalf("expected AuthenticationError, got %T: %v", sErr, sErr)
 		}
 	case <-time.After(5 * time.Second):
@@ -2176,8 +2170,7 @@ func TestHandleReject(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from handleReject")
 	}
-	var pe *ProtocolError
-	if !errors.As(err, &pe) {
+	if _, ok := errors.AsType[*ProtocolError](err); !ok {
 		t.Fatalf("expected ProtocolError, got %T: %v", err, err)
 	}
 }
@@ -2192,10 +2185,8 @@ func TestConcurrentClientRequests(t *testing.T) {
 	var wg sync.WaitGroup
 	const goroutines = 20
 
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range goroutines {
+		wg.Go(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
@@ -2203,7 +2194,7 @@ func TestConcurrentClientRequests(t *testing.T) {
 			if err != nil {
 				t.Errorf("Identify: %v", err)
 			}
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -2217,7 +2208,7 @@ func TestConcurrentReadWrite(t *testing.T) {
 	var wg sync.WaitGroup
 	const goroutines = 10
 
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
@@ -2253,14 +2244,12 @@ func TestCloseWhileConcurrentRequests(t *testing.T) {
 	var wg sync.WaitGroup
 	const goroutines = 10
 
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range goroutines {
+		wg.Go(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			client.Identify(ctx) //nolint:errcheck
-		}()
+		})
 	}
 
 	time.Sleep(5 * time.Millisecond)

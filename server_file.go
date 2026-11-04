@@ -138,10 +138,7 @@ func (s *Server) skipFileBytes(ctx context.Context, handle FileHandle, n, size i
 		return &serverconn.ServiceError{ErrorClass: fileErrClassFile, ErrorCode: fileErrPositionInvalid}
 	}
 	for n > 0 {
-		chunk := int64(64 * 1024)
-		if n < chunk {
-			chunk = n
-		}
+		chunk := min(n, int64(64*1024))
 		data, more, err := s.fileProvider.Read(ctx, handle, int(chunk))
 		if err != nil {
 			return fileError(err)

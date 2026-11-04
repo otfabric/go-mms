@@ -67,7 +67,7 @@ func TestServiceError_CodeName(t *testing.T) {
 		t.Errorf("Error() = %q", unnamed)
 	}
 	// Every class except Others has names.
-	for c := ErrorClassVMDState; c < ErrorClassOthers; c++ {
+	for c := range ErrorClassOthers {
 		if (&ServiceError{Class: c}).CodeName() != "other" {
 			t.Errorf("class %v has no code names", c)
 		}

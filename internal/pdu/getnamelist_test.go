@@ -104,7 +104,7 @@ func TestDecodeIdentifierList_TooLong(t *testing.T) {
 func TestDecodeIdentifierList_TooMany(t *testing.T) {
 	single := berutil.EncodeTLV(tagVisibleString, []byte("n"))
 	var data []byte
-	for i := 0; i < maxIdentifiers+1; i++ {
+	for range maxIdentifiers + 1 {
 		data = append(data, single...)
 	}
 	_, err := decodeIdentifierList(data)

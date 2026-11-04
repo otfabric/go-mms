@@ -159,9 +159,7 @@ func TestChaos_LossyButIntact(t *testing.T) {
 	var wg sync.WaitGroup
 	var total atomic.Int64
 	for id := range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			c, err := iso.Dial(timeout(t), cs.addr, iso.WithDialer(chaos.Dialer(cfg)))
 			if err != nil {
 				t.Errorf("client %d: Dial: %v", id, err)
@@ -180,7 +178,7 @@ func TestChaos_LossyButIntact(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if total.Load() == 0 {
@@ -204,9 +202,7 @@ func TestChaos_DropsAndReconnect(t *testing.T) {
 	var wg sync.WaitGroup
 	var total, reconnects atomic.Int64
 	for id := range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for ctx.Err() == nil {
 				dialCtx, cancelDial := context.WithTimeout(ctx, 5*time.Second)
 				c, err := iso.Dial(dialCtx, cs.addr, iso.WithDialer(chaos.Dialer(clientCfg)), iso.WithRetry(policy),
@@ -235,7 +231,7 @@ func TestChaos_DropsAndReconnect(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	t.Logf("%d requests over %d associations", total.Load(), reconnects.Load())
@@ -286,13 +282,11 @@ func TestStress_Concurrent(t *testing.T) {
 			defer cancel()
 			var wg sync.WaitGroup
 			for g := range 4 {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
+				wg.Go(func() {
 					if _, err := workload(ctx, c, id*4+g); err != nil {
 						t.Errorf("goroutine %d: %v", g, err)
 					}
-				}()
+				})
 			}
 			// The server pushes reports while requests are in flight.
 			for ctx.Err() == nil {

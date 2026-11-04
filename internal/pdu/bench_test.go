@@ -55,7 +55,7 @@ func BenchmarkUnmarshalDataElementStructure(b *testing.B) {
 
 func BenchmarkUnmarshalAccessResults10(b *testing.B) {
 	var elems []byte
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		elems = append(elems, berutil.EncodeTLV(0x85, []byte{byte(i)})...)
 	}
 	b.ResetTimer()
@@ -133,7 +133,7 @@ func BenchmarkMarshalReadRequest(b *testing.B) {
 
 func BenchmarkUnmarshalReadResponse(b *testing.B) {
 	var list []byte
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		list = append(list, berutil.EncodeTLV(0x85, []byte{byte(i)})...)
 	}
 	content := berutil.EncodeTLV(0x30, list)

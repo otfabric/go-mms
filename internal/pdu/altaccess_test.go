@@ -315,7 +315,7 @@ func extractTLVWithSize(t *testing.T, data []byte) (byte, []byte, int) {
 	numBytes := int(lenByte & 0x7f)
 	headerLen := 2 + numBytes
 	var l int
-	for i := 0; i < numBytes; i++ {
+	for i := range numBytes {
 		l = (l << 8) | int(data[2+i])
 	}
 	end := headerLen + l

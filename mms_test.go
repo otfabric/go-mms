@@ -1090,8 +1090,7 @@ func TestReadResultCountMismatch(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected protocol error for result count mismatch")
 	}
-	var pe *ProtocolError
-	if !errors.As(err, &pe) {
+	if _, ok := errors.AsType[*ProtocolError](err); !ok {
 		t.Fatalf("expected ProtocolError, got %T: %v", err, err)
 	}
 
@@ -1817,8 +1816,7 @@ func TestGetNameListAllStalledPagination(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for stalled pagination")
 	}
-	var pe *ProtocolError
-	if !errors.As(err, &pe) {
+	if _, ok := errors.AsType[*ProtocolError](err); !ok {
 		t.Fatalf("expected ProtocolError, got %T: %v", err, err)
 	}
 

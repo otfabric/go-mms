@@ -140,8 +140,8 @@ func (h *iedServerHandle) name(item string) mms.ObjectName {
 // iedValues is the values.json fixture: initial data attribute values
 // keyed by IEC 61850 reference (LD/LN.DO.DA).
 type iedValues struct {
-	Values   map[string]interface{} `json:"values"`
-	Writable []string               `json:"writable"`
+	Values   map[string]any `json:"values"`
+	Writable []string       `json:"writable"`
 }
 
 func loadIEDValues(t *testing.T) iedValues {
@@ -191,7 +191,7 @@ var seededAttributes = []struct{ ref, fc string }{
 }
 
 // valueMatches compares a read value with a values.json entry.
-func valueMatches(v *mms.Value, want interface{}) bool {
+func valueMatches(v *mms.Value, want any) bool {
 	switch w := want.(type) {
 	case bool:
 		got, ok := v.Bool()
@@ -405,7 +405,7 @@ func TestIEDServer_ReadMultiple(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadMultiple: %v", err)
 	}
-	want := []interface{}{1.0, 1234.5, "mode"}
+	want := []any{1.0, 1234.5, "mode"}
 	if len(results) != len(want) {
 		t.Fatalf("ReadMultiple returned %d results", len(results))
 	}
@@ -512,8 +512,7 @@ func TestIEDServer_Read_UnknownVariable(t *testing.T) {
 		t.Fatal("Read of an unknown variable succeeded")
 	}
 	if !stack(t).quirks.disconnectOnUnknownName {
-		var dae *mms.DataAccessError
-		if !errors.As(err, &dae) {
+		if _, ok := errors.AsType[*mms.DataAccessError](err); !ok {
 			t.Errorf("Read = %v, want a DataAccessError", err)
 		}
 		return

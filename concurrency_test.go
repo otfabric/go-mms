@@ -32,7 +32,7 @@ func TestConcurrentReads(t *testing.T) {
 
 	// Server goroutine handles all requests.
 	go func() {
-		for i := 0; i < numReads; i++ {
+		for i := range numReads {
 			invokeID, _, _ := srv.handleDataRequest(ctx)
 			srv.sendReadResponse(ctx, invokeID, []*pdu.DataValue{{Tag: pdu.TagDataInteger, Int: int64(i)}})
 		}
@@ -40,15 +40,13 @@ func TestConcurrentReads(t *testing.T) {
 		srv.sendConcludeResponse(ctx)
 	}()
 
-	for i := 0; i < numReads; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range numReads {
+		wg.Go(func() {
 			_, err := client.Read(ctx, ReadRequest{DomainID: "D", ItemID: "V"})
 			if err != nil {
 				errs <- err
 			}
-		}()
+		})
 		// Small delay to allow ordered processing through the transport.
 		time.Sleep(10 * time.Millisecond)
 	}

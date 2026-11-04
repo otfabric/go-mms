@@ -513,7 +513,7 @@ func TestUnmarshalAccessResults_TooMany(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	var data []byte
-	for i := 0; i < maxAccessResults+1; i++ {
+	for range maxAccessResults + 1 {
 		data = append(data, single...)
 	}
 	_, err = UnmarshalAccessResults(data)

@@ -92,10 +92,7 @@ func (p *memFileProvider) Read(_ context.Context, handle FileHandle, maxBytes in
 	if remaining <= 0 {
 		return nil, false, nil
 	}
-	n := remaining
-	if n > maxBytes {
-		n = maxBytes
-	}
+	n := min(remaining, maxBytes)
 	data := h.file.data[h.offset : h.offset+n]
 	h.offset += n
 	moreFollows := h.offset < len(h.file.data)
@@ -298,8 +295,7 @@ func TestFileReadInvalidFrsm(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for invalid frsmID")
 	}
-	var svcErr *ServiceError
-	if !errors.As(err, &svcErr) {
+	if _, ok := errors.AsType[*ServiceError](err); !ok {
 		t.Fatalf("expected ServiceError, got %T: %v", err, err)
 	}
 }
@@ -315,8 +311,7 @@ func TestFileCloseInvalidFrsm(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for invalid frsmID")
 	}
-	var svcErr *ServiceError
-	if !errors.As(err, &svcErr) {
+	if _, ok := errors.AsType[*ServiceError](err); !ok {
 		t.Fatalf("expected ServiceError, got %T: %v", err, err)
 	}
 }

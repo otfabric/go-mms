@@ -205,8 +205,7 @@ func TestClient_Write_ReadOnly(t *testing.T) {
 	}
 	t.Logf("write rejected (expected): %v", writeErr)
 
-	var dae *mms.DataAccessError
-	if !errors.As(writeErr, &dae) {
+	if dae, ok := errors.AsType[*mms.DataAccessError](writeErr); !ok {
 		t.Errorf("expected *DataAccessError, got %T: %v", writeErr, writeErr)
 	} else if dae.Code != mms.DataAccessErrorObjectAccessDenied {
 		t.Errorf("error code = %s, want ObjectAccessDenied", dae.Code)

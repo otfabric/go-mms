@@ -236,8 +236,7 @@ func (c *Conn) handleConfirmedRequest(ctx context.Context, content []byte) error
 
 	respTag, constructed, respPayload, err := c.handler(ctx, invokeID, serviceRaw.Tag, serviceRaw.Bytes)
 	if err != nil {
-		var svcErr *ServiceError
-		if errors.As(err, &svcErr) {
+		if svcErr, ok := errors.AsType[*ServiceError](err); ok {
 			return c.sendError(ctx, invokeID, svcErr.ErrorClass, svcErr.ErrorCode)
 		}
 		return c.sendError(ctx, invokeID, 7, 1) // access: object-access-unsupported

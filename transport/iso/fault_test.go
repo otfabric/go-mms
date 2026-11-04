@@ -149,8 +149,7 @@ func TestFault_TruncatedTPDU(t *testing.T) {
 	}
 
 	ln := iso.NewListener(tcpLn)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go func() { _ = srv.ListenAndServe(ctx, ln) }()
 
 	// Open raw TCP connection.
@@ -299,7 +298,7 @@ func TestFault_ConcurrentRequestAfterDisconnect(t *testing.T) {
 	const workers = 8
 	type result struct{ err error }
 	results := make(chan result, workers)
-	for i := 0; i < workers; i++ {
+	for range workers {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
@@ -310,7 +309,7 @@ func TestFault_ConcurrentRequestAfterDisconnect(t *testing.T) {
 
 	done := time.After(5 * time.Second)
 	var noErr int
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		select {
 		case r := <-results:
 			if r.err == nil {

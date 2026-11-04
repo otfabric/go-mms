@@ -62,7 +62,7 @@ client-sent Cancel, client UnsolicitedStatus callback, segmented
 
 `make check` runs fmt, tidy, vet, lint, vuln, test, test-race, coverage,
 fuzz-short and test-armv7. CI (`.github/workflows/ci.yml`) runs the shared
-Go workflow on Go 1.23–1.26 plus a `quality` job (coverage gate, 2s fuzz
+Go workflow on Go 1.26–1.27 plus a `quality` job (coverage gate, 2s fuzz
 pass, 5s chaos run); `.github/workflows/interop.yml` runs the interop
 suite against a digest-pinned adapter image.
 

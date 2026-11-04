@@ -124,7 +124,7 @@ func DecodeLength(data []byte) (length int, consumed int, err error) {
 		return 0, 0, fmt.Errorf("truncated multi-byte length")
 	}
 	var l int
-	for i := 0; i < numBytes; i++ {
+	for i := range numBytes {
 		l = (l << 8) | int(data[1+i])
 	}
 	return l, 1 + numBytes, nil

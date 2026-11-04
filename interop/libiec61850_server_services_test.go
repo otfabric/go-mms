@@ -54,25 +54,25 @@ func failResult(t *testing.T, op, target string) string {
 	return r.Error
 }
 
-func asObject(t *testing.T, v interface{}) map[string]interface{} {
+func asObject(t *testing.T, v any) map[string]any {
 	t.Helper()
-	m, ok := v.(map[string]interface{})
+	m, ok := v.(map[string]any)
 	if !ok {
 		t.Fatalf("value is %T, want object", v)
 	}
 	return m
 }
 
-func asList(t *testing.T, v interface{}) []interface{} {
+func asList(t *testing.T, v any) []any {
 	t.Helper()
-	l, ok := v.([]interface{})
+	l, ok := v.([]any)
 	if !ok {
 		t.Fatalf("value is %T, want array", v)
 	}
 	return l
 }
 
-func assertJSON(t *testing.T, what string, got, want interface{}) {
+func assertJSON(t *testing.T, what string, got, want any) {
 	t.Helper()
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("%s = %v, want %v", what, got, want)
@@ -94,7 +94,7 @@ func fnv1a64(data []byte) string {
 
 func TestServer_Status(t *testing.T) {
 	fix := mustLoadFixture(t)
-	want := map[string]interface{}{"logical": float64(fix.Status.Logical), "physical": float64(fix.Status.Physical)}
+	want := map[string]any{"logical": float64(fix.Status.Logical), "physical": float64(fix.Status.Physical)}
 	assertJSON(t, "status", okResult(t, "status", "").Value, want)
 	assertJSON(t, "status (extended)", okResult(t, "status", "extended").Value, want)
 }
@@ -117,11 +117,11 @@ func TestServer_GetNameList_UnknownDomain(t *testing.T) {
 
 func TestServer_GetVariableAccessAttributes_Composite(t *testing.T) {
 	assertJSON(t, "array-rw type", okResult(t, "get-var-access-attr", "interop/array-rw").Value,
-		map[string]interface{}{"type": "array", "count": float64(4), "element": map[string]interface{}{"type": "integer"}})
+		map[string]any{"type": "array", "count": float64(4), "element": map[string]any{"type": "integer"}})
 	assertJSON(t, "structure-rw type", okResult(t, "get-var-access-attr", "interop/structure-rw").Value,
-		map[string]interface{}{"type": "structure", "components": []interface{}{
-			map[string]interface{}{"name": "flag", "spec": map[string]interface{}{"type": "boolean"}},
-			map[string]interface{}{"name": "count", "spec": map[string]interface{}{"type": "integer"}},
+		map[string]any{"type": "structure", "components": []any{
+			map[string]any{"name": "flag", "spec": map[string]any{"type": "boolean"}},
+			map[string]any{"name": "count", "spec": map[string]any{"type": "integer"}},
 		}})
 }
 
@@ -131,7 +131,7 @@ func TestServer_GetVariableAccessAttributes_Composite(t *testing.T) {
 
 func TestServer_ReadArrayElements(t *testing.T) {
 	assertJSON(t, "array[1:4]", okResult(t, "read-array-elements", "interop/array[1:4]").Value,
-		[]interface{}{float64(2), float64(3), float64(4)})
+		[]any{float64(2), float64(3), float64(4)})
 	assertJSON(t, "array[2]", okResult(t, "read-array-elements", "interop/array[2]").Value, float64(3))
 }
 
@@ -143,49 +143,49 @@ func TestServer_WriteArrayElements(t *testing.T) {
 	okResult(t, "write-array-elements", "interop/array-rw[1]")
 	okResult(t, "write-array-elements", "interop/array-rw[2:4]")
 	assertJSON(t, "array-rw after writes", okResult(t, "read", "interop/array-rw").Value,
-		[]interface{}{float64(10), float64(21), float64(33), float64(44)})
+		[]any{float64(10), float64(21), float64(33), float64(44)})
 }
 
 func TestServer_WriteComponent(t *testing.T) {
 	okResult(t, "write-component", "interop/structure-rw$count")
 	assertJSON(t, "structure-rw after write", okResult(t, "read", "interop/structure-rw").Value,
-		[]interface{}{false, float64(99)})
+		[]any{false, float64(99)})
 }
 
 // ---------------------------------------------------------------------------
 // Named variable lists
 // ---------------------------------------------------------------------------
 
-var nvlMemberRefs = []interface{}{"interop/boolean", "interop/integer"}
+var nvlMemberRefs = []any{"interop/boolean", "interop/integer"}
 
 // nvlWrittenValues returns interop/boolean and interop/integer after the
 // client's write-nvl step: (true, 77), or (false, 0) from write-multiple
 // when the peer client cannot write a list.
-func nvlWrittenValues(t *testing.T) []interface{} {
+func nvlWrittenValues(t *testing.T) []any {
 	if stack(t).quirks.noWriteNVL {
-		return []interface{}{false, float64(0)}
+		return []any{false, float64(0)}
 	}
-	return []interface{}{true, float64(77)}
+	return []any{true, float64(77)}
 }
 
 func TestServer_NVL_DomainScope(t *testing.T) {
 	okResult(t, "define-nvl", "interop/svclist")
 	assertJSON(t, "domain lists", okResult(t, "get-name-list", "interop/nvl").Names, []string{"svclist"})
 	assertJSON(t, "svclist attributes", okResult(t, "get-nvl-attrs", "interop/svclist").Value,
-		map[string]interface{}{"deletable": true, "variables": nvlMemberRefs})
+		map[string]any{"deletable": true, "variables": nvlMemberRefs})
 	// specificationWithResult; values written by write-multiple earlier in the run
 	assertJSON(t, "svclist (spec with result)", okResult(t, "read-nvl", "interop/svclist?spec").Value,
-		[]interface{}{false, float64(0)})
+		[]any{false, float64(0)})
 	okResult(t, "write-nvl", "interop/svclist")
 	assertJSON(t, "svclist after write", okResult(t, "read-nvl", "interop/svclist").Value,
-		[]interface{}{true, float64(77)})
+		[]any{true, float64(77)})
 	okResult(t, "delete-nvl", "interop/svclist")
 }
 
 func TestServer_NVL_VMDScope(t *testing.T) {
 	okResult(t, "define-nvl", "vmd/vmdlist")
 	assertJSON(t, "vmdlist attributes", okResult(t, "get-nvl-attrs", "vmd/vmdlist").Value,
-		map[string]interface{}{"deletable": true, "variables": nvlMemberRefs})
+		map[string]any{"deletable": true, "variables": nvlMemberRefs})
 	assertJSON(t, "vmdlist", okResult(t, "read-nvl", "vmd/vmdlist").Value, nvlWrittenValues(t))
 	okResult(t, "delete-nvl", "vmd/vmdlist")
 }
@@ -195,7 +195,7 @@ func TestServer_NVL_VMDScope(t *testing.T) {
 func TestServer_NVL_ServerRegistered(t *testing.T) {
 	fix := mustLoadFixture(t)
 	// Live values, as observed by the vmdlist read immediately before.
-	values := map[string]interface{}{}
+	values := map[string]any{}
 	for i, v := range asList(t, okResult(t, "read-nvl", "vmd/vmdlist").Value) {
 		values[nvlMemberRefs[i].(string)] = v
 	}
@@ -204,14 +204,14 @@ func TestServer_NVL_ServerRegistered(t *testing.T) {
 			continue
 		}
 		target := "vmd/" + rep.VMDList
-		refs := []interface{}{}
-		want := []interface{}{}
+		refs := []any{}
+		want := []any{}
 		for _, ref := range rep.Variables {
 			refs = append(refs, ref)
 			want = append(want, values[ref])
 		}
 		assertJSON(t, target+" attributes", okResult(t, "get-nvl-attrs", target).Value,
-			map[string]interface{}{"deletable": false, "variables": refs})
+			map[string]any{"deletable": false, "variables": refs})
 		assertJSON(t, target, okResult(t, "read-nvl", target).Value, want)
 	}
 }
@@ -220,8 +220,8 @@ func TestServer_NVL_AssociationScope(t *testing.T) {
 	okResult(t, "define-nvl", "aa/aalist")
 	assertJSON(t, "association lists", okResult(t, "get-name-list", "aa/nvl").Names, []string{"aalist"})
 	assertJSON(t, "aalist attributes", okResult(t, "get-nvl-attrs", "aa/aalist").Value,
-		map[string]interface{}{"deletable": true, "variables": nvlMemberRefs})
-	assertJSON(t, "aalist", okResult(t, "read-nvl", "aa/aalist").Value, []interface{}{true, float64(77)})
+		map[string]any{"deletable": true, "variables": nvlMemberRefs})
+	assertJSON(t, "aalist", okResult(t, "read-nvl", "aa/aalist").Value, []any{true, float64(77)})
 	okResult(t, "write-nvl", "aa/aalist")
 	okResult(t, "delete-nvl", "aa/aalist")
 }
@@ -231,9 +231,9 @@ func TestServer_NVL_AssociationScope(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // directoryListing converts a file-directory value to name → entry.
-func directoryListing(t *testing.T, v interface{}) map[string]map[string]interface{} {
+func directoryListing(t *testing.T, v any) map[string]map[string]any {
 	t.Helper()
-	out := map[string]map[string]interface{}{}
+	out := map[string]map[string]any{}
 	for _, e := range asList(t, v) {
 		m := asObject(t, e)
 		out[fmt.Sprint(m["name"])] = m
@@ -398,15 +398,15 @@ func assertJournalJSON(t *testing.T, target string, want []fixtureJournalEntry) 
 			wantValue = n
 		}
 		reason := make([]byte, 7)
-		for b := 0; b < 7; b++ {
+		for b := range 7 {
 			reason[b] = '0'
 			if w.ReasonCode&(1<<b) != 0 {
 				reason[b] = '1'
 			}
 		}
-		assertJSON(t, fmt.Sprintf("%s[%d] variables", target, i), e["variables"], []interface{}{
-			map[string]interface{}{"tag": w.Tag, "value": wantValue},
-			map[string]interface{}{"tag": "ReasonCode", "value": string(reason)},
+		assertJSON(t, fmt.Sprintf("%s[%d] variables", target, i), e["variables"], []any{
+			map[string]any{"tag": w.Tag, "value": wantValue},
+			map[string]any{"tag": "ReasonCode", "value": string(reason)},
 		})
 	}
 }
@@ -438,15 +438,15 @@ func TestServer_ReadJournal_Unknown(t *testing.T) {
 func TestServer_InformationReport(t *testing.T) {
 	okResult(t, "write", "interop/report-trigger")
 	fix := mustLoadFixture(t)
-	values := map[string]interface{}{"interop/integer": float64(-123), "interop/boolean": true}
+	values := map[string]any{"interop/integer": float64(-123), "interop/boolean": true}
 	if stack(t).quirks.noWriteNVL {
 		// The list write that restores the fixture values is unsupported.
-		values = map[string]interface{}{"interop/integer": float64(0), "interop/boolean": false}
+		values = map[string]any{"interop/integer": float64(0), "interop/boolean": false}
 	}
 
 	for _, rep := range fix.InformationReports {
 		if rep.VMDList != "" {
-			var want []interface{}
+			var want []any
 			for _, ref := range rep.Variables {
 				want = append(want, values[ref])
 			}

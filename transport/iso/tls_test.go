@@ -116,11 +116,9 @@ func TestTLSDialAndListen(t *testing.T) {
 	var serverConn mms.Transport
 	var acceptErr error
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		serverConn, acceptErr = ln.Accept(ctx)
-	}()
+	})
 
 	clientConn, err := iso.DialTCP(ctx, ln.Addr().String(), iso.WithTLSConfig(clientTLS))
 	if err != nil {
@@ -175,11 +173,9 @@ func TestTLSConnectionState(t *testing.T) {
 	var serverConn mms.Transport
 	var acceptErr error
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		serverConn, acceptErr = ln.Accept(ctx)
-	}()
+	})
 
 	clientConn, err := iso.DialTCP(ctx, ln.Addr().String(), iso.WithTLSConfig(clientTLS))
 	if err != nil {

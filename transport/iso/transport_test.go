@@ -66,11 +66,9 @@ func TestDialTCPAndListen(t *testing.T) {
 	var serverConn mms.Transport
 	var acceptErr error
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		serverConn, acceptErr = ln.Accept(ctx)
-	}()
+	})
 
 	clientConn, err := iso.DialTCP(ctx, ln.Addr().String(),
 		iso.WithCallingTSelector([]byte{0x00, 0x01}),
@@ -191,7 +189,7 @@ func TestConcurrentCloseSend(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			_ = clientConn.Send(ctx, []byte("data"))
 		}
 	}()
@@ -260,11 +258,9 @@ func TestAcceptContextCancel(t *testing.T) {
 	defer cancel2()
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		_, _ = ln.Accept(ctx2)
-	}()
+	})
 
 	conn, err := net.DialTimeout("tcp", ln.Addr().String(), 500*time.Millisecond)
 	if err != nil {
@@ -397,8 +393,7 @@ func TestHandshakeTSAPSelectorMismatch(t *testing.T) {
 	if !errors.Is(err, cotp.ErrConnectionRefused) {
 		t.Errorf("got %v, want ErrConnectionRefused", err)
 	}
-	var rej *cotp.RejectionError
-	if !errors.As(err, &rej) {
+	if _, ok := errors.AsType[*cotp.RejectionError](err); !ok {
 		t.Errorf("got %v, want RejectionError", err)
 	}
 
@@ -652,11 +647,9 @@ func tcpLoopbackTransport(t *testing.T) (client mms.Transport, server mms.Transp
 	var serverConn mms.Transport
 	var acceptErr error
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		serverConn, acceptErr = ln.Accept(ctx)
-	}()
+	})
 
 	clientConn, err := iso.DialTCP(ctx, ln.Addr().String())
 	if err != nil {
@@ -683,14 +676,12 @@ func TestWithLogger_ListenAccept(t *testing.T) {
 	defer cancel()
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		tr, err := ln.Accept(ctx)
 		if err == nil {
 			_ = tr.Close()
 		}
-	}()
+	})
 
 	c, err := iso.DialTCP(ctx, ln.Addr().String())
 	if err != nil {
