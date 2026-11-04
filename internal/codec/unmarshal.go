@@ -5,6 +5,7 @@ package codec
 import (
 	"encoding/asn1"
 	"fmt"
+	"math"
 
 	"github.com/otfabric/go-mms/internal/asn1util"
 )
@@ -32,12 +33,12 @@ func UnwrapPdu(data []byte) (tag byte, content []byte, err error) {
 
 	// Every MMS PDU tag fits the single-byte form; a long-form tag
 	// number must not be truncated into one of them.
-	if raw.Tag > 30 {
+	if raw.Tag < 0 || raw.Tag > 30 {
 		return 0, nil, fmt.Errorf("codec: unwrap PDU: tag number %d is not an MMS PDU", raw.Tag)
 	}
 
 	// Reconstruct the tag byte from the parsed RawValue.
-	tag = byte(raw.Class<<6) | byte(raw.Tag)
+	tag = byte((raw.Class&0x03)<<6) | byte(raw.Tag&0x1f)
 	if raw.IsCompound {
 		tag |= asn1util.ConstructedFlag
 	}
@@ -63,10 +64,15 @@ func UnmarshalConfirmedRequest(content []byte) (invokeID InvokeID, serviceRaw as
 }
 
 func unmarshalConfirmedEnvelope(content []byte) (InvokeID, asn1.RawValue, error) {
-	var invokeInt int
+	var invokeInt int64
 	rest, err := asn1.Unmarshal(content, &invokeInt)
 	if err != nil {
 		return 0, asn1.RawValue{}, fmt.Errorf("codec: unmarshal invoke ID: %w", err)
+	}
+	// invokeID is Unsigned32 (ISO 9506-2): a negative or wider value
+	// must not wrap onto another outstanding request.
+	if invokeInt < 0 || invokeInt > math.MaxUint32 {
+		return 0, asn1.RawValue{}, fmt.Errorf("codec: invoke ID %d out of Unsigned32 range", invokeInt)
 	}
 
 	var serviceRaw asn1.RawValue

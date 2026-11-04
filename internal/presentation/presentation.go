@@ -268,7 +268,7 @@ func encodeContextDefinitionList() []byte {
 }
 
 func encodeContextDef(id int, abstractSyntax, transferSyntax []byte) []byte {
-	ctxID := berutil.EncodeTLV(0x02, []byte{byte(id)})
+	ctxID := berutil.EncodeTLV(0x02, berutil.EncodeInt(id))
 	absName := berutil.EncodeTLV(0x06, abstractSyntax)
 	tsOID := berutil.EncodeTLV(0x06, transferSyntax)
 	tsList := berutil.EncodeTLV(0x30, tsOID)
@@ -293,14 +293,13 @@ func encodeContextResultList() []byte {
 }
 
 func encodeAcceptResult() []byte {
-	return berutil.EncodeTLV(0x30, []byte{
-		0x80, 0x01, 0x00,
-		0x81, byte(len(oidBER)), oidBER[0], oidBER[1],
-	})
+	content := []byte{0x80, 0x01, 0x00} // result = acceptance
+	content = berutil.AppendTLV(content, 0x81, oidBER)
+	return berutil.EncodeTLV(0x30, content)
 }
 
 func encodeFullyEncodedData(contextID int, payload []byte) []byte {
-	ctxIDEnc := berutil.EncodeTLV(0x02, []byte{byte(contextID)})
+	ctxIDEnc := berutil.EncodeTLV(0x02, berutil.EncodeInt(contextID))
 	presData := berutil.EncodeTLV(0xa0, payload)
 
 	pdvContent := make([]byte, 0, len(ctxIDEnc)+len(presData))

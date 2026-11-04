@@ -105,10 +105,7 @@ func (s *fixtureFileStore) Open(_ context.Context, path string) (mms.FileHandle,
 
 func (s *fixtureFileStore) Read(_ context.Context, handle mms.FileHandle, maxBytes int) ([]byte, bool, error) {
 	h := handle.(*memHandle)
-	end := h.pos + maxBytes
-	if end > len(h.data) {
-		end = len(h.data)
-	}
+	end := min(h.pos+maxBytes, len(h.data))
 	chunk := h.data[h.pos:end]
 	h.pos = end
 	return chunk, h.pos < len(h.data), nil
@@ -214,7 +211,7 @@ func newFixtureJournals(fix *fixtureFile) (*fixtureJournals, error) {
 // bit-string where bit i (MSB first) carries 1<<i.
 func reasonCodeValue(code int) *mms.Value {
 	var b byte
-	for i := 0; i < 7; i++ {
+	for i := range 7 {
 		if code&(1<<i) != 0 {
 			b |= 0x80 >> i
 		}

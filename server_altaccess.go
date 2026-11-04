@@ -122,7 +122,7 @@ func patchRange(val *Value, start, count int, remaining []pdu.AccessSelectorWire
 	if !ok || len(newElems) != count {
 		return false
 	}
-	for i := 0; i < count; i++ {
+	for i := range count {
 		val.elementsVal[start+i] = newElems[i].Clone()
 	}
 	return true

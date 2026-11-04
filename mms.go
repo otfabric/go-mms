@@ -593,7 +593,7 @@ func (c *Client) send(ctx context.Context, data []byte) error {
 			done <- nil
 			return
 		}
-		err := c.sendRaw(context.Background(), data)
+		err := c.sendRaw(context.WithoutCancel(ctx), data)
 		if err != nil {
 			_ = c.conn.Close()
 			err = classify(fmt.Errorf("mms: send request: %w", err), ErrClosed)

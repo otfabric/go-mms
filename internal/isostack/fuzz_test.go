@@ -73,7 +73,7 @@ func FuzzDecodeAssociateRequest(f *testing.F) {
 			valid = append(valid, b)
 		}
 	}
-	valid = append(valid, EncodeAssociateResponse([]byte{0xa9, 0x00}), EncodeDataRequest([]byte{0x8b, 0x00}))
+	valid = append(valid, mustEncode(f)(EncodeAssociateResponse([]byte{0xa9, 0x00})), EncodeDataRequest([]byte{0x8b, 0x00}))
 	for _, v := range valid {
 		f.Add(v)
 	}
@@ -110,7 +110,7 @@ func FuzzDecodeAssociateRequest(f *testing.F) {
 func FuzzDecodeAssociateResponse(f *testing.F) {
 	var valid [][]byte
 	for _, p := range fuzzMMSPayloads {
-		valid = append(valid, EncodeAssociateResponse(p))
+		valid = append(valid, mustEncode(f)(EncodeAssociateResponse(p)))
 	}
 	valid = append(valid, EncodeAssociateReject())
 	if req, err := EncodeAssociateRequest(Params{}, []byte{0xa8, 0x00}); err == nil {
@@ -126,7 +126,7 @@ func FuzzDecodeAssociateResponse(f *testing.F) {
 		if err != nil || res.ACSEResult != acse.ResultAccepted {
 			return
 		}
-		enc := EncodeAssociateResponse(res.MmsPayload)
+		enc := mustEncode(t)(EncodeAssociateResponse(res.MmsPayload))
 		again, err := DecodeAssociateResponse(enc)
 		if err != nil {
 			t.Fatalf("decode(encode(x)) failed: %v\noriginal %x\nre-encoded %x", err, data, enc)

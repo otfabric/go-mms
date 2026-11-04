@@ -72,14 +72,12 @@ func TestRemoteAddr_COTPAndAfterClose(t *testing.T) {
 	defer cancel()
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		tr, err := ln.Accept(ctx)
 		if err == nil {
 			_ = tr.Close()
 		}
-	}()
+	})
 
 	client, err := DialTCP(ctx, ln.Addr().String())
 	if err != nil {

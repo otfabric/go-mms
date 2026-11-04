@@ -3,7 +3,7 @@
 ## Race detector status
 
 `make check` runs `go test -race ./...`; CI runs the race detector on Go
-1.23–1.26 and a short chaos run (`make chaos CHAOS_DURATION=5s`) under
+1.26–1.27 and a short chaos run (`make chaos CHAOS_DURATION=5s`) under
 `-race`. `make chaos` runs the chaos and stress tests for longer with a
 random seed; a failure prints `MMS_CHAOS_SEED` to replay it.
 

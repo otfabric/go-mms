@@ -13,15 +13,15 @@ permissions:
 
 jobs:
   ci:
-    uses: otfabric/.github/.github/workflows/go-ci.yml@v3.3.0
+    uses: otfabric/.github/.github/workflows/go-ci.yml@v3.3.1
     with:
       run-govulncheck: true
       coverage-min: "90"
       fuzz-time: 10s
-      # 57 Fuzz targets at 10s each do not fit the default 15-minute job limit.
+      # 60 Fuzz targets at 10s each do not fit the default 15-minute job limit.
       timeout-minutes: 25
       codecov-name: go-mms
-      go-versions: '["1.23","1.24","1.25","1.26"]'
+      go-versions: '["1.26","1.27"]'
     secrets: inherit
 
   quality:

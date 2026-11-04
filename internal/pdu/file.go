@@ -181,20 +181,20 @@ func UnmarshalFileOpenRequest(data []byte) (*FileOpenRequest, error) {
 
 // UnmarshalFileReadRequest decodes a FileRead request body (just frsmId).
 func UnmarshalFileReadRequest(data []byte) (int32, error) {
-	v, err := berutil.DecodeInteger(data)
+	v, err := berutil.DecodeInt32(data)
 	if err != nil {
 		return 0, fmt.Errorf("pdu: file-read request: %w", err)
 	}
-	return int32(v), nil
+	return v, nil
 }
 
 // UnmarshalFileCloseRequest decodes a FileClose request body (just frsmId).
 func UnmarshalFileCloseRequest(data []byte) (int32, error) {
-	v, err := berutil.DecodeInteger(data)
+	v, err := berutil.DecodeInt32(data)
 	if err != nil {
 		return 0, fmt.Errorf("pdu: file-close request: %w", err)
 	}
-	return int32(v), nil
+	return v, nil
 }
 
 // UnmarshalFileDeleteRequest decodes a FileDelete request body.
@@ -312,11 +312,12 @@ func UnmarshalObtainFileRequest(data []byte) (*ObtainFileRequest, error) {
 //	    lastModified   [1] IMPLICIT GeneralizedTime OPTIONAL
 //	}
 func MarshalFileOpenResponse(frsmID int32, size int64, lastModified time.Time) ([]byte, error) {
-	if size < 0 || size > math.MaxUint32 {
-		return nil, fmt.Errorf("pdu: file size %d exceeds MMS Unsigned32 range [0, %d]", size, uint32(math.MaxUint32))
+	attrs, err := encodeFileAttributes(size, lastModified)
+	if err != nil {
+		return nil, err
 	}
 	frsmBytes := berutil.EncodeTLV(0x80, berutil.EncodeInt(int(frsmID)))
-	attrBytes := berutil.EncodeTLV(0xa1, encodeFileAttributes(size, lastModified))
+	attrBytes := berutil.EncodeTLV(0xa1, attrs)
 
 	payload := make([]byte, 0, len(frsmBytes)+len(attrBytes))
 	payload = append(payload, frsmBytes...)
@@ -326,12 +327,16 @@ func MarshalFileOpenResponse(frsmID int32, size int64, lastModified time.Time) (
 
 // encodeFileAttributes returns the FileAttributes content. A zero
 // lastModified means the time is unknown and the OPTIONAL field is omitted.
-func encodeFileAttributes(size int64, lastModified time.Time) []byte {
+// sizeOfFile is Unsigned32, so a size outside [0, 2^32-1] is an error.
+func encodeFileAttributes(size int64, lastModified time.Time) ([]byte, error) {
+	if size < 0 || size > math.MaxUint32 {
+		return nil, fmt.Errorf("pdu: file size %d exceeds MMS Unsigned32 range [0, %d]", size, uint32(math.MaxUint32))
+	}
 	out := berutil.EncodeTLV(0x80, berutil.EncodeUint32(uint32(size)))
 	if !lastModified.IsZero() {
 		out = append(out, berutil.EncodeTLV(0x81, []byte(lastModified.UTC().Format("20060102150405Z")))...)
 	}
-	return out
+	return out, nil
 }
 
 // MarshalFileReadResponse encodes a FileRead response.
@@ -368,11 +373,12 @@ func MarshalFileReadResponse(data []byte, moreFollows bool) ([]byte, error) {
 func MarshalFileDirectoryResponse(entries []FileDirectoryEntry, moreFollows bool) ([]byte, error) {
 	var entriesBytes []byte
 	for _, e := range entries {
-		if e.Size < 0 || e.Size > math.MaxUint32 {
-			return nil, fmt.Errorf("pdu: file %q size %d exceeds MMS Unsigned32 range [0, %d]", e.FileName, e.Size, uint32(math.MaxUint32))
+		attrs, err := encodeFileAttributes(e.Size, e.LastModified)
+		if err != nil {
+			return nil, fmt.Errorf("pdu: file %q: %w", e.FileName, err)
 		}
 		nameBytes := berutil.EncodeTLV(0xa0, encodeFileNameInner(e.FileName))
-		attrBytes := berutil.EncodeTLV(0xa1, encodeFileAttributes(e.Size, e.LastModified))
+		attrBytes := berutil.EncodeTLV(0xa1, attrs)
 
 		entryInner := append(nameBytes, attrBytes...)
 		entriesBytes = append(entriesBytes, berutil.EncodeTLV(0x30, entryInner)...)
@@ -409,11 +415,11 @@ func UnmarshalFileOpenResponse(data []byte) (*FileOpenResult, error) {
 		offset += n
 		switch tag {
 		case 0x80: // frsmID
-			v, err := berutil.DecodeInteger(inner)
+			v, err := berutil.DecodeInt32(inner)
 			if err != nil {
 				return nil, fmt.Errorf("pdu: file-open frsmID: %w", err)
 			}
-			r.FrsmID = int32(v)
+			r.FrsmID = v
 			hasFrsmID = true
 		case 0xa1: // fileAttributes
 			gotSize, err := parseFileAttributes(inner, r)

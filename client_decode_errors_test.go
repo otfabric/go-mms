@@ -74,10 +74,10 @@ func TestNewClient_BadAssociationResponse(t *testing.T) {
 		want  error
 	}{
 		{"not a session SPDU", []byte{0xff, 0x00}, ErrDecodeFailed},
-		{"no MMS payload", isostack.EncodeAssociateResponse(nil), ErrProtocol},
-		{"undecodable MMS payload", isostack.EncodeAssociateResponse([]byte{0xff}), ErrDecodeFailed},
-		{"not an InitiateResponse", isostack.EncodeAssociateResponse(identify), ErrProtocol},
-		{"malformed InitiateResponse", isostack.EncodeAssociateResponse([]byte{asn1util.TagInitiateResponse, 0x02, 0xff, 0x00}), ErrDecodeFailed},
+		{"no MMS payload", mustEncode(t)(isostack.EncodeAssociateResponse(nil)), ErrProtocol},
+		{"undecodable MMS payload", mustEncode(t)(isostack.EncodeAssociateResponse([]byte{0xff})), ErrDecodeFailed},
+		{"not an InitiateResponse", mustEncode(t)(isostack.EncodeAssociateResponse(identify)), ErrProtocol},
+		{"malformed InitiateResponse", mustEncode(t)(isostack.EncodeAssociateResponse([]byte{asn1util.TagInitiateResponse, 0x02, 0xff, 0x00})), ErrDecodeFailed},
 	}
 	for _, tc := range cases {
 		_, err := NewClient(context.Background(), &replyTransport{reply: tc.reply}, DialOptions{})

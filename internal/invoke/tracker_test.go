@@ -213,11 +213,9 @@ func TestTrackerConcurrentStress(t *testing.T) {
 	const goroutines = 50
 	const opsPerGoroutine = 100
 
-	for i := 0; i < goroutines/2; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < opsPerGoroutine; j++ {
+	for range goroutines / 2 {
+		wg.Go(func() {
+			for range opsPerGoroutine {
 				id, ch, err := tr.Allocate()
 				if err != nil {
 					continue
@@ -225,14 +223,12 @@ func TestTrackerConcurrentStress(t *testing.T) {
 				go tr.Complete(id, Response{})
 				<-ch
 			}
-		}()
+		})
 	}
 
-	for i := 0; i < goroutines/4; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < opsPerGoroutine; j++ {
+	for range goroutines / 4 {
+		wg.Go(func() {
+			for range opsPerGoroutine {
 				id, ch, err := tr.Allocate()
 				if err != nil {
 					continue
@@ -240,17 +236,15 @@ func TestTrackerConcurrentStress(t *testing.T) {
 				go tr.Cancel(id, fmt.Errorf("test cancel"))
 				<-ch
 			}
-		}()
+		})
 	}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for j := 0; j < 5; j++ {
+	wg.Go(func() {
+		for range 5 {
 			time.Sleep(time.Millisecond)
 			tr.CancelAll(fmt.Errorf("cancel all"))
 		}
-	}()
+	})
 
 	done := make(chan struct{})
 	go func() {
@@ -269,7 +263,7 @@ func TestAllocateWithIDConcurrent(t *testing.T) {
 	tr := NewTracker(100)
 	var wg sync.WaitGroup
 
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		wg.Add(1)
 		id := codec.InvokeID(i%10) + 1 // avoid 0; some will collide
 		go func(id codec.InvokeID) {

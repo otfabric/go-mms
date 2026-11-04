@@ -26,7 +26,7 @@ func TestServer_Identify(t *testing.T) {
 	if !r.OK {
 		t.Fatalf("identify failed: %s", r.Error)
 	}
-	m, ok := r.Value.(map[string]interface{})
+	m, ok := r.Value.(map[string]any)
 	if !ok {
 		t.Fatalf("identify value is not object: %T", r.Value)
 	}
@@ -375,7 +375,7 @@ func TestServer_Read_Array(t *testing.T) {
 	if !r.OK {
 		t.Fatalf("read array failed: %s", r.Error)
 	}
-	arr, ok := r.Value.([]interface{})
+	arr, ok := r.Value.([]any)
 	if !ok {
 		t.Fatalf("array value is not JSON array: %T", r.Value)
 	}
@@ -405,7 +405,7 @@ func TestServer_Read_Structure(t *testing.T) {
 	if !r.OK {
 		t.Fatalf("read structure failed: %s", r.Error)
 	}
-	comps, ok := r.Value.([]interface{})
+	comps, ok := r.Value.([]any)
 	if !ok {
 		t.Fatalf("structure value is not JSON array: %T", r.Value)
 	}
@@ -453,7 +453,7 @@ func TestServer_ReadMultiple(t *testing.T) {
 	if !r.OK {
 		t.Fatalf("read-multiple failed: %s", r.Error)
 	}
-	vals, ok := r.Values.([]interface{})
+	vals, ok := r.Values.([]any)
 	if !ok {
 		t.Fatalf("read-multiple values is not array: %T", r.Values)
 	}
@@ -506,7 +506,7 @@ func TestServer_NVL(t *testing.T) {
 	if !rr.OK {
 		t.Fatalf("read-nvl failed: %s", rr.Error)
 	}
-	vals, ok := rr.Values.([]interface{})
+	vals, ok := rr.Values.([]any)
 	if !ok {
 		t.Fatalf("read-nvl values is not array: %T", rr.Values)
 	}

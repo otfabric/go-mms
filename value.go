@@ -92,11 +92,10 @@ func (v *Value) Int32() (val int32, ok bool) {
 	if v.typ != ValueTypeInteger {
 		return 0, false
 	}
-	i := int32(v.intVal)
-	if int64(i) != v.intVal {
+	if v.intVal < math.MinInt32 || v.intVal > math.MaxInt32 {
 		return 0, false
 	}
-	return i, true
+	return int32(v.intVal), true
 }
 
 // Int64 returns a signed 64-bit integer. ok is false if the value is
@@ -114,11 +113,10 @@ func (v *Value) Uint32() (val uint32, ok bool) {
 	if v.typ != ValueTypeUnsigned {
 		return 0, false
 	}
-	u := uint32(v.uintVal)
-	if uint64(u) != v.uintVal {
+	if v.uintVal > math.MaxUint32 {
 		return 0, false
 	}
-	return u, true
+	return uint32(v.uintVal), true
 }
 
 // Uint64 returns an unsigned 64-bit integer. ok is false if the value

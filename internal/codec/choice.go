@@ -15,10 +15,10 @@ import (
 // bits, which matches no single-byte tag, instead of a truncated number.
 func ServiceTag(raw asn1.RawValue) byte {
 	num := byte(0x1f)
-	if raw.Tag <= 30 {
-		num = byte(raw.Tag)
+	if raw.Tag >= 0 && raw.Tag <= 30 {
+		num = byte(raw.Tag & 0x1f)
 	}
-	tag := byte(raw.Class<<6) | num
+	tag := byte((raw.Class&0x03)<<6) | num
 	if raw.IsCompound {
 		tag |= 0x20
 	}

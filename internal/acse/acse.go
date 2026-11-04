@@ -180,7 +180,7 @@ func EncodeAARE(result int, mmsPayload []byte) []byte {
 	content = berutil.AppendTLV(content, 0xa1, appContextMmsEncoded)
 
 	// [2] result
-	resultEnc := berutil.EncodeTLV(0x02, []byte{byte(result)})
+	resultEnc := berutil.EncodeTLV(0x02, berutil.EncodeInt(result))
 	content = berutil.AppendTLV(content, 0xa2, resultEnc)
 
 	// [3] result-source-diagnostic
@@ -207,7 +207,7 @@ func EncodeRLRE() []byte {
 
 // EncodeABRT builds an ABRT APDU with the given source (0=user, 1=provider).
 func EncodeABRT(source int) []byte {
-	return berutil.EncodeTLV(TagABRT, []byte{0x80, 0x01, byte(source)})
+	return berutil.EncodeTLV(TagABRT, berutil.EncodeTLV(0x80, berutil.EncodeInt(source)))
 }
 
 // Parse parses an ACSE APDU from raw bytes.

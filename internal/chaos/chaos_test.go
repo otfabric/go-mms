@@ -410,7 +410,7 @@ func TestListenerAndDialer(t *testing.T) {
 	dial := Dialer(cfg)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	var seeds []int64
+	var seeds []uint64
 	for range 2 {
 		c, err := dial(ctx, "tcp", ln.Addr().String())
 		if err != nil {
@@ -426,7 +426,7 @@ func TestListenerAndDialer(t *testing.T) {
 		seeds = append(seeds, srvConn.Seed())
 	}
 	// Per-connection seeds are deterministic and distinct.
-	want := []int64{deriveSeed(21, 1), deriveSeed(21, 1), deriveSeed(21, 2), deriveSeed(21, 2)}
+	want := []uint64{deriveSeed(21, 1), deriveSeed(21, 1), deriveSeed(21, 2), deriveSeed(21, 2)}
 	for i := range want {
 		if seeds[i] != want[i] {
 			t.Fatalf("seeds %v want %v", seeds, want)

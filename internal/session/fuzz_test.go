@@ -6,27 +6,27 @@ import "testing"
 
 func FuzzSessionParse(f *testing.F) {
 	// CONNECT SPDU
-	f.Add(EncodeConnect(ConnectParams{
+	f.Add(mustEncode(f)(EncodeConnect(ConnectParams{
 		CallingSelector: []byte{0x00, 0x01},
 		CalledSelector:  []byte{0x00, 0x01},
-	}, []byte{0x31, 0x00}))
+	}, []byte{0x31, 0x00})))
 
 	// ACCEPT SPDU
-	f.Add(EncodeAccept(ConnectParams{
+	f.Add(mustEncode(f)(EncodeAccept(ConnectParams{
 		CallingSelector: []byte{0x00, 0x01},
-	}, []byte{0x31, 0x00}))
+	}, []byte{0x31, 0x00})))
 
 	// DATA SPDU
 	f.Add(EncodeData([]byte{0x61, 0x00}))
 
 	// FINISH SPDU
-	f.Add(EncodeFinish([]byte{0x61, 0x00}))
+	f.Add(mustEncode(f)(EncodeFinish([]byte{0x61, 0x00})))
 
 	// DISCONNECT SPDU
-	f.Add(EncodeDisconnect([]byte{0x61, 0x00}))
+	f.Add(mustEncode(f)(EncodeDisconnect([]byte{0x61, 0x00})))
 
 	// ABORT SPDU
-	f.Add(EncodeAbort([]byte{0x64, 0x00}))
+	f.Add(mustEncode(f)(EncodeAbort([]byte{0x64, 0x00})))
 
 	f.Add([]byte{})
 	f.Add([]byte{0xff})

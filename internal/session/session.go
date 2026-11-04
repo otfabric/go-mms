@@ -89,65 +89,54 @@ type ParsedSpdu struct {
 
 // EncodeConnect builds a CONNECT SPDU (SI=0x0d) with the given parameters
 // and user data (the presentation layer payload).
-func EncodeConnect(p ConnectParams, userData []byte) []byte {
+func EncodeConnect(p ConnectParams, userData []byte) ([]byte, error) {
 	return encodeConnectAccept(SIConnect, p.CallingSelector, p.CalledSelector, userData)
 }
 
 // EncodeAccept builds an ACCEPT SPDU (SI=0x0e) with the given parameters
 // and user data.
-func EncodeAccept(p ConnectParams, userData []byte) []byte {
+func EncodeAccept(p ConnectParams, userData []byte) ([]byte, error) {
 	return encodeConnectAccept(SIAccept, p.CallingSelector, p.CalledSelector, userData)
 }
 
-func encodeConnectAccept(si byte, calling, called, userData []byte) []byte {
+func encodeConnectAccept(si byte, calling, called, userData []byte) ([]byte, error) {
 	// Connection/Accept Item: PI 19 (protocol opts) + PI 22 (version=2)
 	connAccept := []byte{
 		piProtocolOpts, 0x01, 0x00, // protocol options = 0
 		piVersion, 0x01, 0x02, // version = 2
 	}
 
-	// Calculate total parameter length.
-	paramLen := 2 + len(connAccept) // PGI 5 header + content
-	paramLen += 4                   // PGI 20 session user requirements (2+2)
-
-	if len(calling) > 0 {
-		paramLen += 2 + len(calling) // PGI 51 + len + data
-	}
-	if len(called) > 0 {
-		paramLen += 2 + len(called) // PGI 52 + len + data
-	}
-	if len(userData) > 0 {
-		paramLen += pgiLength(len(userData)) // PGI 193 + encoded length + data
-	}
-
-	buf := make([]byte, 0, 2+paramLen)
-	buf = append(buf, si, byte(paramLen))
-
+	var params []byte
 	// PGI 5 — Connection/Accept Item
-	buf = append(buf, pgiConnAcceptItem, byte(len(connAccept)))
-	buf = append(buf, connAccept...)
-
+	params = appendPGI(params, pgiConnAcceptItem, connAccept)
 	// PGI 20 — Session User Requirements (duplex functional unit = 0x0002)
-	buf = append(buf, pgiSessionUserReq, 0x02, 0x00, 0x02)
-
+	params = append(params, pgiSessionUserReq, 0x02, 0x00, 0x02)
 	// PGI 51 — Calling Session Selector
 	if len(calling) > 0 {
-		buf = append(buf, pgiCallingSelector, byte(len(calling)))
-		buf = append(buf, calling...)
+		params = appendPGI(params, pgiCallingSelector, calling)
 	}
-
 	// PGI 52 — Called Session Selector
 	if len(called) > 0 {
-		buf = append(buf, pgiCalledSelector, byte(len(called)))
-		buf = append(buf, called...)
+		params = appendPGI(params, pgiCalledSelector, called)
 	}
-
 	// PGI 193 — User Data
 	if len(userData) > 0 {
-		buf = appendPGI(buf, pgiUserData, userData)
+		params = appendPGI(params, pgiUserData, userData)
 	}
+	return encodeSPDU(si, params)
+}
 
-	return buf
+// encodeSPDU prefixes params with SI and LI. LI uses the one-octet form
+// up to 254 and 0xff plus two octets up to 65535 (ISO 8327-1 LI field); a
+// longer SPDU cannot be encoded.
+func encodeSPDU(si byte, params []byte) ([]byte, error) {
+	if len(params) > maxLI {
+		return nil, fmt.Errorf("session: SPDU 0x%02x parameters %d bytes exceed %d", si, len(params), maxLI)
+	}
+	buf := make([]byte, 0, 1+liSize(len(params))+len(params))
+	buf = append(buf, si)
+	buf = appendLI(buf, len(params))
+	return append(buf, params...), nil
 }
 
 // dataSpduHeader is the fixed 4-byte DATA SPDU prefix.
@@ -163,38 +152,26 @@ func EncodeData(userData []byte) []byte {
 }
 
 // EncodeFinish builds a FINISH SPDU (SI=0x09) carrying user data.
-func EncodeFinish(userData []byte) []byte {
+func EncodeFinish(userData []byte) ([]byte, error) {
 	return encodeSimpleWithUserData(SIFinish, userData)
 }
 
 // EncodeDisconnect builds a DISCONNECT SPDU (SI=0x0a) carrying user data.
-func EncodeDisconnect(userData []byte) []byte {
+func EncodeDisconnect(userData []byte) ([]byte, error) {
 	return encodeSimpleWithUserData(SIDisconnect, userData)
 }
 
-func encodeSimpleWithUserData(si byte, userData []byte) []byte {
-	innerLen := pgiLength(len(userData))
-	buf := make([]byte, 0, 2+innerLen)
-	buf = append(buf, si, byte(innerLen))
-	buf = appendPGI(buf, pgiUserData, userData)
-	return buf
+func encodeSimpleWithUserData(si byte, userData []byte) ([]byte, error) {
+	return encodeSPDU(si, appendPGI(nil, pgiUserData, userData))
 }
 
 // EncodeAbort builds an ABORT SPDU (SI=0x19).
-func EncodeAbort(userData []byte) []byte {
-	transportDisc := []byte{pgiTransportDisc, 0x01, 0x0b} // transport disconnect = 11
-	innerLen := len(transportDisc)
+func EncodeAbort(userData []byte) ([]byte, error) {
+	params := []byte{pgiTransportDisc, 0x01, 0x0b} // transport disconnect = 11
 	if len(userData) > 0 {
-		innerLen += pgiLength(len(userData))
+		params = appendPGI(params, pgiUserData, userData)
 	}
-
-	buf := make([]byte, 0, 2+innerLen)
-	buf = append(buf, SIAbort, byte(innerLen))
-	buf = append(buf, transportDisc...)
-	if len(userData) > 0 {
-		buf = appendPGI(buf, pgiUserData, userData)
-	}
-	return buf
+	return encodeSPDU(SIAbort, params)
 }
 
 // Parse parses a session SPDU from raw data, returning the SPDU type,
@@ -235,13 +212,16 @@ func parseData(data []byte, result *ParsedSpdu) (*ParsedSpdu, error) {
 }
 
 func parseConnectAccept(data []byte, result *ParsedSpdu) (*ParsedSpdu, error) {
-	li := int(data[1])
-	headerEnd := 2 + li
+	li, liLen, err := decodePGILength(data[1:])
+	if err != nil {
+		return nil, fmt.Errorf("session: %s SPDU length: %w", result.Type, err)
+	}
+	offset := 1 + liLen
+	headerEnd := offset + li
 	if len(data) < headerEnd {
 		return nil, fmt.Errorf("session: %s SPDU truncated (need %d, have %d)", result.Type, headerEnd, len(data))
 	}
 
-	offset := 2
 	for offset < headerEnd {
 		if offset+2 > headerEnd {
 			break
@@ -277,13 +257,16 @@ func parseConnectAccept(data []byte, result *ParsedSpdu) (*ParsedSpdu, error) {
 }
 
 func parseSimpleWithUserData(data []byte, result *ParsedSpdu) (*ParsedSpdu, error) {
-	li := int(data[1])
-	if len(data) < 2+li {
+	li, liLen, err := decodePGILength(data[1:])
+	if err != nil {
+		return nil, fmt.Errorf("session: %s SPDU length: %w", result.Type, err)
+	}
+	offset := 1 + liLen
+	end := offset + li
+	if len(data) < end {
 		return nil, fmt.Errorf("session: %s SPDU truncated", result.Type)
 	}
 
-	offset := 2
-	end := 2 + li
 	for offset < end {
 		if offset+2 > end {
 			break
@@ -318,32 +301,43 @@ func parseAbort(data []byte, result *ParsedSpdu) (*ParsedSpdu, error) {
 }
 
 func parseRefuse(data []byte, result *ParsedSpdu) (*ParsedSpdu, error) {
-	li := int(data[1])
-	if len(data) < 2+li {
+	li, liLen, err := decodePGILength(data[1:])
+	if err != nil {
+		return nil, fmt.Errorf("session: REFUSE SPDU length: %w", err)
+	}
+	if len(data) < 1+liLen+li {
 		return nil, fmt.Errorf("session: REFUSE SPDU truncated")
 	}
 	return result, nil
 }
 
-// pgiLength returns the total encoded size of a PGI item (tag + length + content).
-func pgiLength(contentLen int) int {
-	if contentLen < 0xff {
-		return 2 + contentLen // tag(1) + len(1) + content
+// maxLI is the largest length the LI field can carry (ISO 8327-1 LI field).
+const maxLI = 0xffff
+
+// liSize returns the size of the LI field for length l.
+func liSize(l int) int {
+	if l < 0xff {
+		return 1
 	}
-	return 4 + contentLen // tag(1) + 0xff(1) + len(2) + content
+	return 3
 }
 
-// appendPGI appends a PGI item to buf: tag + length + content.
-func appendPGI(buf []byte, tag byte, content []byte) []byte {
-	l := len(content)
-	if l < 0xff {
-		buf = append(buf, tag, byte(l))
-	} else {
-		buf = append(buf, tag, 0xff)
-		buf = binary.BigEndian.AppendUint16(buf, uint16(l))
+// appendLI appends an LI field: one octet below 255, else 0xff and two
+// octets. Callers bound l to maxLI; larger values are clamped.
+func appendLI(buf []byte, l int) []byte {
+	if l >= 0 && l < 0xff {
+		return append(buf, byte(l))
 	}
-	buf = append(buf, content...)
-	return buf
+	return binary.BigEndian.AppendUint16(append(buf, 0xff), uint16(min(max(l, 0), maxLI)))
+}
+
+// appendPGI appends a PGI item to buf: tag + LI + content. Content
+// longer than maxLI is rejected by encodeSPDU, since the SPDU that holds
+// it is longer still.
+func appendPGI(buf []byte, tag byte, content []byte) []byte {
+	buf = append(buf, tag)
+	buf = appendLI(buf, len(content))
+	return append(buf, content...)
 }
 
 // decodePGILength decodes the length field of a PGI/PI item, returning

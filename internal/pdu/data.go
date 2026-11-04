@@ -100,7 +100,11 @@ func MarshalData(v *DataValue) ([]byte, error) {
 		return berutil.EncodeTLV(TagDataMmsString, []byte(v.Str)), nil
 
 	case TagDataUTCTime:
-		return berutil.EncodeTLV(TagDataUTCTime, encodeUTCTime(v.Time, v.TimeQuality)), nil
+		b, err := encodeUTCTime(v.Time, v.TimeQuality)
+		if err != nil {
+			return nil, err
+		}
+		return berutil.EncodeTLV(TagDataUTCTime, b), nil
 
 	case TagDataBinaryTime:
 		bt, err := encodeBinaryTimeChecked(v.BinTimeMs)
@@ -143,6 +147,9 @@ func MarshalData(v *DataValue) ([]byte, error) {
 		return berutil.EncodeTLV(v.Tag, inner), nil
 
 	case TagDataAccessError:
+		if v.ErrCode < 0 {
+			return nil, fmt.Errorf("pdu: negative DataAccessError code %d", v.ErrCode)
+		}
 		return berutil.EncodeTLV(TagDataAccessError, encodeUnsignedInt(uint64(v.ErrCode))), nil
 
 	default:
@@ -338,7 +345,9 @@ func encodeSignedInt(v int64) []byte {
 		return []byte{0x00}
 	}
 	buf := make([]byte, 8)
-	binary.BigEndian.PutUint64(buf, uint64(v))
+	for i := range buf {
+		buf[i] = byte((v >> (8 * uint(7-i))) & 0xff)
+	}
 	if v > 0 {
 		i := 0
 		for i < 7 && buf[i] == 0 && buf[i+1]&0x80 == 0 {
@@ -481,18 +490,24 @@ func decodeBitString(data []byte) ([]byte, int, error) {
 
 // UTCTime encoding: 4 bytes seconds + 3 bytes fraction + 1 byte quality
 
-func encodeUTCTime(t time.Time, quality uint8) []byte {
+// encodeUTCTime encodes t as UtcTime (ISO 9506-2 UtcTime, 8 octets): 32-bit
+// seconds since 1970-01-01, so instants outside 1970..2106 (including
+// the zero time.Time) are rejected instead of wrapped.
+func encodeUTCTime(t time.Time, quality uint8) ([]byte, error) {
+	unix := t.Unix()
+	if unix < 0 || unix > math.MaxUint32 {
+		return nil, fmt.Errorf("pdu: UTC time %s outside 1970-01-01..2106-02-07", t.UTC().Format(time.RFC3339))
+	}
 	buf := make([]byte, 8)
-	secs := uint32(t.Unix())
-	binary.BigEndian.PutUint32(buf[0:4], secs)
+	binary.BigEndian.PutUint32(buf[0:4], uint32(unix))
 	// Round to the nearest 2^-24 s; together with the rounding in
 	// decodeUTCTime this makes decode→encode lossless.
-	frac := min((uint64(t.Nanosecond())<<24+5e8)/1e9, 1<<24-1)
-	buf[4] = byte(frac >> 16)
-	buf[5] = byte(frac >> 8)
-	buf[6] = byte(frac)
+	frac := min((uint64(max(t.Nanosecond(), 0))<<24+5e8)/1e9, 1<<24-1)
+	buf[4] = byte((frac >> 16) & 0xff)
+	buf[5] = byte((frac >> 8) & 0xff)
+	buf[6] = byte(frac & 0xff)
 	buf[7] = quality
-	return buf
+	return buf, nil
 }
 
 func decodeUTCTime(data []byte) (time.Time, uint8, error) {
@@ -544,9 +559,11 @@ func encodeBinaryTimeChecked(msEpoch int64) ([]byte, error) {
 
 func encodeBinaryTime(msEpoch int64) []byte {
 	t := time.UnixMilli(msEpoch).UTC()
-	days := uint16(t.Sub(epoch1984).Hours() / 24)
+	// Callers range-check msEpoch (encodeBinaryTimeChecked); the masks
+	// keep the 16-bit day and 32-bit millisecond fields explicit.
+	days := uint16(int64(t.Sub(epoch1984).Hours()/24) & 0xffff)
 	midnight := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
-	msOfDay := uint32(t.Sub(midnight).Milliseconds())
+	msOfDay := uint32(t.Sub(midnight).Milliseconds() & 0xffffffff)
 
 	buf := make([]byte, 6)
 	binary.BigEndian.PutUint32(buf[0:4], msOfDay)
@@ -648,7 +665,7 @@ func encodeASN1Real(f float64) []byte {
 	var result []byte
 	result = append(result, info)
 	if info&0x03 == 0x03 {
-		result = append(result, byte(len(eBytes)))
+		result = append(result, byte(len(eBytes)&0xff)) // at most 8
 	}
 	result = append(result, eBytes...)
 	result = append(result, mBytes...)

@@ -89,7 +89,7 @@ func TestDecodeTypeSpec_NestingDepth(t *testing.T) {
 	// Build deeply nested arrays exceeding maxTypeSpecNestingDepth.
 	inner := berutil.EncodeTLV(0x83, nil) // boolean
 	ts := inner
-	for i := 0; i < maxTypeSpecNestingDepth+2; i++ {
+	for range maxTypeSpecNestingDepth + 2 {
 		num := berutil.EncodeTLV(0x81, []byte{1})
 		elem := berutil.EncodeTLV(0xa2, ts)
 		ts = berutil.EncodeTLV(0xa1, append(num, elem...))

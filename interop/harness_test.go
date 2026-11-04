@@ -101,14 +101,14 @@ type serverHandle struct {
 
 // clientResult is one JSON Line emitted by the MMS client adapter.
 type clientResult struct {
-	Operation string      `json:"operation"`
-	OK        bool        `json:"ok"`
-	Error     string      `json:"error,omitempty"`
-	Target    string      `json:"target,omitempty"`
-	Value     interface{} `json:"value,omitempty"`
-	Values    interface{} `json:"values,omitempty"`
-	Names     []string    `json:"names,omitempty"`
-	Type      string      `json:"type,omitempty"`
+	Operation string   `json:"operation"`
+	OK        bool     `json:"ok"`
+	Error     string   `json:"error,omitempty"`
+	Target    string   `json:"target,omitempty"`
+	Value     any      `json:"value,omitempty"`
+	Values    any      `json:"values,omitempty"`
+	Names     []string `json:"names,omitempty"`
+	Type      string   `json:"type,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -458,12 +458,12 @@ type fixtureJournal struct {
 }
 
 type fixtureJournalEntry struct {
-	EntryID        uint64      `json:"entryId"`
-	OccurrenceTime string      `json:"occurrenceTime"`
-	Tag            string      `json:"tag"`
-	Type           string      `json:"type"`
-	Value          interface{} `json:"value"`
-	ReasonCode     int         `json:"reasonCode"`
+	EntryID        uint64 `json:"entryId"`
+	OccurrenceTime string `json:"occurrenceTime"`
+	Tag            string `json:"tag"`
+	Type           string `json:"type"`
+	Value          any    `json:"value"`
+	ReasonCode     int    `json:"reasonCode"`
 }
 
 // entryIDBytes is the wire form of a fixture entryId: 8 little-endian bytes,
@@ -551,12 +551,12 @@ func (f *fixtureFile) file(t *testing.T, name string) ([]byte, fixtureStored) {
 }
 
 type fixtureVar struct {
-	Type        string      `json:"type"`
-	Size        int         `json:"size"`
-	Value       interface{} `json:"value"`
-	Writable    bool        `json:"writable"`
-	ElementType string      `json:"elementType"`
-	Count       int         `json:"count"`
+	Type        string `json:"type"`
+	Size        int    `json:"size"`
+	Value       any    `json:"value"`
+	Writable    bool   `json:"writable"`
+	ElementType string `json:"elementType"`
+	Count       int    `json:"count"`
 }
 
 type goMmsServer struct {
@@ -825,7 +825,7 @@ func parseTypeAndValue(v fixtureVar) (mms.TypeSpec, *mms.Value, error) {
 		if err != nil {
 			return mms.TypeSpec{}, nil, fmt.Errorf("array elementType: %w", err)
 		}
-		rawElems, ok := v.Value.([]interface{})
+		rawElems, ok := v.Value.([]any)
 		if !ok {
 			return mms.TypeSpec{}, nil, fmt.Errorf("array: expected JSON array, got %T", v.Value)
 		}
@@ -856,14 +856,14 @@ func parseTypeAndValue(v fixtureVar) (mms.TypeSpec, *mms.Value, error) {
 		return ts, mms.NewArray(elems), nil
 
 	case "structure":
-		rawComps, ok := v.Value.([]interface{})
+		rawComps, ok := v.Value.([]any)
 		if !ok {
 			return mms.TypeSpec{}, nil, fmt.Errorf("structure: expected JSON array, got %T", v.Value)
 		}
 		var tsElems []mms.TypeSpecElement
 		var vals []*mms.Value
 		for i, raw := range rawComps {
-			comp, ok := raw.(map[string]interface{})
+			comp, ok := raw.(map[string]any)
 			if !ok {
 				return mms.TypeSpec{}, nil, fmt.Errorf("structure[%d]: expected object, got %T", i, raw)
 			}
@@ -921,7 +921,7 @@ func parseScalarTypeSpec(typeName string, size int) (mms.TypeSpec, error) {
 	}
 }
 
-func makeScalarValue(typeName string, raw interface{}) (*mms.Value, error) {
+func makeScalarValue(typeName string, raw any) (*mms.Value, error) {
 	switch typeName {
 	case "boolean":
 		b, ok := raw.(bool)

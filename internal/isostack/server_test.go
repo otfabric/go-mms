@@ -28,7 +28,7 @@ func TestDecodeAssociateRequest(t *testing.T) {
 
 func TestEncodeAssociateResponse(t *testing.T) {
 	mmsPayload := []byte{0x04, 0x05}
-	resp := EncodeAssociateResponse(mmsPayload)
+	resp := mustEncode(t)(EncodeAssociateResponse(mmsPayload))
 	if len(resp) == 0 {
 		t.Fatal("empty")
 	}

@@ -4,8 +4,9 @@ package mms
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
-	"math/rand/v2"
 	"time"
 )
 
@@ -86,7 +87,17 @@ func (p RetryPolicy) jittered(d time.Duration) time.Duration {
 	if j == 0 || d <= 0 {
 		return d
 	}
-	return d - time.Duration(rand.Float64()*j*float64(d)) //nolint:gosec // jitter does not need a CSPRNG
+	return d - time.Duration(randFloat64()*j*float64(d))
+}
+
+// randFloat64 returns a uniform value in [0, 1) from crypto/rand, which
+// cannot fail since Go 1.24. Jitter does not need a CSPRNG, but a retry
+// is rare enough that the cost does not matter and no seedable source
+// can make peers back off in lockstep.
+func randFloat64() float64 {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return float64(binary.BigEndian.Uint64(b[:])>>11) / (1 << 53)
 }
 
 // IsRetryable is the default [RetryPolicy.Retryable] classification. It

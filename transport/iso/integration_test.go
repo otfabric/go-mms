@@ -298,10 +298,8 @@ func TestTCPConcurrentClients(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make(chan error, numClients)
 
-	for i := 0; i < numClients; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range numClients {
+		wg.Go(func() {
 			c, err := iso.Dial(ctx, ln.Addr().String())
 			if err != nil {
 				errs <- err
@@ -327,7 +325,7 @@ func TestTCPConcurrentClients(t *testing.T) {
 				errs <- err
 				return
 			}
-		}()
+		})
 	}
 
 	wg.Wait()

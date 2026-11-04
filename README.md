@@ -1,6 +1,6 @@
 # go-mms
 
-[![Go](https://img.shields.io/badge/Go-1.23%2B-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![Go Reference](https://pkg.go.dev/badge/github.com/otfabric/go-mms.svg)](https://pkg.go.dev/github.com/otfabric/go-mms)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![CI](https://github.com/otfabric/go-mms/actions/workflows/ci.yml/badge.svg)](https://github.com/otfabric/go-mms/actions/workflows/ci.yml)
@@ -63,7 +63,7 @@ All services are supported on both client and server unless noted in
 go get github.com/otfabric/go-mms
 ```
 
-Requires Go 1.23 or later.
+Requires Go 1.26 or later.
 
 ### Client
 
@@ -253,7 +253,7 @@ changes — a standards-correct wire fix can change observable behaviour while
 remaining API-compatible.
 
 - **Well-tested**: 1,000+ unit tests, 60+ end-to-end tests, 200+ negative
-  tests, race/concurrency and chaos tests, 57 fuzz targets, 21 benchmarks.
+  tests, race/concurrency and chaos tests, 60 fuzz targets, 21 benchmarks.
 - **Quality gates** (CI `quality` job; coverage and the short fuzz pass are
   also part of `make check`): ≥ 90% statement
   coverage per package and in total (`make coverage`), a fuzz pass over

@@ -759,16 +759,14 @@ func TestSendUnconfirmedConcurrentWithServe(t *testing.T) {
 	ctx := context.Background()
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for range n {
 			if err := c.SendUnconfirmed(ctx, []byte{0xa3, 0x00}); err != nil {
 				t.Error(err)
 				return
 			}
 		}
-	}()
+	})
 	if err := c.Serve(ctx); err != nil {
 		t.Fatalf("Serve: %v", err)
 	}

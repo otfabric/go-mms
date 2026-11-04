@@ -161,7 +161,7 @@ func TestReadJournalTimeRangeEndToEnd(t *testing.T) {
 	jp.addJournal("TestDomain", "EventLog")
 
 	base := time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		jp.addEntry("TestDomain", "EventLog", JournalEntry{
 			EntryID:        []byte{byte(i + 1)},
 			OccurrenceTime: base.Add(time.Duration(i) * time.Minute),
@@ -217,7 +217,7 @@ func TestReadJournalStartAfterEndToEnd(t *testing.T) {
 	jp.addJournal("TestDomain", "EventLog")
 
 	base := time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		jp.addEntry("TestDomain", "EventLog", JournalEntry{
 			EntryID:        []byte{byte(i + 1)},
 			OccurrenceTime: base.Add(time.Duration(i) * time.Minute),
@@ -382,7 +382,7 @@ func TestReadJournalPaginationEndToEnd(t *testing.T) {
 
 	base := time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC)
 	total := 5
-	for i := 0; i < total; i++ {
+	for i := range total {
 		jp.addEntry("TestDomain", "BigLog", JournalEntry{
 			EntryID:        []byte{byte(i + 1)},
 			OccurrenceTime: base.Add(time.Duration(i) * time.Minute),

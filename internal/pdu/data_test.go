@@ -513,7 +513,7 @@ func TestUnmarshalAccessResults_TooMany(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	var data []byte
-	for i := 0; i < maxAccessResults+1; i++ {
+	for range maxAccessResults + 1 {
 		data = append(data, single...)
 	}
 	_, err = UnmarshalAccessResults(data)
@@ -677,14 +677,48 @@ func TestUTCTimeFractionRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if out := encodeUTCTime(tm, q); string(out) != string(in) {
+		if out, err := encodeUTCTime(tm, q); err != nil || string(out) != string(in) {
 			t.Fatalf("fraction %#x: %x -> %v -> %x", frac, in, tm, out)
 		}
 	}
 	// The last nanosecond of a second must not overflow the fraction.
-	out := encodeUTCTime(time.Unix(0, 999_999_999), 0)
+	out, err := encodeUTCTime(time.Unix(0, 999_999_999), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if out[4] != 0xff || out[5] != 0xff || out[6] != 0xff {
 		t.Fatalf("999999999ns encodes to %x", out[4:7])
+	}
+}
+
+// UtcTime carries 32-bit seconds since 1970: instants outside that range,
+// including the zero time.Time, must be rejected, not wrapped.
+func TestEncodeUTCTime_RangeLimits(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		t    time.Time
+		ok   bool
+	}{
+		{"epoch", time.Unix(0, 0), true},
+		{"last second", time.Unix(math.MaxUint32, 0), true},
+		{"before epoch", time.Unix(-1, 0), false},
+		{"after 2106", time.Unix(math.MaxUint32+1, 0), false},
+		{"zero time", time.Time{}, false},
+	} {
+		_, err := encodeUTCTime(tc.t, 0)
+		if (err == nil) != tc.ok {
+			t.Errorf("%s: err=%v, want ok=%v", tc.name, err, tc.ok)
+		}
+		_, err = MarshalData(&DataValue{Tag: TagDataUTCTime, Time: tc.t})
+		if (err == nil) != tc.ok {
+			t.Errorf("%s: MarshalData err=%v, want ok=%v", tc.name, err, tc.ok)
+		}
+	}
+}
+
+func TestMarshalData_NegativeDataAccessError(t *testing.T) {
+	if _, err := MarshalData(&DataValue{Tag: TagDataAccessError, ErrCode: -1}); err == nil {
+		t.Fatal("negative DataAccessError code encoded")
 	}
 }
 

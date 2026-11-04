@@ -13,7 +13,7 @@ func TestEncodeDecodeConnect(t *testing.T) {
 		CalledSelector:  []byte{0x00, 0x01},
 	}
 	userData := []byte{0xAA, 0xBB, 0xCC, 0xDD}
-	encoded := EncodeConnect(params, userData)
+	encoded := mustEncode(t)(EncodeConnect(params, userData))
 
 	if encoded[0] != SIConnect {
 		t.Fatalf("SI byte = 0x%02x, want 0x%02x", encoded[0], SIConnect)
@@ -42,7 +42,7 @@ func TestEncodeDecodeAccept(t *testing.T) {
 		CalledSelector: []byte{0x00, 0x01},
 	}
 	userData := []byte{0x01, 0x02, 0x03}
-	encoded := EncodeAccept(params, userData)
+	encoded := mustEncode(t)(EncodeAccept(params, userData))
 
 	if encoded[0] != SIAccept {
 		t.Fatalf("SI byte = 0x%02x, want 0x%02x", encoded[0], SIAccept)
@@ -82,7 +82,7 @@ func TestEncodeDecodeData(t *testing.T) {
 
 func TestEncodeDecodeFinish(t *testing.T) {
 	userData := []byte{0x01, 0x02}
-	encoded := EncodeFinish(userData)
+	encoded := mustEncode(t)(EncodeFinish(userData))
 
 	if encoded[0] != SIFinish {
 		t.Fatalf("SI byte = 0x%02x, want 0x%02x", encoded[0], SIFinish)
@@ -102,7 +102,7 @@ func TestEncodeDecodeFinish(t *testing.T) {
 
 func TestEncodeDecodeDisconnect(t *testing.T) {
 	userData := []byte{0xFF}
-	encoded := EncodeDisconnect(userData)
+	encoded := mustEncode(t)(EncodeDisconnect(userData))
 
 	if encoded[0] != SIDisconnect {
 		t.Fatalf("SI byte = 0x%02x, want 0x%02x", encoded[0], SIDisconnect)
@@ -122,7 +122,7 @@ func TestEncodeDecodeDisconnect(t *testing.T) {
 
 func TestEncodeDecodeAbort(t *testing.T) {
 	userData := []byte{0xAB, 0xCD}
-	encoded := EncodeAbort(userData)
+	encoded := mustEncode(t)(EncodeAbort(userData))
 
 	if encoded[0] != SIAbort {
 		t.Fatalf("SI byte = 0x%02x, want 0x%02x", encoded[0], SIAbort)
@@ -145,7 +145,7 @@ func TestConnectWireFormat(t *testing.T) {
 		CallingSelector: []byte{0x00, 0x01},
 		CalledSelector:  []byte{0x00, 0x01},
 	}
-	encoded := EncodeConnect(params, []byte{0xAA, 0xBB, 0xCC, 0xDD})
+	encoded := mustEncode(t)(EncodeConnect(params, []byte{0xAA, 0xBB, 0xCC, 0xDD}))
 
 	// Verify: SI=0x0d, then PGI 5 (conn/accept item) is present
 	if encoded[0] != 0x0d {
@@ -207,7 +207,7 @@ func TestSpduTypeString(t *testing.T) {
 func TestConnectNoSelectors(t *testing.T) {
 	params := ConnectParams{}
 	userData := []byte{0x01}
-	encoded := EncodeConnect(params, userData)
+	encoded := mustEncode(t)(EncodeConnect(params, userData))
 
 	parsed, err := Parse(encoded)
 	if err != nil {
@@ -253,7 +253,7 @@ func TestParseRefuseTruncated(t *testing.T) {
 }
 
 func TestConnectTrailingBytesInHeader(t *testing.T) {
-	encoded := EncodeConnect(ConnectParams{}, []byte{0x01})
+	encoded := mustEncode(t)(EncodeConnect(ConnectParams{}, []byte{0x01}))
 	// Extend LI by 1 and append a trailing byte inside the header area.
 	// The parser should detect that the final byte doesn't form a
 	// complete PGI (tag+length), breaking out of the loop and hitting
@@ -269,7 +269,7 @@ func TestConnectTrailingBytesInHeader(t *testing.T) {
 }
 
 func TestAcceptTrailingBytesInHeader(t *testing.T) {
-	encoded := EncodeAccept(ConnectParams{}, []byte{0x01})
+	encoded := mustEncode(t)(EncodeAccept(ConnectParams{}, []byte{0x01}))
 	modified := make([]byte, len(encoded)+1)
 	copy(modified, encoded)
 	modified[1]++
@@ -281,7 +281,7 @@ func TestAcceptTrailingBytesInHeader(t *testing.T) {
 }
 
 func TestFinishTrailingBytes(t *testing.T) {
-	encoded := EncodeFinish([]byte{0x01})
+	encoded := mustEncode(t)(EncodeFinish([]byte{0x01}))
 	modified := make([]byte, len(encoded)+1)
 	copy(modified, encoded)
 	modified[1]++
@@ -304,17 +304,13 @@ func TestParseRefuseEmpty(t *testing.T) {
 }
 
 func TestPGILengthHelpers(t *testing.T) {
-	if got := pgiLength(0); got != 2 {
-		t.Fatalf("pgiLength(0)=%d", got)
-	}
-	if got := pgiLength(0xfe); got != 2+0xfe {
-		t.Fatalf("pgiLength(0xfe)=%d", got)
-	}
-	if got := pgiLength(0xff); got != 4+0xff {
-		t.Fatalf("pgiLength(0xff)=%d want extended", got)
-	}
-	if got := pgiLength(300); got != 4+300 {
-		t.Fatalf("pgiLength(300)=%d", got)
+	for _, tc := range []struct{ l, want int }{{0, 1}, {0xfe, 1}, {0xff, 3}, {300, 3}, {maxLI, 3}} {
+		if got := liSize(tc.l); got != tc.want {
+			t.Fatalf("liSize(%d)=%d want %d", tc.l, got, tc.want)
+		}
+		if got := len(appendLI(nil, tc.l)); got != tc.want {
+			t.Fatalf("len(appendLI(%d))=%d want %d", tc.l, got, tc.want)
+		}
 	}
 
 	short := appendPGI(nil, 0x05, []byte{1, 2, 3})

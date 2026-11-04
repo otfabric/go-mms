@@ -573,8 +573,7 @@ func TestClient_DeleteAllNVLs_UnsupportedByPeer(t *testing.T) {
 		"DeleteAllVMDNVLs":    func() (*mms.DeleteNamedVariableListResult, error) { return c.DeleteAllVMDNVLs(ctx) },
 	} {
 		res, err := call()
-		var se *mms.ServiceError
-		if !errors.As(err, &se) {
+		if _, ok := errors.AsType[*mms.ServiceError](err); !ok {
 			t.Errorf("%s = %+v, %v; want a ServiceError (peer fixed? update knownLimitations)", name, res, err)
 		}
 	}
@@ -882,8 +881,7 @@ func TestClient_FileOpen_NonExistent(t *testing.T) {
 	ctx, c := session(t)
 
 	_, err := c.FileOpen(ctx, "NO-SUCH.FILE")
-	var se *mms.ServiceError
-	if !errors.As(err, &se) {
+	if _, ok := errors.AsType[*mms.ServiceError](err); !ok {
 		t.Fatalf("FileOpen(missing) error = %v, want *mms.ServiceError", err)
 	}
 	t.Logf("FileOpen(missing): %v", err)
@@ -998,7 +996,7 @@ func reasonCodeBits(v *mms.Value) (int, int, bool) {
 		return 0, 0, false
 	}
 	code := 0
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if bits[i/8]&(0x80>>(i%8)) != 0 {
 			code |= 1 << i
 		}
@@ -1041,8 +1039,7 @@ func TestClient_ReadJournal_Unknown(t *testing.T) {
 	ctx, c := session(t)
 
 	_, err := c.ReadJournalTimeRange(ctx, "interop", "nolog", time.Date(1984, 1, 1, 0, 0, 0, 0, time.UTC), time.Now())
-	var se *mms.ServiceError
-	if !errors.As(err, &se) {
+	if _, ok := errors.AsType[*mms.ServiceError](err); !ok {
 		t.Fatalf("ReadJournal(unknown) error = %v, want *mms.ServiceError", err)
 	}
 }

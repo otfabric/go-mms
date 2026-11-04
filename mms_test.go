@@ -176,7 +176,11 @@ func (s *mockServer) handleAssociation(ctx context.Context) {
 	// Build Session ACCEPT → Presentation CPA → ACSE AARE → MMS
 	aare := acse.EncodeAARE(acse.ResultAccepted, initRespBytes)
 	cpa := presentation.EncodeCPA(nil, aare)
-	accept := session.EncodeAccept(session.ConnectParams{}, cpa)
+	accept, err := session.EncodeAccept(session.ConnectParams{}, cpa)
+	if err != nil {
+		s.t.Errorf("server: encode ACCEPT: %v", err)
+		return
+	}
 
 	s.transport.sendToClient(accept)
 }
@@ -1090,8 +1094,7 @@ func TestReadResultCountMismatch(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected protocol error for result count mismatch")
 	}
-	var pe *ProtocolError
-	if !errors.As(err, &pe) {
+	if _, ok := errors.AsType[*ProtocolError](err); !ok {
 		t.Fatalf("expected ProtocolError, got %T: %v", err, err)
 	}
 
@@ -1817,8 +1820,7 @@ func TestGetNameListAllStalledPagination(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for stalled pagination")
 	}
-	var pe *ProtocolError
-	if !errors.As(err, &pe) {
+	if _, ok := errors.AsType[*ProtocolError](err); !ok {
 		t.Fatalf("expected ProtocolError, got %T: %v", err, err)
 	}
 

@@ -17,7 +17,10 @@
 // This package is internal — it is not part of the public API contract.
 package berutil
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 // EncodeTLV returns a BER TLV (tag + length + content) as a new byte slice.
 func EncodeTLV(tag byte, content []byte) []byte {
@@ -33,33 +36,36 @@ func AppendTLV(buf []byte, tag byte, content []byte) []byte {
 	return buf
 }
 
-// AppendLength appends a BER definite-form length to buf.
+// AppendLength appends a BER definite-form length to buf (X.690 §8.1.3).
+// Short form below 128; otherwise the minimal long form. A negative
+// length is a caller bug and is encoded as zero.
 func AppendLength(buf []byte, l int) []byte {
-	if l < 128 {
-		return append(buf, byte(l))
+	u := uint64(max(l, 0))
+	if u < 0x80 {
+		return append(buf, byte(u&0x7f))
 	}
-	if l < 256 {
-		return append(buf, 0x81, byte(l))
+	n := 0
+	for v := u; v > 0; v >>= 8 {
+		n++
 	}
-	if l < 65536 {
-		return append(buf, 0x82, byte(l>>8), byte(l))
+	buf = append(buf, 0x80|byte(n&0x7f))
+	for i := n - 1; i >= 0; i-- {
+		buf = append(buf, byte((u>>(8*uint(i)))&0xff))
 	}
-	return append(buf, 0x83, byte(l>>16), byte(l>>8), byte(l))
+	return buf
 }
 
 // LengthSize returns the number of bytes needed to encode the given
 // length in BER definite form.
 func LengthSize(l int) int {
-	if l < 128 {
+	if l < 0x80 {
 		return 1
 	}
-	if l < 256 {
-		return 2
+	n := 1
+	for v := l; v > 0; v >>= 8 {
+		n++
 	}
-	if l < 65536 {
-		return 3
-	}
-	return 4
+	return n
 }
 
 // TLVSize returns the total encoded size of a TLV with the given
@@ -124,33 +130,25 @@ func DecodeLength(data []byte) (length int, consumed int, err error) {
 		return 0, 0, fmt.Errorf("truncated multi-byte length")
 	}
 	var l int
-	for i := 0; i < numBytes; i++ {
+	for i := range numBytes {
 		l = (l << 8) | int(data[1+i])
 	}
 	return l, 1 + numBytes, nil
 }
 
 // EncodeInt encodes a signed integer as BER INTEGER content bytes
-// (no tag/length wrapper). Produces the minimal two's complement encoding.
+// (no tag/length wrapper). Produces the minimal two's complement encoding
+// (X.690 §8.3.2) for the full int range.
 func EncodeInt(v int) []byte {
-	if v == 0 {
-		return []byte{0}
+	var buf [8]byte
+	for i := range buf {
+		buf[i] = byte((v >> (8 * uint(7-i))) & 0xff)
 	}
-	if v >= -128 && v <= 127 {
-		return []byte{byte(v)}
+	b := buf[:]
+	for len(b) > 1 && ((b[0] == 0x00 && b[1]&0x80 == 0) || (b[0] == 0xff && b[1]&0x80 != 0)) {
+		b = b[1:]
 	}
-	if v >= -32768 && v <= 32767 {
-		return []byte{byte(v >> 8), byte(v)}
-	}
-	buf := make([]byte, 4)
-	buf[0] = byte(v >> 24)
-	buf[1] = byte(v >> 16)
-	buf[2] = byte(v >> 8)
-	buf[3] = byte(v)
-	for len(buf) > 1 && ((buf[0] == 0x00 && buf[1]&0x80 == 0) || (buf[0] == 0xff && buf[1]&0x80 != 0)) {
-		buf = buf[1:]
-	}
-	return buf
+	return append([]byte(nil), b...)
 }
 
 // EncodeUint32 encodes an unsigned 32-bit integer as BER INTEGER content
@@ -161,7 +159,7 @@ func EncodeUint32(v uint32) []byte {
 	}
 	buf := make([]byte, 0, 5)
 	for shift := 24; shift >= 0; shift -= 8 {
-		b := byte(v >> uint(shift))
+		b := byte((v >> uint(shift)) & 0xff)
 		if len(buf) > 0 || b != 0 {
 			buf = append(buf, b)
 		}
@@ -189,6 +187,19 @@ func DecodeInteger(data []byte) (int, error) {
 		val = (val << 8) | int(b)
 	}
 	return val, nil
+}
+
+// DecodeInt32 decodes BER INTEGER content bytes into an int32, rejecting
+// values outside the int32 range.
+func DecodeInt32(data []byte) (int32, error) {
+	v, err := DecodeInteger(data)
+	if err != nil {
+		return 0, err
+	}
+	if v < math.MinInt32 || v > math.MaxInt32 {
+		return 0, fmt.Errorf("INTEGER %d out of int32 range", v)
+	}
+	return int32(v), nil
 }
 
 // EncodeObjectIdentifier encodes an OID (slice of int arcs) to BER content bytes.
@@ -250,7 +261,7 @@ func DecodeObjectIdentifier(data []byte) ([]int, error) {
 
 func appendBase128(buf []byte, v int) []byte {
 	if v < 0x80 {
-		return append(buf, byte(v))
+		return append(buf, byte(v&0x7f))
 	}
 	var tmp [10]byte
 	i := len(tmp) - 1

@@ -70,8 +70,7 @@ const (
 // the wire DataAccessError code: the code of a wrapped [*DataAccessError]
 // when it is valid, temporarily-unavailable otherwise.
 func callbackErrCode(err error) int {
-	var dae *DataAccessError
-	if errors.As(err, &dae) {
+	if dae, ok := errors.AsType[*DataAccessError](err); ok {
 		if wire, encErr := encodeDataAccessError(dae.Code); encErr == nil {
 			return wire
 		}
@@ -450,12 +449,10 @@ func toWireServiceError(err error) error {
 	if err == nil {
 		return nil
 	}
-	var wire *serverconn.ServiceError
-	if errors.As(err, &wire) {
+	if _, ok := errors.AsType[*serverconn.ServiceError](err); ok {
 		return err
 	}
-	var se *ServiceError
-	if errors.As(err, &se) {
+	if se, ok := errors.AsType[*ServiceError](err); ok {
 		return &serverconn.ServiceError{ErrorClass: int(se.Class), ErrorCode: se.Code}
 	}
 	return err

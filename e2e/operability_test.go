@@ -409,7 +409,6 @@ func TestServer_CallbackErrors(t *testing.T) {
 		"bogus":   &mms.DataAccessError{Code: mms.DataAccessErrorCode(99)},
 		"plain":   errors.New("boom"),
 	} {
-		rerr := rerr
 		if err := srv.RegisterVariable(mms.Variable{
 			Name: domName(name), TypeSpec: i32,
 			Read:  func(context.Context) (*mms.Value, error) { return nil, rerr },
