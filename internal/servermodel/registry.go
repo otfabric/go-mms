@@ -93,8 +93,7 @@ func (r *Registry) RegisterDomain(name string) error {
 		return fmt.Errorf("servermodel: domain %q already registered", name)
 	}
 	r.domains[name] = true
-	r.domainOrder = append(r.domainOrder, name)
-	sort.Strings(r.domainOrder)
+	r.domainOrder = InsertSorted(r.domainOrder, name)
 	return nil
 }
 
@@ -135,11 +134,9 @@ func (r *Registry) RegisterVariable(entry *VarEntry) error {
 
 	switch entry.Scope {
 	case 0: // VMD
-		r.vmdVarOrder = append(r.vmdVarOrder, entry.ItemID)
-		sort.Strings(r.vmdVarOrder)
+		r.vmdVarOrder = InsertSorted(r.vmdVarOrder, entry.ItemID)
 	case 1: // Domain
-		r.varOrder[entry.Domain] = append(r.varOrder[entry.Domain], entry.ItemID)
-		sort.Strings(r.varOrder[entry.Domain])
+		r.varOrder[entry.Domain] = InsertSorted(r.varOrder[entry.Domain], entry.ItemID)
 	}
 	return nil
 }
@@ -210,11 +207,9 @@ func (r *Registry) DefineNVL(entry *NVLEntry) error {
 
 	switch entry.Scope {
 	case 0: // VMD
-		r.vmdNVLOrder = append(r.vmdNVLOrder, entry.ItemID)
-		sort.Strings(r.vmdNVLOrder)
+		r.vmdNVLOrder = InsertSorted(r.vmdNVLOrder, entry.ItemID)
 	case 1: // Domain
-		r.nvlOrder[entry.Domain] = append(r.nvlOrder[entry.Domain], entry.ItemID)
-		sort.Strings(r.nvlOrder[entry.Domain])
+		r.nvlOrder[entry.Domain] = InsertSorted(r.nvlOrder[entry.Domain], entry.ItemID)
 	}
 	return nil
 }

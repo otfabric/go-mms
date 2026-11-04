@@ -1,5 +1,16 @@
 # go-mms Releases
 
+## v1.3.2
+
+**Date:** 2026-11-04
+**Previous release:** v1.3.1
+
+### Fixed
+
+- Registering a named variable, named variable list or domain re-sorted the whole name list each time, so building a server model of n variables cost O(n² log n): a 30 000-variable domain took 1.9 s, and a large IEC 61850 IED model several seconds (tens of seconds under the race detector). Names are now inserted at their sorted position (30 000 variables: 0.08 s). GetNameList order is unchanged.
+
+---
+
 ## v1.3.1
 
 **Date:** 2026-11-04
