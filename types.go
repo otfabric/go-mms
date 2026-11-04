@@ -556,7 +556,7 @@ func (ts *TypeSpec) DefaultValue() *Value {
 	case ValueTypeMmsString:
 		return NewMmsString("")
 	case ValueTypeUTCTime:
-		return NewUTCTime(time.Time{})
+		return NewUTCTime(time.Unix(0, 0).UTC())
 	case ValueTypeBinaryTime:
 		return NewBinaryTime(0)
 	case ValueTypeGeneralizedTime:
@@ -564,7 +564,7 @@ func (ts *TypeSpec) DefaultValue() *Value {
 	case ValueTypeBCD:
 		return NewBCD(0)
 	case ValueTypeObjectIdentifier:
-		return NewObjectIdentifier(nil)
+		return NewObjectIdentifier([]int{0, 0}) // the shortest valid OID; an empty one cannot be encoded
 	case ValueTypeReal:
 		return NewReal(0)
 	case ValueTypeBooleanArray:

@@ -5,6 +5,8 @@ package mms
 import (
 	"testing"
 	"time"
+
+	"github.com/otfabric/go-mms/internal/pdu"
 )
 
 func TestObjectClassString(t *testing.T) {
@@ -724,5 +726,41 @@ func TestSelectorsCreateCorrectFields(t *testing.T) {
 	rng := SelectRange(2, 4)
 	if rng.IndexRange == nil || rng.IndexRange.Start != 2 || rng.IndexRange.Count != 4 {
 		t.Error("SelectRange(2,4) should set IndexRange correctly")
+	}
+}
+
+// Every default value must be encodable: a server answers a read of an
+// unwritten variable with it. A structure holding a UtcTime defaulted to
+// the zero time.Time, which v1.3.0 refused to encode, so such reads
+// failed with object-access-unsupported.
+func TestDefaultValueEncodes(t *testing.T) {
+	scalar := []ValueType{
+		ValueTypeBoolean, ValueTypeInteger, ValueTypeUnsigned, ValueTypeFloat,
+		ValueTypeBitString, ValueTypeOctetString, ValueTypeVisibleString,
+		ValueTypeMmsString, ValueTypeUTCTime, ValueTypeBinaryTime,
+		ValueTypeGeneralizedTime, ValueTypeBCD, ValueTypeObjectIdentifier,
+		ValueTypeReal, ValueTypeBooleanArray,
+	}
+	var elems []TypeSpecElement
+	for _, vt := range scalar {
+		ts := TypeSpec{Type: vt}
+		if _, err := valueToDataValue(ts.DefaultValue()); err != nil {
+			t.Errorf("%s: %v", vt, err)
+		}
+		elems = append(elems, TypeSpecElement{Name: vt.String(), Type: ts})
+	}
+	st := TypeSpec{Type: ValueTypeStructure, Elements: elems}
+	arr := TypeSpec{Type: ValueTypeArray, Element: &st, Count: 2}
+	dv, err := valueToDataValue(arr.DefaultValue())
+	if err != nil {
+		t.Fatalf("array of structures: %v", err)
+	}
+	if _, err := pdu.MarshalData(dv); err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	ut := TypeSpec{Type: ValueTypeUTCTime}
+	got, _ := ut.DefaultValue().UTCTime()
+	if !got.Equal(time.Unix(0, 0)) {
+		t.Errorf("UtcTime default = %v, want the epoch", got)
 	}
 }
