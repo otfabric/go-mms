@@ -19,6 +19,7 @@
 
 ### Changed
 
+- Interop CI pins the iec61850-interop v1.1.1 images (same peer stack commits and `mms-v2` fixture as v1.0.1); shared workflows at v3.3.1.
 - Retry jitter is drawn from crypto/rand. Request writes that outlive the caller's context keep its values (`context.WithoutCancel`).
 - Tests: end-to-end long-password associations, a chaos test of large associations under fragmentation, invoke-ID range tests, and three new fuzz targets (BER integer and length round trips, session SPDU round trip); 60 fuzz targets in all.
 
