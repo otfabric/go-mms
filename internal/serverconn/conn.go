@@ -134,7 +134,10 @@ func (c *Conn) AcceptAssociation(ctx context.Context) error {
 		return fmt.Errorf("serverconn: marshal initiate response: %w", err)
 	}
 
-	resp := isostack.EncodeAssociateResponse(initRespBytes)
+	resp, err := isostack.EncodeAssociateResponse(initRespBytes)
+	if err != nil {
+		return fmt.Errorf("serverconn: %w", err)
+	}
 	if err := c.transport.Send(ctx, resp); err != nil {
 		return fmt.Errorf("serverconn: send association response: %w", err)
 	}
@@ -307,7 +310,7 @@ func (c *Conn) SendUnconfirmed(ctx context.Context, mmsPdu []byte) error {
 			done <- nil
 			return
 		}
-		done <- c.transport.Send(context.Background(), isostack.EncodeDataRequest(mmsPdu))
+		done <- c.transport.Send(context.WithoutCancel(ctx), isostack.EncodeDataRequest(mmsPdu))
 	}()
 	select {
 	case err := <-done:

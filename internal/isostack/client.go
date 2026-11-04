@@ -14,6 +14,7 @@ package isostack
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/otfabric/go-mms/internal/acse"
 	"github.com/otfabric/go-mms/internal/presentation"
@@ -52,11 +53,13 @@ func EncodeAssociateRequest(p Params, mmsPayload []byte) ([]byte, error) {
 		CalledSelector:  p.CalledPresentationSelector,
 	}, aarq)
 
-	cn := session.EncodeConnect(session.ConnectParams{
+	cn, err := session.EncodeConnect(session.ConnectParams{
 		CallingSelector: p.CallingSessionSelector,
 		CalledSelector:  p.CalledSessionSelector,
 	}, cp)
-
+	if err != nil {
+		return nil, fmt.Errorf("isostack: encode CONNECT: %w", err)
+	}
 	return cn, nil
 }
 
@@ -143,15 +146,27 @@ func DecodeDataResponse(data []byte) ([]byte, error) {
 // EncodeReleaseRequest builds a release request: Session FINISH wrapping
 // Presentation user-data (ACSE context) wrapping ACSE RLRQ.
 func EncodeReleaseRequest() []byte {
-	rlrq := acse.EncodeRLRQ()
-	pres := presentation.EncodeUserData(presentation.ContextIDACSE, rlrq)
-	return session.EncodeFinish(pres)
+	return slices.Clone(releaseRequest)
 }
+
+var releaseRequest = mustSPDU(session.EncodeFinish(
+	presentation.EncodeUserData(presentation.ContextIDACSE, acse.EncodeRLRQ())))
 
 // EncodeAbort builds an abort: Session ABORT wrapping Presentation
 // user-data (ACSE context) wrapping ACSE ABRT.
 func EncodeAbort() []byte {
-	abrt := acse.EncodeABRT(0)
-	pres := presentation.EncodeUserData(presentation.ContextIDACSE, abrt)
-	return session.EncodeAbort(pres)
+	return slices.Clone(abortRequest)
+}
+
+var abortRequest = mustSPDU(session.EncodeAbort(
+	presentation.EncodeUserData(presentation.ContextIDACSE, acse.EncodeABRT(0))))
+
+// mustSPDU is for SPDUs built from constant content at package
+// initialisation: an encoding error there is a programming error that
+// every test run catches.
+func mustSPDU(b []byte, err error) []byte {
+	if err != nil {
+		panic(err)
+	}
+	return b
 }

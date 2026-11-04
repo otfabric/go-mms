@@ -32,16 +32,16 @@ func chaosDuration() time.Duration {
 	return 500 * time.Millisecond
 }
 
-func chaosSeed(t *testing.T) int64 {
-	seed := int64(1)
+func chaosSeed(t *testing.T) uint64 {
+	seed := uint64(1)
 	if s := os.Getenv("MMS_CHAOS_SEED"); s != "" {
-		v, err := strconv.ParseInt(s, 10, 64)
+		v, err := strconv.ParseUint(s, 10, 64)
 		if err != nil {
 			t.Fatalf("MMS_CHAOS_SEED: %v", err)
 		}
 		seed = v
 		if seed == 0 {
-			seed = time.Now().UnixNano()
+			seed = uint64(time.Now().UnixNano())
 		}
 	}
 	t.Logf("chaos seed %d (replay with MMS_CHAOS_SEED=%d)", seed, seed)

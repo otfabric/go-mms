@@ -4,6 +4,7 @@ package pdu
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/otfabric/go-mms/internal/berutil"
 )
@@ -66,9 +67,13 @@ func encodeTerminalSelector(sel AccessSelectorWire) ([]byte, error) {
 	case sel.Component != "":
 		return berutil.EncodeTLV(tagSSComponent, []byte(sel.Component)), nil
 	case sel.HasIndex:
-		return berutil.EncodeTLV(tagSSIndex, berutil.EncodeUint32(uint32(sel.Index))), nil
+		idx, err := encodeUnsigned32(sel.Index, "index")
+		if err != nil {
+			return nil, err
+		}
+		return berutil.EncodeTLV(tagSSIndex, idx), nil
 	case sel.IndexRange != nil:
-		return encodeIndexRange(tagSSIndexRange, sel.IndexRange), nil
+		return encodeIndexRange(tagSSIndexRange, sel.IndexRange)
 	default:
 		return nil, fmt.Errorf("empty access selector")
 	}
@@ -83,9 +88,16 @@ func encodeNestedSelector(sel AccessSelectorWire, rest []AccessSelectorWire) ([]
 	case sel.Component != "":
 		accessSel = berutil.EncodeTLV(tagSAComponent, []byte(sel.Component))
 	case sel.HasIndex:
-		accessSel = berutil.EncodeTLV(tagSAIndex, berutil.EncodeUint32(uint32(sel.Index)))
+		idx, err := encodeUnsigned32(sel.Index, "index")
+		if err != nil {
+			return nil, err
+		}
+		accessSel = berutil.EncodeTLV(tagSAIndex, idx)
 	case sel.IndexRange != nil:
-		accessSel = encodeIndexRange(tagSAIndexRange, sel.IndexRange)
+		var err error
+		if accessSel, err = encodeIndexRange(tagSAIndexRange, sel.IndexRange); err != nil {
+			return nil, err
+		}
 	default:
 		return nil, fmt.Errorf("empty access selector")
 	}
@@ -103,13 +115,21 @@ func encodeNestedSelector(sel AccessSelectorWire, rest []AccessSelectorWire) ([]
 	return berutil.EncodeTLV(tagSelectAltAccess, content), nil
 }
 
-func encodeIndexRange(tag byte, ir *IndexRangeWire) []byte {
-	low := berutil.EncodeTLV(0x80, berutil.EncodeUint32(uint32(ir.LowIndex)))
-	num := berutil.EncodeTLV(0x81, berutil.EncodeUint32(uint32(ir.NumberOfElements)))
+func encodeIndexRange(tag byte, ir *IndexRangeWire) ([]byte, error) {
+	lowV, err := encodeUnsigned32(ir.LowIndex, "lowIndex")
+	if err != nil {
+		return nil, err
+	}
+	numV, err := encodeUnsigned32(ir.NumberOfElements, "numberOfElements")
+	if err != nil {
+		return nil, err
+	}
+	low := berutil.EncodeTLV(0x80, lowV)
+	num := berutil.EncodeTLV(0x81, numV)
 	content := make([]byte, 0, len(low)+len(num))
 	content = append(content, low...)
 	content = append(content, num...)
-	return berutil.EncodeTLV(tag, content)
+	return berutil.EncodeTLV(tag, content), nil
 }
 
 // decodeAlternateAccess decodes an AlternateAccess SEQUENCE OF from
@@ -270,4 +290,13 @@ func decodeIndexRange(data []byte) (*IndexRangeWire, error) {
 	}
 
 	return &IndexRangeWire{LowIndex: low, NumberOfElements: num}, nil
+}
+
+// encodeUnsigned32 encodes v as Unsigned32 content (ISO 9506-2 Unsigned32).
+// A negative or wider value is an error instead of a wrapped index.
+func encodeUnsigned32(v int, field string) ([]byte, error) {
+	if v < 0 || int64(v) > math.MaxUint32 {
+		return nil, fmt.Errorf("alternate access %s %d out of Unsigned32 range", field, v)
+	}
+	return berutil.EncodeUint32(uint32(v)), nil
 }

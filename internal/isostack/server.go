@@ -4,6 +4,7 @@ package isostack
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/otfabric/go-mms/internal/acse"
 	"github.com/otfabric/go-mms/internal/presentation"
@@ -53,18 +54,23 @@ func DecodeAssociateRequest(data []byte) (*AssociateRequest, error) {
 
 // EncodeAssociateResponse builds the server's association response:
 // Session ACCEPT → Presentation CPA → ACSE AARE with the given MMS payload.
-func EncodeAssociateResponse(mmsPayload []byte) []byte {
+func EncodeAssociateResponse(mmsPayload []byte) ([]byte, error) {
 	aare := acse.EncodeAARE(acse.ResultAccepted, mmsPayload)
 	cpa := presentation.EncodeCPA(nil, aare)
-	return session.EncodeAccept(session.ConnectParams{}, cpa)
+	b, err := session.EncodeAccept(session.ConnectParams{}, cpa)
+	if err != nil {
+		return nil, fmt.Errorf("isostack: encode ACCEPT: %w", err)
+	}
+	return b, nil
 }
 
 // EncodeAssociateReject builds a rejection response for the association.
 func EncodeAssociateReject() []byte {
-	aare := acse.EncodeAARE(acse.ResultRejectedPerm, nil)
-	cpa := presentation.EncodeCPA(nil, aare)
-	return session.EncodeAccept(session.ConnectParams{}, cpa)
+	return slices.Clone(associateReject)
 }
+
+var associateReject = mustSPDU(session.EncodeAccept(session.ConnectParams{},
+	presentation.EncodeCPA(nil, acse.EncodeAARE(acse.ResultRejectedPerm, nil))))
 
 // DecodeReleaseRequest parses a FINISH SPDU containing RLRQ.
 func DecodeReleaseRequest(data []byte) error {
@@ -80,7 +86,8 @@ func DecodeReleaseRequest(data []byte) error {
 
 // EncodeReleaseResponse builds a DISCONNECT SPDU with RLRE.
 func EncodeReleaseResponse() []byte {
-	rlre := acse.EncodeRLRE()
-	userData := presentation.EncodeUserData(presentation.ContextIDACSE, rlre)
-	return session.EncodeDisconnect(userData)
+	return slices.Clone(releaseResponse)
 }
+
+var releaseResponse = mustSPDU(session.EncodeDisconnect(
+	presentation.EncodeUserData(presentation.ContextIDACSE, acse.EncodeRLRE())))

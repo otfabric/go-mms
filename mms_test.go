@@ -176,7 +176,11 @@ func (s *mockServer) handleAssociation(ctx context.Context) {
 	// Build Session ACCEPT → Presentation CPA → ACSE AARE → MMS
 	aare := acse.EncodeAARE(acse.ResultAccepted, initRespBytes)
 	cpa := presentation.EncodeCPA(nil, aare)
-	accept := session.EncodeAccept(session.ConnectParams{}, cpa)
+	accept, err := session.EncodeAccept(session.ConnectParams{}, cpa)
+	if err != nil {
+		s.t.Errorf("server: encode ACCEPT: %v", err)
+		return
+	}
 
 	s.transport.sendToClient(accept)
 }

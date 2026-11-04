@@ -40,6 +40,9 @@ type GetNameListResult struct {
 //	}
 func MarshalGetNameListRequest(invokeID codec.InvokeID, objectClass int, scope int, domainID string, continueAfter string) ([]byte, error) {
 	// objectClass [0] EXPLICIT { basicObjectClass [0] IMPLICIT INTEGER }
+	if objectClass < 0 {
+		return nil, fmt.Errorf("pdu: negative object class %d", objectClass)
+	}
 	classInt := berutil.EncodeTLV(0x80, encodeUnsignedInt(uint64(objectClass)))
 	objClass := berutil.EncodeTLV(0xa0, classInt)
 

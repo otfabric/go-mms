@@ -56,7 +56,7 @@ const maxChunk = 1024
 type Config struct {
 	// Seed makes all random decisions deterministic. 0 selects a
 	// time-based seed (see Conn.Seed).
-	Seed int64
+	Seed uint64
 
 	// MaxDelay, when > 0, adds a random delay in [0, MaxDelay) before each
 	// Read and Write, and between the chunks of a split Write.
@@ -142,21 +142,21 @@ func splitmix(x uint64) uint64 {
 	return x ^ (x >> 31)
 }
 
-// deriveSeed derives the n-th child seed from base.
-func deriveSeed(base int64, n uint64) int64 {
-	s := int64(splitmix(uint64(base) ^ splitmix(n)))
+// deriveSeed derives the n-th child seed from base; the result is never 0.
+func deriveSeed(base, n uint64) uint64 {
+	s := splitmix(base ^ splitmix(n))
 	if s == 0 {
 		s = 1
 	}
 	return s
 }
 
-func timeSeed() int64 {
-	s := time.Now().UnixNano()
-	if s == 0 {
-		s = 1
+// timeSeed returns a non-zero seed from the wall clock.
+func timeSeed() uint64 {
+	if ns := time.Now().UnixNano(); ns > 0 {
+		return uint64(ns)
 	}
-	return s
+	return 1
 }
 
 // deadline is a resettable deadline whose changes can be observed.
@@ -195,7 +195,7 @@ type direction struct {
 type Conn struct {
 	net.Conn
 	cfg    Config
-	seed   int64
+	seed   uint64
 	dropAt int64 // 0 => no byte-count drop
 
 	rd, wr direction
@@ -222,21 +222,21 @@ func Wrap(c net.Conn, cfg Config) *Conn {
 		Conn: c,
 		cfg:  cfg,
 		seed: seed,
-		rd:   direction{op: "read", rng: newLockedRand(uint64(deriveSeed(seed, 1))), dl: newDeadline()},
-		wr:   direction{op: "write", rng: newLockedRand(uint64(deriveSeed(seed, 2))), dl: newDeadline()},
+		rd:   direction{op: "read", rng: newLockedRand(deriveSeed(seed, 1)), dl: newDeadline()},
+		wr:   direction{op: "write", rng: newLockedRand(deriveSeed(seed, 2)), dl: newDeadline()},
 		done: make(chan struct{}),
 	}
 	if cfg.DropAfterBytes > 0 {
 		w.dropAt = cfg.DropAfterBytes
 		if cfg.ResetJitter > 0 {
-			w.dropAt += newLockedRand(uint64(deriveSeed(seed, 3))).intN(cfg.ResetJitter)
+			w.dropAt += newLockedRand(deriveSeed(seed, 3)).intN(cfg.ResetJitter)
 		}
 	}
 	return w
 }
 
 // Seed returns the effective seed (useful when Config.Seed was 0).
-func (c *Conn) Seed() int64 { return c.seed }
+func (c *Conn) Seed() uint64 { return c.seed }
 
 // Stats returns a snapshot of the traffic and fault counters.
 func (c *Conn) Stats() Stats {
@@ -524,7 +524,7 @@ func (c *Conn) Write(p []byte) (int, error) {
 type listener struct {
 	net.Listener
 	cfg  Config
-	base int64
+	base uint64
 	n    atomic.Uint64
 }
 

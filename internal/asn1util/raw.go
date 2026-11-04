@@ -15,6 +15,8 @@ package asn1util
 import (
 	"encoding/asn1"
 	"fmt"
+
+	"github.com/otfabric/go-mms/internal/berutil"
 )
 
 // PeekTag returns the first tag byte from raw BER-encoded data without
@@ -39,47 +41,41 @@ func UnmarshalRaw(data []byte) (asn1.RawValue, []byte, error) {
 
 // WrapConstructed wraps content bytes in a context-specific constructed
 // tag with the given tag number. This produces the BER TLV envelope.
-//
-// Only tag numbers 0–30 are supported (single-byte tag form).
+// Tag numbers above 30 use the multi-byte form (X.690 §8.1.2.4).
 func WrapConstructed(tagNum int, content []byte) []byte {
-	tag := byte(ClassContext | ConstructedFlag | (tagNum & 0x1f))
-	return encodeTLV(tag, content)
+	return WrapContextTag(tagNum, true, content)
 }
 
 // WrapPrimitive wraps content bytes in a context-specific primitive
-// tag with the given tag number.
-//
-// Only tag numbers 0–30 are supported (single-byte tag form).
+// tag with the given tag number. Tag numbers above 30 use the
+// multi-byte form (X.690 §8.1.2.4).
 func WrapPrimitive(tagNum int, content []byte) []byte {
-	tag := byte(ClassContext | (tagNum & 0x1f))
-	return encodeTLV(tag, content)
+	return WrapContextTag(tagNum, false, content)
 }
 
 // WrapContextTag wraps content in a context-specific BER tag. It handles
 // both short-form tags (0–30, single-byte encoding) and long-form tags
-// (>30, multi-byte encoding used by MMS file services).
+// (>30, multi-byte encoding used by MMS file services). A negative tag
+// number is a caller bug and is encoded as tag 0.
 func WrapContextTag(tagNum int, constructed bool, content []byte) []byte {
-	if tagNum <= 30 {
-		if constructed {
-			return WrapConstructed(tagNum, content)
-		}
-		return WrapPrimitive(tagNum, content)
-	}
-
 	lead := byte(ClassContext)
 	if constructed {
 		lead |= ConstructedFlag
 	}
-	lead |= 0x1f // long-form indicator
-
-	tagBytes := encodeTagNumber(tagNum)
+	tagNum = max(tagNum, 0)
+	var tagBytes []byte
+	if tagNum <= 30 {
+		lead |= byte(tagNum & 0x1f)
+	} else {
+		lead |= 0x1f // long-form indicator
+		tagBytes = encodeTagNumber(tagNum)
+	}
 
 	l := len(content)
-	size := 1 + len(tagBytes) + lengthSize(l) + l
-	buf := make([]byte, 0, size)
+	buf := make([]byte, 0, 1+len(tagBytes)+berutil.LengthSize(l)+l)
 	buf = append(buf, lead)
 	buf = append(buf, tagBytes...)
-	buf = appendLength(buf, l)
+	buf = berutil.AppendLength(buf, l)
 	buf = append(buf, content...)
 	return buf
 }
@@ -95,40 +91,4 @@ func encodeTagNumber(n int) []byte {
 		groups[i] = byte(n&0x7f) | 0x80
 	}
 	return append([]byte(nil), groups[i:]...)
-}
-
-func lengthSize(l int) int {
-	if l < 128 {
-		return 1
-	}
-	if l < 256 {
-		return 2
-	}
-	if l < 65536 {
-		return 3
-	}
-	return 4
-}
-
-func appendLength(buf []byte, l int) []byte {
-	if l < 128 {
-		return append(buf, byte(l))
-	}
-	if l < 256 {
-		return append(buf, 0x81, byte(l))
-	}
-	if l < 65536 {
-		return append(buf, 0x82, byte(l>>8), byte(l))
-	}
-	return append(buf, 0x83, byte(l>>16), byte(l>>8), byte(l))
-}
-
-func encodeTLV(tag byte, content []byte) []byte {
-	l := len(content)
-	size := 1 + lengthSize(l) + l
-	buf := make([]byte, 0, size)
-	buf = append(buf, tag)
-	buf = appendLength(buf, l)
-	buf = append(buf, content...)
-	return buf
 }

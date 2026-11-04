@@ -16,26 +16,26 @@ func TestDecodeAssociateRequest_Edges(t *testing.T) {
 		t.Fatal("session parse")
 	}
 	// CONNECT with garbage presentation.
-	bad := session.EncodeConnect(session.ConnectParams{}, []byte{0xff})
+	bad := mustEncode(t)(session.EncodeConnect(session.ConnectParams{}, []byte{0xff}))
 	if _, err := DecodeAssociateRequest(bad); err == nil {
 		t.Fatal("presentation parse")
 	}
 	// CONNECT wrapping user-data (not CP).
 	pres := presentation.EncodeUserData(presentation.ContextIDACSE, []byte{0x01})
-	wrongKind := session.EncodeConnect(session.ConnectParams{}, pres)
+	wrongKind := mustEncode(t)(session.EncodeConnect(session.ConnectParams{}, pres))
 	if _, err := DecodeAssociateRequest(wrongKind); err == nil {
 		t.Fatal("CP kind")
 	}
 	// CP with non-AARQ ACSE (AARE).
 	aare := acse.EncodeAARE(acse.ResultAccepted, nil)
 	cp := presentation.EncodeCP(presentation.ConnectParams{}, aare)
-	wrongAPDU := session.EncodeConnect(session.ConnectParams{}, cp)
+	wrongAPDU := mustEncode(t)(session.EncodeConnect(session.ConnectParams{}, cp))
 	if _, err := DecodeAssociateRequest(wrongAPDU); err == nil {
 		t.Fatal("AARQ type")
 	}
 	// CP with garbage ACSE.
 	cpBad := presentation.EncodeCP(presentation.ConnectParams{}, []byte{0xff})
-	badACSE := session.EncodeConnect(session.ConnectParams{}, cpBad)
+	badACSE := mustEncode(t)(session.EncodeConnect(session.ConnectParams{}, cpBad))
 	if _, err := DecodeAssociateRequest(badACSE); err == nil {
 		t.Fatal("ACSE parse")
 	}
@@ -48,7 +48,7 @@ func TestDecodeAssociateResponse_Edges(t *testing.T) {
 	// EncodeCPA always uses ACSE; craft normal-mode with MMS context ID.
 	mmsCtx := encodeFullyEncodedDataForTest(presentation.ContextIDMMS, acse.EncodeAARE(acse.ResultAccepted, nil))
 	cpaWrongCtx := wrapCPA(mmsCtx)
-	badCtx := session.EncodeAccept(session.ConnectParams{}, cpaWrongCtx)
+	badCtx := mustEncode(t)(session.EncodeAccept(session.ConnectParams{}, cpaWrongCtx))
 	if _, err := DecodeAssociateResponse(badCtx); err == nil {
 		t.Fatal("wrong context")
 	}
@@ -59,14 +59,14 @@ func TestDecodeAssociateResponse_Edges(t *testing.T) {
 		t.Fatal(err)
 	}
 	cpa := presentation.EncodeCPA(nil, aarq)
-	wrongAPDU := session.EncodeAccept(session.ConnectParams{}, cpa)
+	wrongAPDU := mustEncode(t)(session.EncodeAccept(session.ConnectParams{}, cpa))
 	if _, err := DecodeAssociateResponse(wrongAPDU); err == nil {
 		t.Fatal("AARE type")
 	}
 
 	// CPA with garbage ACSE.
 	cpaBad := presentation.EncodeCPA(nil, []byte{0xff})
-	badACSE := session.EncodeAccept(session.ConnectParams{}, cpaBad)
+	badACSE := mustEncode(t)(session.EncodeAccept(session.ConnectParams{}, cpaBad))
 	if _, err := DecodeAssociateResponse(badACSE); err == nil {
 		t.Fatal("ACSE parse")
 	}

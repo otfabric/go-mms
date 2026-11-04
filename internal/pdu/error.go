@@ -47,11 +47,11 @@ func DecodeConfirmedError(content []byte) (*ConfirmedError, error) {
 
 		switch tag {
 		case 0x80: // invokeID
-			id, err := berutil.DecodeInteger(inner)
+			id, err := berutil.DecodeUnsigned(inner)
 			if err != nil {
 				return nil, fmt.Errorf("pdu: confirmed error invokeID: %w", err)
 			}
-			result.InvokeID = codec.InvokeID(id)
+			result.InvokeID = id
 			hasInvokeID = true
 		case 0xa2: // serviceError
 			if err := parseServiceError(inner, result); err != nil {
@@ -150,11 +150,11 @@ func DecodeRejectPDU(content []byte) (*RejectPDU, error) {
 
 		switch {
 		case tag == 0x80: // originalInvokeID
-			id, err := berutil.DecodeInteger(inner)
+			id, err := berutil.DecodeUnsigned(inner)
 			if err != nil {
 				return nil, fmt.Errorf("pdu: reject invokeID: %w", err)
 			}
-			result.InvokeID = codec.InvokeID(id)
+			result.InvokeID = id
 			result.HasInvokeID = true
 		case tag >= 0x81 && tag <= 0x8b: // rejectReason CHOICE
 			result.RejectType = int(tag) - 0x80

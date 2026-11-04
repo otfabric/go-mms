@@ -84,11 +84,13 @@ func ExtractInvokeID(content []byte) (codec.InvokeID, error) {
 	}
 	switch tag {
 	case 0x02, 0x80:
-		id, err := berutil.DecodeInteger(inner)
+		// invokeID is Unsigned32 (ISO 9506-2): IDs >= 2^31 carry a
+		// 0x00 pad, negative encodings are rejected instead of wrapped.
+		id, err := berutil.DecodeUnsigned(inner)
 		if err != nil {
 			return 0, fmt.Errorf("pdu: extract invoke ID value: %w", err)
 		}
-		return codec.InvokeID(id), nil
+		return id, nil
 	default:
 		return 0, fmt.Errorf("pdu: extract invoke ID: unexpected tag 0x%02x", tag)
 	}

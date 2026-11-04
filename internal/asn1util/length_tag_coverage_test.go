@@ -2,7 +2,11 @@
 
 package asn1util
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/otfabric/go-mms/internal/berutil"
+)
 
 func TestEncodeTagNumber_AllForms(t *testing.T) {
 	if got := encodeTagNumber(0x7f); len(got) != 1 || got[0] != 0x7f {
@@ -37,12 +41,14 @@ func TestLengthHelpers_AllForms(t *testing.T) {
 		{256, 3, []byte{0x82, 0x01, 0x00}},
 		{65535, 3, []byte{0x82, 0xff, 0xff}},
 		{65536, 4, []byte{0x83, 0x01, 0x00, 0x00}},
+		{1 << 24, 5, []byte{0x84, 0x01, 0x00, 0x00, 0x00}},
+		{-1, 1, []byte{0x00}},
 	}
 	for _, tc := range cases {
-		if n := lengthSize(tc.l); n != tc.size {
+		if n := berutil.LengthSize(tc.l); n != tc.size {
 			t.Fatalf("lengthSize(%d)=%d", tc.l, n)
 		}
-		got := appendLength(nil, tc.l)
+		got := berutil.AppendLength(nil, tc.l)
 		if string(got) != string(tc.want) {
 			t.Fatalf("appendLength(%d)=%x want %x", tc.l, got, tc.want)
 		}

@@ -36,7 +36,7 @@ func MarshalConfirmedResponse(invokeID InvokeID, tagNum int, constructed bool, s
 func MarshalConfirmedError(invokeID InvokeID, errorClass, errorCode int) []byte {
 	invokeIDTLV := berutil.EncodeTLV(0x80, berutil.EncodeUint32(uint32(invokeID)))
 
-	errorCodeTLV := berutil.EncodeTLV(byte(0x80+errorClass), berutil.EncodeInt(errorCode))
+	errorCodeTLV := asn1util.WrapPrimitive(errorClass, berutil.EncodeInt(errorCode))
 	errorClassTLV := berutil.EncodeTLV(0xa0, errorCodeTLV)
 	serviceErrorTLV := berutil.EncodeTLV(0xa2, errorClassTLV)
 
@@ -55,7 +55,7 @@ func MarshalConfirmedError(invokeID InvokeID, errorClass, errorCode int) []byte 
 //	}
 func MarshalRejectPDU(invokeID InvokeID, rejectType, rejectReason int) []byte {
 	invokeIDTLV := berutil.EncodeTLV(0x80, berutil.EncodeUint32(uint32(invokeID)))
-	reasonTLV := berutil.EncodeTLV(byte(0x80+rejectType), berutil.EncodeInt(rejectReason))
+	reasonTLV := asn1util.WrapPrimitive(rejectType, berutil.EncodeInt(rejectReason))
 
 	content := make([]byte, 0, len(invokeIDTLV)+len(reasonTLV))
 	content = append(content, invokeIDTLV...)
@@ -78,7 +78,7 @@ func MarshalConcludeResponse() []byte {
 func MarshalCancelError(originalInvokeID InvokeID, errorClass, errorCode int) []byte {
 	invokeIDTLV := berutil.EncodeTLV(0x80, berutil.EncodeUint32(uint32(originalInvokeID)))
 
-	errorCodeTLV := berutil.EncodeTLV(byte(0x80+errorClass), berutil.EncodeInt(errorCode))
+	errorCodeTLV := asn1util.WrapPrimitive(errorClass, berutil.EncodeInt(errorCode))
 	errorClassTLV := berutil.EncodeTLV(0xa0, errorCodeTLV)
 	serviceErrorTLV := berutil.EncodeTLV(0xa1, errorClassTLV)
 
