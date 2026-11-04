@@ -1,5 +1,17 @@
 # go-mms Releases
 
+## v1.3.1
+
+**Date:** 2026-11-04
+**Previous release:** v1.3.0
+
+### Fixed
+
+- v1.3.0 refused to encode the zero `time.Time` as a UtcTime, but `TypeSpec.DefaultValue` used it for every UtcTime, also inside structures and arrays. A server reading an unwritten variable that held a UtcTime (for example an IEC 61850 `Mod` with its `t`) answered with object-access-unsupported. The zero `time.Time` now encodes as the epoch, the all-zero UtcTime of an unset timestamp, and `DefaultValue` returns the epoch. Instants before 1970 or after 2106-02-07 are still rejected.
+- `DefaultValue` of an ObjectIdentifier was an empty OID, which cannot be encoded; it is now `0.0`, the shortest valid one.
+
+---
+
 ## v1.3.0
 
 **Date:** 2026-11-04

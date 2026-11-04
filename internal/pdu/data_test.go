@@ -3,6 +3,7 @@
 package pdu
 
 import (
+	"bytes"
 	"errors"
 	"math"
 	"testing"
@@ -691,8 +692,9 @@ func TestUTCTimeFractionRoundTrip(t *testing.T) {
 	}
 }
 
-// UtcTime carries 32-bit seconds since 1970: instants outside that range,
-// including the zero time.Time, must be rejected, not wrapped.
+// UtcTime carries 32-bit seconds since 1970: instants outside that range
+// must be rejected, not wrapped. The zero time.Time is "not set" and is
+// written as the epoch.
 func TestEncodeUTCTime_RangeLimits(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -703,7 +705,8 @@ func TestEncodeUTCTime_RangeLimits(t *testing.T) {
 		{"last second", time.Unix(math.MaxUint32, 0), true},
 		{"before epoch", time.Unix(-1, 0), false},
 		{"after 2106", time.Unix(math.MaxUint32+1, 0), false},
-		{"zero time", time.Time{}, false},
+		{"zero time", time.Time{}, true},
+		{"before epoch, nanoseconds", time.Unix(-1, 5), false},
 	} {
 		_, err := encodeUTCTime(tc.t, 0)
 		if (err == nil) != tc.ok {
@@ -713,6 +716,21 @@ func TestEncodeUTCTime_RangeLimits(t *testing.T) {
 		if (err == nil) != tc.ok {
 			t.Errorf("%s: MarshalData err=%v, want ok=%v", tc.name, err, tc.ok)
 		}
+	}
+}
+
+// The zero time.Time encodes exactly like the epoch: all-zero octets.
+func TestEncodeUTCTime_ZeroIsEpoch(t *testing.T) {
+	zero, err := encodeUTCTime(time.Time{}, 0x0a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch, err := encodeUTCTime(time.Unix(0, 0), 0x0a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(zero, epoch) || !bytes.Equal(zero, []byte{0, 0, 0, 0, 0, 0, 0, 0x0a}) {
+		t.Fatalf("zero time = %x, epoch = %x", zero, epoch)
 	}
 }
 

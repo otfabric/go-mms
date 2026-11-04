@@ -491,9 +491,14 @@ func decodeBitString(data []byte) ([]byte, int, error) {
 // UTCTime encoding: 4 bytes seconds + 3 bytes fraction + 1 byte quality
 
 // encodeUTCTime encodes t as UtcTime (ISO 9506-2 UtcTime, 8 octets): 32-bit
-// seconds since 1970-01-01, so instants outside 1970..2106 (including
-// the zero time.Time) are rejected instead of wrapped.
+// seconds since 1970-01-01, so instants outside 1970..2106 are rejected
+// instead of wrapped. The zero time.Time, Go's "not set", is written as
+// the epoch (all-zero seconds and fraction), the UtcTime of an unset
+// timestamp.
 func encodeUTCTime(t time.Time, quality uint8) ([]byte, error) {
+	if t.IsZero() {
+		t = time.Unix(0, 0)
+	}
 	unix := t.Unix()
 	if unix < 0 || unix > math.MaxUint32 {
 		return nil, fmt.Errorf("pdu: UTC time %s outside 1970-01-01..2106-02-07", t.UTC().Format(time.RFC3339))

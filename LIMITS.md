@@ -74,7 +74,7 @@ Canonical concurrency wording: package `doc.go` (Concurrency) and [KNOWN_LIMITAT
 |-------|----------------|
 | Session SPDU parameters (CONNECT/ACCEPT user data) at most 65535 bytes, the ISO 8327-1 extended length form; longer is an encode error | `internal/session` `encodeSPDU` |
 | Invoke IDs are Unsigned32; negative or wider values are rejected (server: Reject PDU) | `internal/codec` `unmarshalConfirmedEnvelope`, `internal/pdu` `ExtractInvokeID` |
-| `UtcTime` seconds 0..2^32-1 (1970-01-01..2106-02-07); outside is an encode error | `internal/pdu` `encodeUTCTime` |
+| `UtcTime` seconds 0..2^32-1 (1970-01-01..2106-02-07); outside is an encode error; the zero `time.Time` is written as the epoch (unset) | `internal/pdu` `encodeUTCTime` |
 | Alternate-access indices, file sizes: Unsigned32; FRSM IDs: Integer32 | `internal/pdu` |
 
 ## Limits not enforced (by design)
