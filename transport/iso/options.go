@@ -5,6 +5,7 @@ package iso
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"log/slog"
 	"net"
 	"time"
@@ -16,6 +17,7 @@ import (
 type Options struct {
 	callingTSelector []byte
 	calledTSelector  []byte
+	maxTPDULength    int
 	tlsConfig        *tls.Config
 	mmsDialOpts      mms.DialOptions
 	hasMmsDialOpts   bool
@@ -28,20 +30,82 @@ type Options struct {
 // Option configures an ISO transport connection.
 type Option func(*Options)
 
-// WithCallingTSelector sets the calling TSAP selector (COTP CR parameter 0xC1).
-// This typically identifies the local endpoint.
+// Default client transport parameters, the values libiec61850 and most
+// IEC 61850 clients send and IEDs expect (IEC 61850-8-1 mandates none; it
+// limits a T-selector to 4 octets, §6.2.3.2.2).
+const (
+	// DefaultMaxTPDULength is the TPDU size a client proposes in the CR
+	// (parameter 0xC0 = 0x0A, 1024 octets).
+	DefaultMaxTPDULength = 1024
+	// MaxTSelectorLength is the longest T-selector a client sends
+	// (IEC 61850-8-1 §6.2.3.2.2).
+	MaxTSelectorLength = 4
+)
+
+// defaultTSelector is the calling and called T-selector a client sends
+// when none is configured: 00 01.
+var defaultTSelector = [2]byte{0x00, 0x01}
+
+// WithCallingTSelector sets the calling TSAP selector (COTP CR parameter
+// 0xC1), at most [MaxTSelectorLength] octets.
+//
+// A client sends 00 01 when no calling selector is configured (here or in
+// [mms.TransportOptions]); a non-nil empty sel omits the parameter.
 func WithCallingTSelector(sel []byte) Option {
 	return func(o *Options) {
-		o.callingTSelector = append([]byte(nil), sel...)
+		o.callingTSelector = cloneSelector(sel)
 	}
 }
 
-// WithCalledTSelector sets the called TSAP selector (COTP CR parameter 0xC2).
-// This typically identifies the remote endpoint.
+// WithCalledTSelector sets the called TSAP selector (COTP CR parameter
+// 0xC2), at most [MaxTSelectorLength] octets for a client.
+//
+// A client sends 00 01 when no called selector is configured (here or in
+// [mms.TransportOptions]); a non-nil empty sel omits the parameter.
+//
+// On a [Listener] it makes the selector strict: a CR whose called selector
+// is absent or differs byte for byte is refused with a Disconnect Request
+// (reason 3, address unknown). Without it a Listener accepts any called
+// selector, as other IEC 61850 servers do.
 func WithCalledTSelector(sel []byte) Option {
 	return func(o *Options) {
-		o.calledTSelector = append([]byte(nil), sel...)
+		o.calledTSelector = cloneSelector(sel)
 	}
+}
+
+// WithMaxTPDULength sets the maximum TPDU size in octets. A client
+// proposes it in the CR (default [DefaultMaxTPDULength]); 65531 omits the
+// 0xC0 parameter, the RFC 1006 default that earlier go-mms versions sent.
+// On a [Listener] it caps the size accepted from a CR (default: whatever
+// the peer proposes, up to 65531). Valid values are 128..65531.
+func WithMaxTPDULength(n int) Option {
+	return func(o *Options) {
+		o.maxTPDULength = n
+	}
+}
+
+// cloneSelector copies sel, keeping nil (not configured) apart from a
+// non-nil empty selector (configured to be omitted).
+func cloneSelector(sel []byte) []byte {
+	if sel == nil {
+		return nil
+	}
+	return append(make([]byte, 0, len(sel)), sel...)
+}
+
+// clientTSelector returns the selector a client sends: sel when
+// configured, an omitted parameter for a non-nil empty sel, otherwise the
+// default 00 01.
+func clientTSelector(sel []byte, what string) ([]byte, error) {
+	switch {
+	case sel == nil:
+		return defaultTSelector[:], nil
+	case len(sel) == 0:
+		return nil, nil
+	case len(sel) > MaxTSelectorLength:
+		return nil, fmt.Errorf("iso: %s T-selector of %d octets, IEC 61850-8-1 allows at most %d", what, len(sel), MaxTSelectorLength)
+	}
+	return sel, nil
 }
 
 // WithClientDialOptions sets the MMS dial options used by the convenience

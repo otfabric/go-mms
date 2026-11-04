@@ -33,9 +33,9 @@ jobs:
         stack: [libiec61850, dscsystems, iec61850-rust, iec61850bean]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26.x"
 
@@ -45,6 +45,20 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pull before the suite: the harness's 30 s readiness timeout covers
+      # only container start, not a slow registry download.
+      - name: Pull the peer image
+        env:
+          MMS_INTEROP_STACK: ${{ matrix.stack }}
+        run: |
+          case "$MMS_INTEROP_STACK" in
+            libiec61850)   img="$LIBIEC61850_IMAGE" ;;
+            dscsystems)    img="$DSCSYSTEMS_IMAGE" ;;
+            iec61850-rust) img="$IEC61850RUST_IMAGE" ;;
+            iec61850bean)  img="$IEC61850BEAN_IMAGE" ;;
+          esac
+          docker pull -q "$img"
 
       - name: Run interop suite
         env:
@@ -62,7 +76,7 @@ jobs:
 
       - name: Upload failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: go-mms-iec61850-interop-diagnostics-${{ matrix.stack }}
           path: artifacts/

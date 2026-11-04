@@ -236,19 +236,60 @@ func (c *Client) applyNegotiatedParams(req pdu.InitiateRequest, resp *pdu.Initia
 
 func (c *Client) buildISOParams() isostack.Params {
 	iso := c.opts.ISO
+	callingTitle, callingAEQ := isoAPTitle(iso.LocalAPTitle, iso.LocalAEQualifier, defaultCallingAPTitle)
+	calledTitle, calledAEQ := isoAPTitle(iso.RemoteAPTitle, iso.RemoteAEQualifier, defaultCalledAPTitle)
 	return isostack.Params{
-		CallingSessionSelector:      iso.LocalSSelector,
-		CalledSessionSelector:       iso.RemoteSSelector,
-		CallingPresentationSelector: iso.LocalPSelector,
-		CalledPresentationSelector:  iso.RemotePSelector,
+		CallingSessionSelector:      isoSelector(iso.LocalSSelector, defaultSSelector),
+		CalledSessionSelector:       isoSelector(iso.RemoteSSelector, defaultSSelector),
+		CallingPresentationSelector: isoSelector(iso.LocalPSelector, defaultPSelector),
+		CalledPresentationSelector:  isoSelector(iso.RemotePSelector, defaultPSelector),
 		ACSE: acse.AARQParams{
-			CalledAPTitle:      iso.RemoteAPTitle,
-			CalledAEQualifier:  iso.RemoteAEQualifier,
-			CallingAPTitle:     iso.LocalAPTitle,
-			CallingAEQualifier: iso.LocalAEQualifier,
+			CalledAPTitle:      calledTitle,
+			CalledAEQualifier:  calledAEQ,
+			CallingAPTitle:     callingTitle,
+			CallingAEQualifier: callingAEQ,
 			Password:           append([]byte(nil), iso.Password...),
 		},
 	}
+}
+
+// Default upper-layer addressing of a client (see [ISOOptions]).
+var (
+	defaultSSelector      = []byte{0x00, 0x01}
+	defaultPSelector      = []byte{0x00, 0x00, 0x00, 0x01}
+	defaultCallingAPTitle = APTitle{1, 1, 1, 999}
+	defaultCalledAPTitle  = APTitle{1, 1, 1, 999, 1}
+)
+
+// defaultAEQualifier is sent with a default AP-title.
+const defaultAEQualifier = 12
+
+// isoSelector returns sel, def for a nil sel, or nil (omit) for a non-nil
+// empty sel. The result is a copy.
+func isoSelector(sel, def []byte) []byte {
+	switch {
+	case sel == nil:
+		return append([]byte(nil), def...)
+	case len(sel) == 0:
+		return nil
+	}
+	return append([]byte(nil), sel...)
+}
+
+// isoAPTitle returns the AP-title and AE-qualifier to send: the default
+// title (with qualifier 12 when aeq is zero) for a nil title, none for a
+// non-nil empty title, otherwise the configured pair.
+func isoAPTitle(title APTitle, aeq int, def APTitle) (APTitle, int) {
+	switch {
+	case title == nil:
+		if aeq == 0 {
+			aeq = defaultAEQualifier
+		}
+		return append(APTitle(nil), def...), aeq
+	case len(title) == 0:
+		return nil, 0
+	}
+	return append(APTitle(nil), title...), aeq
 }
 
 // Close performs an orderly shutdown of the MMS connection (Conclude).

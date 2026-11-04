@@ -56,19 +56,24 @@
 // authentication should be combined with TLS transport to provide
 // confidentiality. The library does not enforce this combination.
 //
-// # TSEL configuration
+// # Addressing
 //
-// Use [WithCallingTSelector] and [WithCalledTSelector] to configure
-// COTP Transport Service Access Point (TSAP) selectors:
+// A client sends a calling and called T-selector of 00 01 and proposes a
+// 1024-octet TPDU, and go-mms adds S-selector 00 01, P-selector 00 00 00 01
+// and AP-titles 1.1.1.999 / 1.1.1.999.1 with AE-qualifier 12 (see
+// [mms.ISOOptions]): the addressing libiec61850 uses and IEDs expect. Use
+// [WithCallingTSelector], [WithCalledTSelector] and [WithMaxTPDULength] for
+// an IED configured otherwise (the OSI-TSEL of its SCL ConnectedAP):
 //
 //	conn, err := iso.Dial(ctx, "10.0.0.1:102",
 //	    iso.WithCallingTSelector([]byte{0x00, 0x01}),
-//	    iso.WithCalledTSelector([]byte{0x00, 0x01}),
+//	    iso.WithCalledTSelector([]byte{0x00, 0x00, 0x00, 0x01}),
 //	)
 //
-// On the server side, [WithCalledTSelector] validates that incoming
-// COTP Connection Requests carry the expected called selector; mismatches
-// are rejected with a Disconnect Request.
+// A [Listener] accepts any called selector and returns the CR's selectors
+// in the CC. [WithCalledTSelector] makes it strict: a CR whose called
+// selector is absent or different is refused with a Disconnect Request
+// (reason 3, address unknown).
 //
 // # Architecture
 //
