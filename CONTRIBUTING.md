@@ -21,6 +21,7 @@ Run `make help` for the list of targets.
 - `make fuzz`: every fuzz target for `FUZZTIME` (default 15s). `make fuzz-ber` and `make fuzz-pdu` run the decoder targets only.
 - `make chaos`: chaos and stress tests under the race detector.
 - `make interop`, `make interop-all`: tests against independent stacks, see [INTEROP.md](INTEROP.md).
+- Against the latest published go-mms (what the manual Self-interop workflow runs; not independent evidence, never required): `MMS_INTEROP_STACK=otfabric MMS_INTEROP_OTFABRIC_IMAGE=ghcr.io/otfabric/iec61850-interop-otfabric:latest make interop`.
 
 Add a fuzz target for any new decoder of untrusted input.
 

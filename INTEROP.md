@@ -49,6 +49,9 @@ make interop-all
 
 # Published images (CI pins the iec61850-interop v1.1.1 digests in .github/workflows/interop.yml)
 MMS_INTEROP_STACK=iec61850-rust IEC61850RUST_IMAGE=ghcr.io/otfabric/iec61850-interop-iec61850-rust:v1.1.1 make interop
+
+# Against the latest published go-mms (the Self-interop workflow, run by hand)
+MMS_INTEROP_STACK=otfabric MMS_INTEROP_OTFABRIC_IMAGE=ghcr.io/otfabric/iec61850-interop-otfabric:latest make interop
 ```
 
 CI (`.github/workflows/interop.yml`) runs the full matrix, one job per stack,
@@ -57,12 +60,25 @@ the fixture copies (`interop/testdata/interop.json`,
 `interop/testdata/iec61850/values.json`) together when iec61850-interop publishes
 new adapters.
 
+**Our own stack.** iec61850-interop also publishes go-mms itself behind the
+same contract, as stack `otfabric` in `ghcr.io/otfabric/iec61850-interop-otfabric`
+(commands `otfabric-mms-server` and `otfabric-mms-client`, built from the latest
+go-mms release). It is not a reference: a pass against it is not independent
+evidence and is never listed in the matrices below. The stack runs only when
+`MMS_INTEROP_OTFABRIC_IMAGE` names an image; it has no default and is not in
+`make interop-all`. The manual **Self-interop** workflow
+(`.github/workflows/self-interop.yml`) runs this commit against `:latest` in
+both roles, logs the image digest, and is never a required check: it finds a
+change on the wire that breaks an earlier release, which the e2e tests (both
+sides from one commit) cannot.
+
 ## Environment variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `MMS_INTEROP_STACK` | Peer stack: `libiec61850`, `dscsystems`, `iec61850-rust`, `iec61850bean` | `libiec61850` |
-| `MMS_INTEROP_IMAGE` | Image for the selected stack (overrides the per-stack variable) | — |
+| `MMS_INTEROP_STACK` | Peer stack: `libiec61850`, `dscsystems`, `iec61850-rust`, `iec61850bean`, or `otfabric` (opt-in, see above) | `libiec61850` |
+| `MMS_INTEROP_IMAGE` | Image for the selected stack (overrides the per-stack variable; not for `otfabric`) | — |
+| `MMS_INTEROP_OTFABRIC_IMAGE` | go-mms's own image; the `otfabric` stack skips without it | — (none) |
 | `LIBIEC61850_IMAGE` | libiec61850 adapter image | `iec61850-interop-libiec61850:local` |
 | `DSCSYSTEMS_IMAGE` | dscsystems adapter image | `iec61850-interop-dscsystems:local` |
 | `IEC61850RUST_IMAGE` | iec61850-rust adapter image | `iec61850-interop-iec61850-rust:local` |
@@ -202,7 +218,7 @@ The go-mms→libIEC column is the go-mms client against `libiec61850-mms-server`
 | ReadJournal, unknown journal (negative) | ✓ | ✓ | |
 | Cancel | — | — | the go-mms client does not send Cancel |
 
-The ◐ rows are listed with the test that pins the peer behaviour in the iec61850-interop [`COVERAGE.md`](https://github.com/otfabric/iec61850-interop/blob/main/COVERAGE.md).
+The ◐ rows are listed with the test that pins the peer behaviour in the iec61850-interop [`COVERAGE.md`](https://github.com/otfabric/iec61850-interop/blob/v1.1.1/COVERAGE.md) (v1.1.1, the release CI pins).
 
 ## Related test suites
 

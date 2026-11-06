@@ -39,6 +39,10 @@ type peerStack struct {
 	// MMS contract suite skips; the IED server suite
 	// (ied_server_test.go) runs against <name>-ied-server instead.
 	iedOnly bool
+
+	// optIn: the stack runs only when its image variable names an image;
+	// it has no default image and MMS_INTEROP_IMAGE does not select it.
+	optIn bool
 }
 
 // quirks records documented peer behaviours (capabilities.json
@@ -68,6 +72,10 @@ type quirks struct {
 	// ends the connection (COTP DR) instead of returning a data access
 	// error.
 	disconnectOnUnknownName bool
+	// bulkNVLDelete: the server implements DeleteNamedVariableList with
+	// scopeOfDelete aa-specific, domain and vmd (ISO 9506-2, 11.6.1), not
+	// only "specific". The independent references do not.
+	bulkNVLDelete bool
 }
 
 const defaultStack = "libiec61850"
@@ -95,7 +103,21 @@ var peerStacks = map[string]peerStack{
 		quirks:   quirks{noIdentify: true, noConclude: true, disconnectOnUnknownName: true},
 		iedOnly:  true,
 	},
+	// otfabric is go-mms itself, as published by otfabric/iec61850-interop
+	// (ghcr.io/otfabric/iec61850-interop-otfabric, commands
+	// otfabric-mms-server and otfabric-mms-client). It is not a reference:
+	// a pass is not independent evidence. It runs only when
+	// MMS_INTEROP_OTFABRIC_IMAGE names an image (the Self-interop workflow).
+	otfabricStack: {
+		name:     otfabricStack,
+		imageEnv: "MMS_INTEROP_OTFABRIC_IMAGE",
+		quirks:   quirks{bulkNVLDelete: true},
+		optIn:    true,
+	},
 }
+
+// otfabricStack is the name of the opt-in stack built from go-mms itself.
+const otfabricStack = "otfabric"
 
 // stack returns the stack selected by MMS_INTEROP_STACK (default
 // libiec61850).
@@ -111,12 +133,19 @@ func stack(t testing.TB) peerStack {
 		sort.Strings(names)
 		t.Fatalf("MMS_INTEROP_STACK=%q: unknown stack (one of %s)", name, strings.Join(names, ", "))
 	}
+	if s.optIn && os.Getenv(s.imageEnv) == "" {
+		t.Skipf("MMS_INTEROP_STACK=%s runs only when %s names an image", s.name, s.imageEnv)
+	}
 	return s
 }
 
 // image returns the adapter image: MMS_INTEROP_IMAGE, else the stack's
-// own variable, else the locally built iec61850-interop-<name>:local.
+// own variable, else the locally built iec61850-interop-<name>:local. An
+// opt-in stack takes only its own variable (stack skips when it is empty).
 func (s peerStack) image() string {
+	if s.optIn {
+		return os.Getenv(s.imageEnv)
+	}
 	if v := os.Getenv("MMS_INTEROP_IMAGE"); v != "" {
 		return v
 	}

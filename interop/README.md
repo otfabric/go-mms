@@ -34,6 +34,7 @@ LIBIEC61850_IMAGE=ghcr.io/otfabric/iec61850-interop-libiec61850:v1.1.1 make inte
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `LIBIEC61850_IMAGE` | Docker image for the libiec61850 adapter | `iec61850-interop-libiec61850:local` |
+| `MMS_INTEROP_OTFABRIC_IMAGE` | go-mms's own image (`MMS_INTEROP_STACK=otfabric`, opt-in, see INTEROP.md) | — (none) |
 | `MMS_SERVER_BINARY` | Path to `libiec61850-mms-server` binary (skips Docker) | — |
 | `MMS_CLIENT_BINARY` | Path to `libiec61850-mms-client` binary (skips Docker) | — |
 | `MMS_FIXTURE` | Path to the fixture JSON file | `testdata/interop.json` |
