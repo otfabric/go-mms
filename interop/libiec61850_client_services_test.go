@@ -560,12 +560,32 @@ func TestClient_NVL_AssociationScope(t *testing.T) {
 
 // libiec61850 implements DeleteNamedVariableList only for scopeOfDelete
 // "specific" (an explicit list of names). The bulk forms are answered with
-// an error and must leave the association usable.
+// an error and must leave the association usable. A peer with the bulk
+// forms (quirks.bulkNVLDelete: go-mms itself) must delete the domain's list
+// and nothing at VMD scope.
 func TestClient_DeleteAllNVLs_UnsupportedByPeer(t *testing.T) {
 	ctx, c := session(t)
 
 	if err := c.DefineNamedVariableList(ctx, mms.DefineNamedVariableListRequest{ListName: dv("bulk"), Variables: nvlMembers()}); err != nil {
 		t.Fatalf("DefineNamedVariableList: %v", err)
+	}
+
+	if stack(t).quirks.bulkNVLDelete {
+		dom, err := c.DeleteAllDomainNVLs(ctx, "interop")
+		if err != nil || dom.NumberMatched != 1 || dom.NumberDeleted != 1 {
+			t.Errorf("DeleteAllDomainNVLs = %+v, %v; want 1 matched, 1 deleted", dom, err)
+		}
+		vmd, err := c.DeleteAllVMDNVLs(ctx)
+		if err != nil || vmd.NumberMatched != 0 || vmd.NumberDeleted != 0 {
+			t.Errorf("DeleteAllVMDNVLs = %+v, %v; want 0 matched, 0 deleted", vmd, err)
+		}
+		if _, err := c.ReadNamedVariableList(ctx, dv("bulk")); err == nil {
+			t.Errorf("ReadNamedVariableList(bulk) after the domain bulk delete succeeded; want an error")
+		}
+		if _, err := c.Status(ctx); err != nil {
+			t.Fatalf("association unusable after bulk delete: %v", err)
+		}
+		return
 	}
 
 	for name, call := range map[string]func() (*mms.DeleteNamedVariableListResult, error){
