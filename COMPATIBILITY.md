@@ -63,7 +63,7 @@ an empty selector or AP-title omits the parameter again).
 
 ## Peer implementations
 
-Each release is tested on the wire against the MMS stacks packaged by [iec61850-interop](https://github.com/otfabric/iec61850-interop) (v1.1.1 images, pinned by digest):
+Each release is tested on the wire against the MMS stacks packaged by [iec61850-interop](https://github.com/otfabric/iec61850-interop) (v1.3.0 images, pinned by digest):
 
 | Stack | Client direction (go-mms → peer server) | Server direction (peer client → go-mms) |
 |-------|:---:|:---:|

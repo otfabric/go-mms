@@ -11,16 +11,16 @@ permissions:
   contents: read
   packages: read
 
-# Adapter images from the iec61850-interop v1.1.1 release (manifest.json images.*),
+# Adapter images from the iec61850-interop v1.3.0 release (manifest.json images.*),
 # pinned by digest. When iec61850-interop publishes new adapters, bump the
 # digests below and the interop/testdata fixture copies (interop.json;
 # iec61850/values.json for iec61850bean) together.
 env:
-  MMS_INTEROP_RELEASE: v1.1.1
-  LIBIEC61850_IMAGE: ghcr.io/otfabric/iec61850-interop-libiec61850@sha256:be48749244ff3a019e0a61062134ed0fa69225b93e86fe50dde085ac2ee9b356
-  DSCSYSTEMS_IMAGE: ghcr.io/otfabric/iec61850-interop-dscsystems@sha256:ea4b19da85ffcfb3fadd9ecd65cec3f5688763cdf950f0d16e5b239eb3b825f9
-  IEC61850RUST_IMAGE: ghcr.io/otfabric/iec61850-interop-iec61850-rust@sha256:859fd8eced8cf57d97682b994994f85e125294341f302f307058575cf663e720
-  IEC61850BEAN_IMAGE: ghcr.io/otfabric/iec61850-interop-iec61850bean@sha256:e8d3327eb783d10ebe9e34773368470d4f0ddda3abe8492bf787874e6e08e898
+  MMS_INTEROP_RELEASE: v1.3.0
+  LIBIEC61850_IMAGE: ghcr.io/otfabric/iec61850-interop-libiec61850@sha256:36256bf2fff44d46bf9df3f77bd3f41527f7c40bbc776b4f103db27086f8e1d8
+  DSCSYSTEMS_IMAGE: ghcr.io/otfabric/iec61850-interop-dscsystems@sha256:e98845163756609d789711e03a85f06f27518ff5022ec3bfa89669f9af5f2dbe
+  IEC61850RUST_IMAGE: ghcr.io/otfabric/iec61850-interop-iec61850-rust@sha256:b3aacbdf75734729c0b8ca37cb704f97b6359d97368113d15488a0fef7ad8b39
+  IEC61850BEAN_IMAGE: ghcr.io/otfabric/iec61850-interop-iec61850bean@sha256:7c9d84d098b4e985d5213335493092e419dd1fe221fa56fda28e778aeb16241c
 
 jobs:
   interop:
