@@ -218,7 +218,7 @@ The go-mms→libIEC column is the go-mms client against `libiec61850-mms-server`
 | ReadJournal, unknown journal (negative) | ✓ | ✓ | |
 | Cancel | — | — | the go-mms client does not send Cancel |
 
-The ◐ rows are listed with the test that pins the peer behaviour in the iec61850-interop [`COVERAGE.md`](https://github.com/otfabric/iec61850-interop/blob/main/COVERAGE.md).
+The ◐ rows are listed with the test that pins the peer behaviour in the iec61850-interop [`COVERAGE.md`](https://github.com/otfabric/iec61850-interop/blob/v1.1.1/COVERAGE.md) (v1.1.1, the release CI pins).
 
 ## Related test suites
 
