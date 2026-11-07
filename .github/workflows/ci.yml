@@ -24,7 +24,7 @@ jobs:
       timeout-minutes: 25
       codecov-name: go-mms
       go-versions: '["1.26","1.27"]'
-      policy-version: v1.4.1
+      policy-version: v1.4.2
     secrets: inherit
 
   quality:
