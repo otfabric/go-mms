@@ -284,20 +284,29 @@ func NewDataAccessError(code DataAccessErrorCode) *Value
 ```go
 func (v *Value) Type() ValueType
 func (v *Value) Bool() (bool, bool)
-func (v *Value) Int() (int64, bool)
-func (v *Value) Uint() (uint64, bool)
-func (v *Value) Float64() (float64, bool)
+func (v *Value) Int32() (int32, bool)
+func (v *Value) Int64() (int64, bool)
+func (v *Value) Uint32() (uint32, bool)
+func (v *Value) Uint64() (uint64, bool)
 func (v *Value) Float32() (float32, bool)
+func (v *Value) Float64() (float64, bool)
+func (v *Value) Real() (float64, bool)
+func (v *Value) BitString() ([]byte, bool)
+func (v *Value) BitStringLength() (int, bool)
 func (v *Value) OctetString() ([]byte, bool)
 func (v *Value) VisibleString() (string, bool)
 func (v *Value) MmsString() (string, bool)
-func (v *Value) BinaryTimeMillis() (int64, bool)
-func (v *Value) BitLen() int
-func (v *Value) Bits() ([]byte, bool)
+func (v *Value) UTCTime() (time.Time, bool)
+func (v *Value) UTCTimeQuality() uint8
+func (v *Value) BinaryTime() (int64, bool)
+func (v *Value) GeneralizedTime() (time.Time, bool)
+func (v *Value) BCD() (int64, bool)
+func (v *Value) ObjectIdentifier() ([]int, bool)
+func (v *Value) BooleanArray() ([]byte, int, bool)
 func (v *Value) Structure() ([]*Value, bool)
 func (v *Value) ArrayElements() ([]*Value, bool)
 func (v *Value) Get(selectors ...AccessSelector) (*Value, error)
-func (v *Value) DataAccessError() (DataAccessErrorCode, bool)
+func (v *Value) DataAccessErr() (DataAccessErrorCode, bool)
 func (v *Value) Clone() *Value
 func (v *Value) Equal(other *Value) bool
 func (v *Value) String() string

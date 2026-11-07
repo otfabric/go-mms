@@ -51,7 +51,7 @@ random seed; a failure prints `MMS_CHAOS_SEED` to replay it.
   handshake timeout; finished transports are passed to `Accept` over a
   channel. Close is idempotent and closes connections still
   handshaking or waiting.
-- **Per-direction deadlines**: go-cotp (v1.1.0+) arms read and write
+- **Per-direction deadlines**: go-cotp (v1.3.0+) arms read and write
   deadlines separately, so a request's write deadline never cuts the
   reader's concurrent read. Send passes go-cotp a context that keeps the
   deadline but not the cancellation (a TSDU is never abandoned
