@@ -11,7 +11,7 @@ FUZZTIME ?= 15s
 COVER_PKG_MIN := 90
 
 # docsync release of docs-check (DOC-008).
-DOCSYNC_VERSION := v0.2.0
+DOCSYNC_VERSION := v0.3.0
 
 .PHONY: help interop-all test test-race test-verbose vet lint fmt fuzz fuzz-short fuzz-ber fuzz-pdu chaos bench tidy check clean coverage coverage-check coverage-pkg-check coverage-html coverage-clean cross e2e interop test-armv7 vuln docs-check
 
