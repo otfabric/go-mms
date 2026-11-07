@@ -10,7 +10,10 @@ FUZZTIME ?= 15s
 # Lowest package when set: internal/pdu, 95.5 % with -coverpkg.
 COVER_PKG_MIN := 90
 
-.PHONY: help interop-all test test-race test-verbose vet lint fmt fuzz fuzz-short fuzz-ber fuzz-pdu chaos bench tidy check clean coverage coverage-check coverage-pkg-check coverage-html coverage-clean cross e2e interop test-armv7 vuln
+# docsync release of docs-check (DOC-008).
+DOCSYNC_VERSION := v0.2.0
+
+.PHONY: help interop-all test test-race test-verbose vet lint fmt fuzz fuzz-short fuzz-ber fuzz-pdu chaos bench tidy check clean coverage coverage-check coverage-pkg-check coverage-html coverage-clean cross e2e interop test-armv7 vuln docs-check
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "%-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -46,6 +49,10 @@ vet: ## Run go vet
 lint: ## Run golangci-lint (install: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
 	@echo "Running golangci-lint"
 	golangci-lint run $(PKGS)
+
+# The documents against the code (DOC-008): docsync, as docs-check.yml runs it.
+docs-check: ## Check that the documents agree with the code (docsync)
+	@go run github.com/otfabric/docsync@$(DOCSYNC_VERSION) check .
 
 vuln: ## Run govulncheck
 	@echo "Running govulncheck"
@@ -124,7 +131,7 @@ test-armv7: ## Compile internal/pdu for linux/armv7 (catches 32-bit int overflow
 	GOOS=linux GOARCH=arm GOARM=7 go test -c -o "$$tmp" ./internal/pdu/; \
 	rc=$$?; rm -f "$$tmp"; exit $$rc
 
-check: fmt tidy vet lint vuln test test-race coverage fuzz-short test-armv7 ## Run all pre-commit checks
+check: fmt tidy vet lint vuln test test-race coverage fuzz-short test-armv7 docs-check ## Run all pre-commit checks
 
 clean: coverage-clean ## Clean test cache and coverage artifacts
 	@echo "Cleaning test cache and coverage artifacts"
