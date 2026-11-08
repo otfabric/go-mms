@@ -26,6 +26,7 @@ original chain (transport errors, `context` errors, typed errors):
 | Request deadline (context or `DialOptions.RequestTimeout`) | `ErrInvokeTimeout` and `context.DeadlineExceeded` |
 | Request context cancelled | `context.Canceled` |
 | Invalid caller argument or option | `ErrInvalidArgument` (nothing is sent) |
+| Service not in `DialOptions.AllowedServices` | `ErrServiceNotAllowed` (nothing is sent) |
 | Malformed response to a request | `ErrDecodeFailed` |
 | ConfirmedErrorPDU | `*ServiceError`, `ErrServiceRejected` |
 | RejectPDU | `*RejectError`, `*ProtocolError` (phase `mms`), `ErrProtocol` |
@@ -56,6 +57,7 @@ original chain (transport errors, `context` errors, typed errors):
 | `ErrFileAccessDenied` | `FileProvider`/`JournalProvider` implementations signal permission errors; server maps it to MMS error class "file", code "file-access-denied" | `errors.Is(err, mms.ErrFileAccessDenied)` |
 | `ErrServerClosed` | `Server.Serve` and `Server.ListenAndServe` after `Server.Shutdown` | `errors.Is(err, mms.ErrServerClosed)` |
 | `ErrInvalidArgument` | A caller-supplied argument or option is invalid (empty names, nil values, mismatched slices, values that cannot be encoded, bad selectors); the request is not sent | `errors.Is(err, mms.ErrInvalidArgument)` |
+| `ErrServiceNotAllowed` | A client request for a confirmed service that `DialOptions.AllowedServices` does not list; the request is not sent and the association stays usable | `errors.Is(err, mms.ErrServiceNotAllowed)` |
 
 Timeouts and cancellation also match the standard `context.DeadlineExceeded`
 and `context.Canceled`.

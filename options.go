@@ -44,6 +44,18 @@ type DialOptions struct {
 	// [context.DeadlineExceeded]. Zero means no default timeout: requests
 	// wait until their context is done or the connection is lost.
 	RequestTimeout time.Duration
+
+	// AllowedServices, when non-nil, lists the confirmed services the
+	// client may send. A request for any other service is refused before
+	// it reaches the transport: nothing is sent, and the call returns an
+	// error matching [ErrServiceNotAllowed] (the [Metrics] request event
+	// carries the same error). Nil allows every service; an empty non-nil
+	// slice refuses every confirmed request. Association control
+	// (Initiate, Conclude, Abort) is not a confirmed service and is never
+	// refused. Use it to make a client read-only, for example
+	// {ServiceIdentify, ServiceStatus, ServiceGetNameList, ServiceRead,
+	// ServiceGetVariableAccessAttributes, ServiceGetNamedVariableListAttributes}.
+	AllowedServices []Service
 }
 
 // Directions passed to [DialOptions.RawHook].
