@@ -35,6 +35,11 @@ var (
 	// argument or option (empty names, nil values, mismatched slices,
 	// values that cannot be encoded). The request is not sent.
 	ErrInvalidArgument = errors.New("mms: invalid argument")
+
+	// ErrServiceNotAllowed is returned for a confirmed request whose
+	// service is not in [DialOptions.AllowedServices]. The request is not
+	// sent.
+	ErrServiceNotAllowed = errors.New("mms: service not allowed")
 )
 
 // Phases reported in [ProtocolError.Phase].

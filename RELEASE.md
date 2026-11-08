@@ -1,5 +1,20 @@
 # go-mms Releases
 
+## v1.5.0
+
+**Date:** 2026-11-08
+**Previous release:** v1.4.0
+
+### Added
+
+- **`DialOptions.AllowedServices`: an allow-list of confirmed services for a client.** A request for a service that is not listed is refused before it reaches the transport: nothing is sent, the association stays usable, and the call returns an error matching the new sentinel `ErrServiceNotAllowed` (the `Metrics` request event carries the same error). Nil (the default) allows every service, as before; an empty non-nil slice refuses every confirmed request. Initiate, Conclude and Abort are association control and are never refused. It makes a client read-only in the library rather than by convention in the caller; go-iec61850 passes it through `DialOptions.MMS`. Requested by otfabric/iec61850-explorer, which must not send a state-changing service in its default mode.
+
+### Tests
+
+- A client allowed only Read reads a variable, is refused Write and Identify without a byte reaching the transport or a write reaching the server, keeps the association, and reports both refusals as request events; an empty list refuses Read and still concludes; a nil list writes as before.
+
+---
+
 ## v1.4.0
 
 **Date:** 2026-11-04

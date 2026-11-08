@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -533,8 +534,14 @@ func (c *Client) StatusWithOptions(ctx context.Context, req ClientStatusRequest)
 // Every outcome is logged at Debug and reported to [Metrics].
 func (c *Client) sendConfirmed(ctx context.Context, invokeID codec.InvokeID, mmsPdu []byte) (*pdu.ConfirmedResponse, error) {
 	start := time.Now()
-	resp, err := c.doConfirmed(ctx, invokeID, mmsPdu)
 	svc := requestService(mmsPdu)
+	var resp *pdu.ConfirmedResponse
+	var err error
+	if c.serviceAllowed(svc) {
+		resp, err = c.doConfirmed(ctx, invokeID, mmsPdu)
+	} else {
+		err = fmt.Errorf("mms: %s refused by DialOptions.AllowedServices: %w", svc, ErrServiceNotAllowed)
+	}
 	elapsed := time.Since(start)
 	if err != nil {
 		c.logger.Debug("mms: request failed", "service", svc.String(), "invoke_id", invokeID, "duration", elapsed, "error", err)
@@ -543,6 +550,14 @@ func (c *Client) sendConfirmed(ctx context.Context, invokeID codec.InvokeID, mms
 	}
 	c.metricsSink().ObserveRequest(RequestEvent{Role: RoleClient, Service: svc, InvokeID: InvokeID(invokeID), Duration: elapsed, Err: err})
 	return resp, err
+}
+
+// serviceAllowed reports whether DialOptions.AllowedServices permits svc.
+func (c *Client) serviceAllowed(svc Service) bool {
+	if c.opts.AllowedServices == nil {
+		return true
+	}
+	return slices.Contains(c.opts.AllowedServices, svc)
 }
 
 // requestService returns the service of an encoded confirmed request PDU.

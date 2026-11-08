@@ -453,6 +453,7 @@ var (
     ErrFileAccessDenied     error  // FileProvider/JournalProvider permission error
     ErrServerClosed         error  // Serve/ListenAndServe after Server.Shutdown
     ErrInvalidArgument      error  // invalid caller argument; request not sent
+    ErrServiceNotAllowed    error  // service not in DialOptions.AllowedServices; request not sent
 )
 
 // ProtocolError.Phase values.
@@ -685,6 +686,7 @@ type DialOptions struct {
     RawHook   func(direction string, raw []byte) // direction: RawHookSend or RawHookRecv
     Metrics   Metrics       // nil → no metrics
     RequestTimeout time.Duration // > 0: default bound per confirmed request
+    AllowedServices []Service   // non-nil: only these confirmed services are sent
 }
 
 const (
@@ -696,6 +698,22 @@ const (
 `RequestTimeout` applies to every confirmed request whose context has no earlier
 deadline; on expiry the request fails with `ErrInvokeTimeout` and
 `context.DeadlineExceeded`. Zero means no default timeout.
+
+`AllowedServices`, when non-nil, is an allow-list of confirmed services. A
+request for any other service is refused before it reaches the transport:
+nothing is sent, the association stays usable, and the call (and its
+`Metrics` request event) returns an error matching `ErrServiceNotAllowed`.
+Nil allows every service; an empty non-nil slice refuses every confirmed
+request. Initiate, Conclude and Abort are association control and are never
+refused. A read-only client:
+
+```go
+opts := mms.DialOptions{AllowedServices: []mms.Service{
+    mms.ServiceIdentify, mms.ServiceStatus, mms.ServiceGetNameList,
+    mms.ServiceRead, mms.ServiceGetVariableAccessAttributes,
+    mms.ServiceGetNamedVariableListAttributes,
+}}
+```
 
 ### ISOOptions
 
