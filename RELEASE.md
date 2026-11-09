@@ -1,5 +1,25 @@
 # go-mms Releases
 
+## v1.7.0
+
+**Date:** 2026-11-09
+**Previous release:** v1.6.0
+
+### Changed
+
+- **Passive decoding names every MMS service.** `CapturedPDU.Service` gives the ISO 9506-2 name of every confirmed service ("Kill", "TakeControl", "GetDomainAttributes", ...), and `Service<n>` for a tag the standard does not define; before, services go-mms does not implement were named `Unknown`.
+- **A confirmed PDU whose envelope does not decode but whose invoke ID does** (such as a confirmed response without a service, which some stacks send in reply to a conclude) is returned by `DecodePDU` with its invoke ID, `Raw` and `DecodeError`, so that a trace can still pair it; before, it was an error.
+
+### Fixed
+
+- A GetVariableAccessAttributes response with the optional `address` [1] encoded primitive (`0x81`, as some servers send it) failed with "expected typeSpecification [2] (0xa2), got 0x81". The client and the passive decoder now skip it in either form.
+
+### Tests
+
+- Found by comparing go-mms-trace with Wireshark over public captures (ADSC Zeek MMS traces, ITI ICS-Security-Tools): the service names, the response without a service, and the primitive address.
+
+---
+
 ## v1.6.0
 
 **Date:** 2026-11-09

@@ -700,8 +700,9 @@ type CapturedPDU struct {
 	Kind        string
 	InvokeID    uint32
 	HasInvokeID bool
-	// Service names the confirmed service ("Read", "Write",
-	// "GetNameList", ...) or "InformationReport" for an unconfirmed PDU.
+	// Service names the confirmed service as ISO 9506-2 does ("Read",
+	// "Write", "GetNameList", "Kill", ...; "Service<n>" for a tag it does
+	// not define) or "InformationReport" for an unconfirmed PDU.
 	Service string
 
 	// Variables are the variables a Read or Write request names, or an
