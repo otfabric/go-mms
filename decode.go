@@ -65,8 +65,9 @@ type CapturedPDU struct {
 	Kind        string
 	InvokeID    uint32
 	HasInvokeID bool
-	// Service names the confirmed service ("Read", "Write",
-	// "GetNameList", ...) or "InformationReport" for an unconfirmed PDU.
+	// Service names the confirmed service as ISO 9506-2 does ("Read",
+	// "Write", "GetNameList", "Kill", ...; "Service<n>" for a tag it does
+	// not define) or "InformationReport" for an unconfirmed PDU.
 	Service string
 
 	// Variables are the variables a Read or Write request names, or an
@@ -137,6 +138,37 @@ type CapturedServiceError struct {
 // CapturedReject is a Reject PDU: the rejected PDU type and the reason.
 type CapturedReject struct {
 	Type, Reason int
+}
+
+// confirmedServices names the ConfirmedServiceRequest and
+// ConfirmedServiceResponse alternatives of ISO 9506-2 by their tag number,
+// as the MMS ASN.1 module names them (with an upper-case first letter).
+var confirmedServices = [...]string{
+	"Status", "GetNameList", "Identify", "Rename", "Read", "Write", "GetVariableAccessAttributes",
+	"DefineNamedVariable", "DefineScatteredAccess", "GetScatteredAccessAttributes", "DeleteVariableAccess",
+	"DefineNamedVariableList", "GetNamedVariableListAttributes", "DeleteNamedVariableList", "DefineNamedType",
+	"GetNamedTypeAttributes", "DeleteNamedType", "Input", "Output", "TakeControl", "RelinquishControl",
+	"DefineSemaphore", "DeleteSemaphore", "ReportSemaphoreStatus", "ReportPoolSemaphoreStatus",
+	"ReportSemaphoreEntryStatus", "InitiateDownloadSequence", "DownloadSegment", "TerminateDownloadSequence",
+	"InitiateUploadSequence", "UploadSegment", "TerminateUploadSequence", "RequestDomainDownload",
+	"RequestDomainUpload", "LoadDomainContent", "StoreDomainContent", "DeleteDomain", "GetDomainAttributes",
+	"CreateProgramInvocation", "DeleteProgramInvocation", "Start", "Stop", "Resume", "Reset", "Kill",
+	"GetProgramInvocationAttributes", "ObtainFile", "DefineEventCondition", "DeleteEventCondition",
+	"GetEventConditionAttributes", "ReportEventConditionStatus", "AlterEventConditionMonitoring", "TriggerEvent",
+	"DefineEventAction", "DeleteEventAction", "GetEventActionAttributes", "ReportEventActionStatus",
+	"DefineEventEnrollment", "DeleteEventEnrollment", "AlterEventEnrollment", "ReportEventEnrollmentStatus",
+	"GetEventEnrollmentAttributes", "AcknowledgeEventNotification", "GetAlarmSummary", "GetAlarmEnrollmentSummary",
+	"ReadJournal", "WriteJournal", "InitializeJournal", "ReportJournalStatus", "CreateJournal", "DeleteJournal",
+	"GetCapabilityList", "FileOpen", "FileRead", "FileClose", "FileRename", "FileDelete", "FileDirectory",
+}
+
+// serviceName is the name of a confirmed service tag, or "Service<n>" for
+// a tag ISO 9506-2 does not define (companion standards, extensions).
+func serviceName(tag int) string {
+	if tag >= 0 && tag < len(confirmedServices) {
+		return confirmedServices[tag]
+	}
+	return fmt.Sprintf("Service%d", tag)
 }
 
 var sessionKinds = map[session.SpduType]string{
@@ -227,23 +259,23 @@ func DecodePDU(b []byte) (*CapturedPDU, error) {
 	case pdu.PduConfirmedRequest:
 		id, svc, err := codec.UnmarshalConfirmedRequest(content)
 		if err != nil {
-			return nil, fmt.Errorf("mms: confirmed request: %w", err)
+			return out.envelopeFailed(content, "confirmed request", err)
 		}
 		out.InvokeID, out.HasInvokeID = id, true
-		out.Service = pdu.ClassifyServiceTag(svc.Tag).String()
+		out.Service = serviceName(svc.Tag)
 		out.decodeRequest(svc)
 	case pdu.PduConfirmedResponse:
 		resp, err := pdu.DecodeConfirmedResponse(content)
 		if err != nil {
-			return nil, fmt.Errorf("mms: confirmed response: %w", err)
+			return out.envelopeFailed(content, "confirmed response", err)
 		}
 		out.InvokeID, out.HasInvokeID = resp.InvokeID, true
-		out.Service = resp.ServiceKind.String()
+		out.Service = serviceName(resp.ServiceData.Tag)
 		out.decodeResponse(resp.ServiceKind, resp.ServiceData)
 	case pdu.PduConfirmedError:
 		e, err := pdu.DecodeConfirmedError(content)
 		if err != nil {
-			return nil, fmt.Errorf("mms: confirmed error: %w", err)
+			return out.envelopeFailed(content, "confirmed error", err)
 		}
 		out.InvokeID, out.HasInvokeID = e.InvokeID, true
 		out.Error = &CapturedServiceError{Class: e.ErrorClass, Code: e.ErrorCode}
@@ -281,6 +313,21 @@ func DecodePDU(b []byte) (*CapturedPDU, error) {
 		out.Raw = content
 	}
 	return out, nil
+}
+
+// envelopeFailed handles a confirmed PDU whose envelope does not decode:
+// when its invoke ID still does (a response without a service, as some
+// stacks send), the PDU is returned with the invoke ID, its content in Raw
+// and DecodeError, so that a trace can still pair it; otherwise it is an
+// error.
+func (p *CapturedPDU) envelopeFailed(content []byte, what string, err error) (*CapturedPDU, error) {
+	id, idErr := pdu.ExtractInvokeID(content)
+	if idErr != nil {
+		return nil, fmt.Errorf("mms: %s: %w", what, err)
+	}
+	p.InvokeID, p.HasInvokeID = id, true
+	p.fail(content, err)
+	return p, nil
 }
 
 func (p *CapturedPDU) fail(content []byte, err error) {

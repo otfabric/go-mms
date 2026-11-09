@@ -646,6 +646,11 @@ type CapturedPDU struct {
 }
 ```
 
+`Service` is the ISO 9506-2 name of the confirmed service for every tag the
+standard defines (`Service<n>` otherwise). A confirmed PDU whose envelope
+does not decode but whose invoke ID does is returned with the invoke ID,
+`Raw` and `DecodeError`, so that it can still be paired.
+
 Modelled services: Read, Write, GetNameList, Identify,
 GetVariableAccessAttributes, GetNamedVariableListAttributes (requests and
 responses), InformationReport, Initiate, confirmed errors and Reject. Every
