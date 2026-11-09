@@ -408,10 +408,18 @@ func (c *Client) conclude(ctx context.Context) error {
 	concludeReq := codec.MarshalConcludeRequest()
 	data := isostack.EncodeDataRequest(concludeReq)
 
+	// A request write stuck behind a peer that stopped reading holds
+	// sendMu. As in Abort, the transport is closed when ctx is done, which
+	// fails that write and releases the lock, so Close is bounded by ctx.
+	stop := context.AfterFunc(ctx, func() { _ = c.conn.Close() })
 	c.sendMu.Lock()
 	sendErr := c.sendRaw(ctx, data)
 	c.sendMu.Unlock()
+	stop()
 	if sendErr != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("mms: send conclude: %w", ctxErr)
+		}
 		return fmt.Errorf("mms: send conclude: %w", sendErr)
 	}
 
@@ -768,11 +776,16 @@ func (c *Client) readerExitErr() error {
 	return ErrClosed
 }
 
+// stopReader records why the reader loop is exiting, fails the pending
+// requests and closes the transport: with no reader the association can
+// never complete another request, and a write stalled on a peer that
+// stopped reading would otherwise hold sendMu for good.
 func (c *Client) stopReader(err error) {
 	c.mu.Lock()
 	c.readerErr = err
 	c.mu.Unlock()
 	c.tracker.CancelAll(err)
+	_ = c.conn.Close()
 }
 
 // checkPDUSize enforces the negotiated maximum on an MMS PDU. The limit
