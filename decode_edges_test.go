@@ -153,3 +153,27 @@ func TestDecodeTSDU_Layers(t *testing.T) {
 		t.Errorf("component = %+v", s)
 	}
 }
+
+// TestDecodePDU_Captured: shapes seen in public captures.
+func TestDecodePDU_Captured(t *testing.T) {
+	must := mustB(t)
+	// Every ISO 9506-2 service is named, an undefined tag is numbered.
+	for tag, want := range map[int]string{44: "Kill", 19: "TakeControl", 63: "GetAlarmSummary", 77: "FileDirectory", 200: "Service200"} {
+		p, err := DecodePDU(must(codec.MarshalConfirmedRequest(1, tag, true, []byte{0x80, 0x00})))
+		if err != nil || p.Service != want || len(p.Raw) == 0 {
+			t.Errorf("tag %d = %+v, %v", tag, p, err)
+		}
+	}
+	// A confirmed response without a service (sent by some stacks in reply
+	// to a conclude): its invoke ID is kept, with a decode error.
+	p, err := DecodePDU([]byte{0xa1, 0x03, 0x02, 0x01, 0x07})
+	if err != nil || !p.HasInvokeID || p.InvokeID != 7 || p.DecodeError == "" || p.Kind != "confirmed-response" {
+		t.Errorf("response without service = %+v, %v", p, err)
+	}
+	// A GetVariableAccessAttributes response with a primitive address [1].
+	resp := []byte{0x80, 0x01, 0x00, 0x81, 0x01, 0x05, 0xa2, 0x03, 0x83, 0x01, 0x00}
+	p, err = DecodePDU(must(codec.MarshalConfirmedResponse(2, asn1util.TagNumGetVariableAccessAttributes, true, resp)))
+	if err != nil || p.DecodeError != "" || p.TypeSpec == nil || p.TypeSpec.Type != ValueTypeBoolean {
+		t.Errorf("GetVAA with address = %+v, %v", p, err)
+	}
+}
