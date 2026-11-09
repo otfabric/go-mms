@@ -579,25 +579,26 @@ func encodeBinaryTime(msEpoch int64) []byte {
 // msPerDay bounds the milliseconds-since-midnight field of TimeOfDay.
 const msPerDay = 24 * 60 * 60 * 1000
 
-func decodeBinaryTime(data []byte) (int64, error) {
-	if len(data) == 4 || len(data) == 6 {
-		if ms := binary.BigEndian.Uint32(data[0:4]); ms >= msPerDay {
-			return 0, fmt.Errorf("binary time: %d ms since midnight exceeds one day", ms)
-		}
-	}
+func decodeBinaryTime(data []byte) (unixMilli int64, _ error) {
 	switch len(data) {
 	case 4:
-		ms := int64(binary.BigEndian.Uint32(data))
-		return ms, nil
+		break // no date
 	case 6:
-		msOfDay := int64(binary.BigEndian.Uint32(data[0:4]))
-		days := int64(binary.BigEndian.Uint16(data[4:6]))
-		t := epoch1984.AddDate(0, 0, int(days))
-		t = t.Add(time.Duration(msOfDay) * time.Millisecond)
-		return t.UnixMilli(), nil
+		days := int(binary.BigEndian.Uint16(data[4:6]))
+		// Won't overflow. Millisecond range exceeds 2^16 days.
+		unixMilli = epoch1984.AddDate(0, 0, days).UnixMilli()
 	default:
-		return 0, fmt.Errorf("binary time must be 4 or 6 bytes, got %d", len(data))
+		return 0, fmt.Errorf("TimeOfDay must be 4 or 6 bytes, got %d", len(data))
 	}
+
+	msOfDay := int64(binary.BigEndian.Uint32(data[0:4]))
+	// The four leading bits are required to be zero as per spec.
+	// More miliseconds than there are in a day is not prohibited.
+	if (0xf<<28)&msOfDay != 0 {
+		return 0, fmt.Errorf("leading bits from TimeOfDay must be zero, got %#b", data[0])
+	}
+
+	return unixMilli + msOfDay, nil
 }
 
 // ASN.1 REAL encoding (ITU-T X.690 §8.5).

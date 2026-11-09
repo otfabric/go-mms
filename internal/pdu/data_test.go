@@ -740,13 +740,29 @@ func TestMarshalData_NegativeDataAccessError(t *testing.T) {
 	}
 }
 
-func TestDecodeBinaryTime_RejectsOverlongDay(t *testing.T) {
-	for _, in := range [][]byte{
-		{0x05, 0x26, 0x5c, 0x00},             // 86400000 ms
-		{0x30, 0x30, 0x30, 0x30, 0xff, 0xff}, // 808464432 ms of day
-	} {
-		if _, err := decodeBinaryTime(in); err == nil {
-			t.Errorf("decodeBinaryTime(%x) accepted a time of day past midnight", in)
+func TestDecodeBinaryTime_MillisecondOfDayRange(t *testing.T) {
+	permitted := [][]byte{
+		{0x05, 0x26, 0x5c, 0x00}, // 86400000 ms (overflows one day)
+		{0x05, 0x26, 0x5c, 0x01},
+		{0x05, 0x26, 0x5c, 0x01, 0xff, 0xff}, // day count maxed
+	}
+	for _, data := range permitted {
+		_, err := decodeBinaryTime(data)
+		if err != nil {
+			t.Errorf("permitted encoding %#x got error: %s", data, err)
+		}
+	}
+
+	denied := [][]byte{
+		{0x10, 0x12, 0x34, 0x56},
+		{0x10, 0x12, 0x34, 0x56, 0x78, 0x90},
+		{0xf0, 0x12, 0x34, 0x56},
+		{0xf0, 0x12, 0x34, 0x56, 0x78, 0x90},
+	}
+	for _, data := range denied {
+		unixMili, err := decodeBinaryTime(data)
+		if err == nil {
+			t.Errorf("denied encoding %#x got %d, want an error", data, unixMili)
 		}
 	}
 }
