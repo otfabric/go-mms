@@ -1,5 +1,20 @@
 # go-mms Releases
 
+## v1.6.0
+
+**Date:** 2026-11-09
+**Previous release:** v1.5.0
+
+### Added
+
+- **Passive decoding of captured MMS traffic: `DecodeTSDU` and `DecodePDU`.** `DecodeTSDU` decodes one transport service data unit (the user data of the COTP data TPDUs of a TSDU, as `DialOptions.RawHook` sees it) through the session, presentation and ACSE layers to the MMS PDU; `DecodePDU` decodes an MMS PDU alone. The result names the session SPDU, the presentation PPDU, an ACSE APDU (an AARE's result; an AARQ's authentication mechanism, never its credentials) and the MMS PDU: kind, invoke ID, service, and for Read, Write, GetNameList, Identify, GetVariableAccessAttributes, GetNamedVariableListAttributes, InformationReport, Initiate, errors and Reject the decoded content with the public types (`ObjectName`, `AccessSelector`, `Value`, `TypeSpec`, `DataAccessError`). Other services keep their content in `Raw`. Nothing is sent and no state is kept. `ErrNotMMS` marks a unit that is not a session SPDU. Requested by the trace analysis of otfabric/iec61850-explorer (milestone M4).
+
+### Tests
+
+- Every unit of a real association, client and server in both directions, decodes: association, Identify, Read with and without alternate access, Write, GetNameList, GetVariableAccessAttributes, a named variable list defined and inspected, a refused file service, an InformationReport and the conclude (unit and e2e over TCP). Release and abort, an AARQ with a password (reported as `password`, not decoded), a rejecting AARE, list-name reads, index and range selectors, write failures, reject, cancel, unmodelled services, and malformed bodies of every modelled service. `FuzzDecodeTSDU` (8 million inputs locally, no failure). `decode.go` is fully covered.
+
+---
+
 ## v1.5.0
 
 **Date:** 2026-11-08
