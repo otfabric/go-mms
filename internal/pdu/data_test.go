@@ -740,29 +740,61 @@ func TestMarshalData_NegativeDataAccessError(t *testing.T) {
 	}
 }
 
+// TestDecodeBinaryTime_MillisecondOfDayRange covers a millisecond-of-day
+// field of one day or more. The 6-octet form carries it into the following
+// days and every accepted value re-encodes (encodeBinaryTimeChecked) to
+// the same instant; the 4-octet form, which has no date, and instants past
+// the last day of the 6-octet form are rejected.
 func TestDecodeBinaryTime_MillisecondOfDayRange(t *testing.T) {
-	permitted := [][]byte{
-		{0x05, 0x26, 0x5c, 0x00}, // 86400000 ms (overflows one day)
-		{0x05, 0x26, 0x5c, 0x01},
-		{0x05, 0x26, 0x5c, 0x01, 0xff, 0xff}, // day count maxed
+	day := func(d int) int64 { return epoch1984.AddDate(0, 0, d).UnixMilli() }
+	permitted := []struct {
+		data []byte
+		want int64
+	}{
+		{[]byte{0x05, 0x26, 0x5b, 0xff, 0x00, 0x00}, day(0) + msPerDay - 1},    // last ms of 1984-01-01
+		{[]byte{0x05, 0x26, 0x5c, 0x00, 0x00, 0x00}, day(1)},                   // 24 h on day 0 = day 1
+		{[]byte{0x05, 0x26, 0x5c, 0x01, 0x00, 0x10}, day(17) + 1},              // 24 h + 1 ms on day 16
+		{[]byte{0x10, 0x12, 0x34, 0x56, 0x30, 0x00}, day(0x3000) + 0x10123456}, // ~3.1 days carried
+		{[]byte{0xff, 0xff, 0xff, 0xff, 0x00, 0x00}, day(0) + 0xffffffff},      // field maxed (~49.7 days)
+		{[]byte{0x05, 0x26, 0x5b, 0xff, 0xff, 0xff}, binaryTimeMaxMs},          // last instant of the form
+		{[]byte{0x00, 0x00, 0x00, 0x00, 0xff, 0xfe}, day(0xfffe)},
+		{[]byte{0x05, 0x26, 0x5c, 0x00, 0xff, 0xfe}, day(0xffff)}, // carried onto the last day
+		{[]byte{0x05, 0x26, 0x5b, 0xff}, msPerDay - 1},            // 4-octet: last ms of the day
 	}
-	for _, data := range permitted {
-		_, err := decodeBinaryTime(data)
+	for _, tc := range permitted {
+		got, err := decodeBinaryTime(tc.data)
 		if err != nil {
-			t.Errorf("permitted encoding %#x got error: %s", data, err)
+			t.Errorf("decodeBinaryTime(%x): %v", tc.data, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("decodeBinaryTime(%x) = %d, want %d", tc.data, got, tc.want)
+		}
+		enc, err := encodeBinaryTimeChecked(got)
+		if err != nil {
+			t.Errorf("decodeBinaryTime(%x) = %d does not re-encode: %v", tc.data, got, err)
+			continue
+		}
+		if back, err := decodeBinaryTime(enc); err != nil || back != got {
+			t.Errorf("re-encoded %x decodes to %d, %v; want %d", enc, back, err, got)
 		}
 	}
 
 	denied := [][]byte{
-		{0x10, 0x12, 0x34, 0x56},
-		{0x10, 0x12, 0x34, 0x56, 0x78, 0x90},
-		{0xf0, 0x12, 0x34, 0x56},
-		{0xf0, 0x12, 0x34, 0x56, 0x78, 0x90},
+		{0x05, 0x26, 0x5c, 0x00},             // 4-octet: 24 h has no date to carry into
+		{0x10, 0x12, 0x34, 0x56},             // 4-octet: ~3.1 days
+		{0xf0, 0x12, 0x34, 0x56},             // 4-octet: field near 2^32
+		{0x05, 0x26, 0x5c, 0x00, 0xff, 0xff}, // 24 h on the last day: 2163-06-06
+		{0x05, 0x26, 0x5c, 0x01, 0xff, 0xff}, // past the last day
+		{0xff, 0xff, 0xff, 0xff, 0xff, 0xf0}, // ~49.7 days carried past the last day
+		{},
+		{0x00, 0x00, 0x00},
+		{0x00, 0x00, 0x00, 0x00, 0x00},
+		{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
 	}
 	for _, data := range denied {
-		unixMili, err := decodeBinaryTime(data)
-		if err == nil {
-			t.Errorf("denied encoding %#x got %d, want an error", data, unixMili)
+		if got, err := decodeBinaryTime(data); err == nil {
+			t.Errorf("decodeBinaryTime(%x) = %d, want an error", data, got)
 		}
 	}
 }

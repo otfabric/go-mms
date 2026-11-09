@@ -1,5 +1,24 @@
 # go-mms Releases
 
+## v1.5.1
+
+**Date:** 2026-11-09
+**Previous release:** v1.5.0
+
+TimeOfDay decoding tolerates a millisecond-of-day field of one day or more in the 6-octet form, as the peer stacks do (otfabric/go-mms#30, @pascaldekloe).
+
+### Changed
+
+- **A 6-octet TimeOfDay (BinaryTime) with a millisecond-of-day field ≥ 86 400 000 is accepted** and carried into the following days, instead of failing the whole PDU. libiec61850, Wireshark, dscsystems/go-iec61850 and iec61850-rust all read it that way. The decoded instant is the same as the canonical encoding's, so the value re-encodes; go-mms itself still always sends the canonical form (millisecond field below one day). Applies to Data values and to journal times.
+- Still rejected: the 4-octet form with a field ≥ 86 400 000 (it carries no date to carry into), and a 6-octet value whose carried instant falls after 2163-06-05, the last day the form can represent. Both would decode to a value go-mms cannot send back.
+
+### Tests
+
+- Unit table of carried and rejected encodings, each accepted one checked to re-encode to the same instant; three FuzzValueCodec regression inputs (4-octet one day, 6-octet carried day, 6-octet past the last day).
+- e2e over TCP: a client reads a TimeOfDay rewritten in transit to the carried form, gets the same instant and writes it back; a carried instant past 2163-06-05 fails with `ErrDecodeFailed` and the association stays usable.
+
+---
+
 ## v1.5.0
 
 **Date:** 2026-11-08

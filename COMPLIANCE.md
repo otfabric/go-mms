@@ -61,7 +61,7 @@
 | OctetString      | ✅ | ✅ | ✅ | ✅ | `0x89` [9]  | Raw bytes |
 | VisibleString    | ✅ | ✅ | ✅ | ✅ | `0x8a` [10] | VisibleString |
 | GeneralizedTime  | ✅ | ✅ | ✅ | ✅ | `0x8b` [11] | ASN.1 GeneralizedTime |
-| BinaryTime       | ✅ | ✅ | ✅ | ✅ | `0x8c` [12] | MMS TimeOfDay: 4-octet form (ms since midnight) for values 0–86399999, 6-octet dated form otherwise; ms-of-day ≥ 86400000 rejected on decode |
+| BinaryTime       | ✅ | ✅ | ✅ | ✅ | `0x8c` [12] | MMS TimeOfDay: 4-octet form (ms since midnight) for values 0–86399999, 6-octet dated form otherwise; a 6-octet ms-of-day ≥ 86400000 is carried into the following days on decode (as libiec61850, Wireshark, dscsystems and iec61850-rust read it) unless the instant falls after 2163-06-05; a 4-octet ms-of-day ≥ 86400000 is rejected |
 | BCD              | ✅ | ✅ | ✅ | ✅ | `0x8d` [13] | Binary-coded decimal |
 | BooleanArray     | ✅ | ✅ | ✅ | ✅ | `0x8e` [14] | Packed booleans using BIT STRING encoding |
 | ObjectIdentifier | ✅ | ✅ | ✅ | ✅ | `0x8f` [15] | ASN.1 OBJECT IDENTIFIER |
