@@ -10,12 +10,12 @@ This document describes how go-mms handles context cancellation, timeouts, and c
 
 1. Marks client as closed (idempotent — second call returns nil)
 2. Cancels all pending requests via `tracker.CancelAll(ErrClosed)`
-3. Sends a ConcludeRequest and waits for ConcludeResponse (or `ctx` done)
+3. Sends a ConcludeRequest and waits for ConcludeResponse (or `ctx` done). The send is bounded by `ctx`: when `ctx` is done the transport is closed, which fails a request write stuck behind a peer that stopped reading and releases the write lock
 4. Cancels the reader loop
 5. Waits for the reader loop to exit
 6. Closes the transport
 
-If `ctx` ends during conclude, the shutdown still completes — the conclude is abandoned, the transport is closed, and `Close` returns the conclude error.
+If `ctx` ends during conclude, the shutdown still completes — the conclude is abandoned, the transport is closed, and `Close` returns the conclude error (matching the context error).
 
 ### Abort
 
@@ -35,7 +35,7 @@ Both `Close` and `Abort` are safe to call multiple times, including concurrently
 
 ### Detecting the end of an association
 
-`Client.Done()` returns a channel closed when the association has ended: after `Close` or `Abort`, when the peer concludes, releases or aborts, or when the connection is lost or fails to decode. `Client.Err()` returns nil while the association is up and afterwards the reason it ended (always matching `ErrClosed`). Pending and later requests fail with an error matching `ErrClosed`.
+`Client.Done()` returns a channel closed when the association has ended: after `Close` or `Abort`, when the peer concludes, releases or aborts, or when the connection is lost or fails to decode. `Client.Err()` returns nil while the association is up and afterwards the reason it ended (always matching `ErrClosed`). Pending and later requests fail with an error matching `ErrClosed`. When the reader stops on its own (connection lost, undecodable or oversized PDU, peer release) it also closes the transport, so a write stalled on the dead connection fails and `Close` does not wait for its context.
 
 Reconnecting is left to the caller; `mms.Retry` with a `RetryPolicy` (or `iso.WithRetry` on `iso.Dial`) provides backoff with jitter. See the `Retry` doc comment for a reconnect loop.
 
@@ -134,6 +134,8 @@ After `Shutdown`, `Serve` and `ListenAndServe` return `ErrServerClosed`. `Shutdo
 | Double Close (concurrent) | `TestDoubleCloseConcurrent` | No deadlock, no panic |
 | Close with timeout | `TestCloseWithTimeout` | Conclude timeout handled gracefully |
 | Close already closed | `TestCloseAlreadyClosed` | Returns nil |
+| Close while a request write is stalled | `TestCloseBoundedByContextWhileWriteStalled` | Returns `context.DeadlineExceeded` when `ctx` ends; transport closed |
+| Reader stops on an undecodable PDU while a write is stalled | `TestReaderExitClosesTransport` | Transport closed at once; `Err` matches `ErrDecodeFailed`; `Close` returns promptly |
 | Abort already closed | `TestClientAbort` | Returns nil |
 | Peer goes away | `TestClient_Done_Err_Reconnect`, `TestClient_PeerDisconnect` (interop) | `Done` closed, `Err` matches `ErrClosed`, reconnect succeeds |
 | Request timeout | `TestClient_RequestTimeout`, `TestClient_RequestTimeout_Loopback` | `ErrInvokeTimeout` + `context.DeadlineExceeded`; association stays up |

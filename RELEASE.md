@@ -1,5 +1,21 @@
 # go-mms Releases
 
+## v1.6.1
+
+**Date:** 2026-11-09
+**Previous release:** v1.6.0
+
+### Fixed
+
+- **`Client.Close` is bounded by its context while a request write is stalled.** A request write to a peer that stopped reading holds the write lock, and the ConcludeRequest of `Close` waited for that lock without regard to `ctx`, so `Close` could block until the connection failed. As `Abort` already did, `Close` now closes the transport when `ctx` is done, which fails the stalled write; it returns an error matching the context error. Found by the byte-fault chaos test of go-iec61850 (`DialOptions.Dialer`, otfabric/go-iec61850#59).
+- **The client closes its transport when the reader loop stops on its own** (connection lost, undecodable or oversized PDU, peer release). The association could not complete another request, but the connection stayed open, so a stalled write kept the write lock; now it fails at once, and `Close` returns without waiting for its context.
+
+### Tests
+
+- `TestCloseBoundedByContextWhileWriteStalled` and `TestReaderExitClosesTransport` use a transport whose writes block until it is closed; both failed before the fix. The in-memory loopback transport of the tests no longer closes its send channel, so `Close` may run concurrently with `Send` as on a real connection.
+
+---
+
 ## v1.6.0
 
 **Date:** 2026-11-09
