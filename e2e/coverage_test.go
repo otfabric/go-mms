@@ -81,6 +81,8 @@ var apiCoverage = map[string][]string{
 
 	"DefaultRetryPolicy":    {"TestClient_Done_Err_Reconnect"},
 	"IsRetryable":           {"TestClient_Done_Err_Reconnect"},
+	"DecodePDU":             {"TestDecode_CapturedAssociation"},
+	"DecodeTSDU":            {"TestDecode_CapturedAssociation"},
 	"NewClient":             {"TestClient_NewClient"},
 	"Retry":                 {"TestClient_Done_Err_Reconnect"},
 	"NewDataAccessError":    {"TestValues_DataAccessError"},

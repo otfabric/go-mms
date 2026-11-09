@@ -58,6 +58,7 @@ original chain (transport errors, `context` errors, typed errors):
 | `ErrServerClosed` | `Server.Serve` and `Server.ListenAndServe` after `Server.Shutdown` | `errors.Is(err, mms.ErrServerClosed)` |
 | `ErrInvalidArgument` | A caller-supplied argument or option is invalid (empty names, nil values, mismatched slices, values that cannot be encoded, bad selectors); the request is not sent | `errors.Is(err, mms.ErrInvalidArgument)` |
 | `ErrServiceNotAllowed` | A client request for a confirmed service that `DialOptions.AllowedServices` does not list; the request is not sent and the association stays usable | `errors.Is(err, mms.ErrServiceNotAllowed)` |
+| `ErrNotMMS` | `DecodeTSDU` was given a unit that is not a session SPDU (passive decoding of a capture) | `errors.Is(err, mms.ErrNotMMS)` |
 
 Timeouts and cancellation also match the standard `context.DeadlineExceeded`
 and `context.Canceled`.
