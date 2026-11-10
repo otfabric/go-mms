@@ -264,13 +264,14 @@ func TestParseABRTMissingSource(t *testing.T) {
 	}
 }
 
-func TestParseRLRQBadField(t *testing.T) {
-	// RLRQ with unexpected field tag
-	inner := []byte{0xA1, 0x01, 0x00} // [1] instead of [0]
+// ISO 8650-1: RLRQ-apdu elements other than reason are optional
+// extensions; an unknown element is skipped, not an error (MMS-STK-16).
+func TestParseRLRQUnknownField(t *testing.T) {
+	inner := []byte{0xA1, 0x01, 0x00}
 	rlrq := append([]byte{TagRLRQ, byte(len(inner))}, inner...)
-	_, err := Parse(rlrq)
-	if err == nil {
-		t.Error("expected error for RLRQ with unexpected field tag")
+	p, err := Parse(rlrq)
+	if err != nil || p.Reason != -1 {
+		t.Fatalf("RLRQ with unknown field: %+v %v", p, err)
 	}
 }
 
