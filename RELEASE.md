@@ -2,20 +2,21 @@
 
 ## v1.5.1
 
-**Date:** 2026-11-09
+**Date:** 2026-11-10
 **Previous release:** v1.5.0
 
-TimeOfDay decoding tolerates a millisecond-of-day field of one day or more in the 6-octet form, as the peer stacks do (otfabric/go-mms#30, @pascaldekloe).
+TimeOfDay follows the 28-bit millisecond field of ISO 9506-2:2003 §7.5.1: a field of one day or more is accepted in both forms and can be sent, and bits 28 through 31 must be zero (otfabric/go-mms#30, @pascaldekloe).
 
 ### Changed
 
-- **A 6-octet TimeOfDay (BinaryTime) with a millisecond-of-day field ≥ 86 400 000 is accepted** and carried into the following days, instead of failing the whole PDU. libiec61850, Wireshark, dscsystems/go-iec61850 and iec61850-rust all read it that way. The decoded instant is the same as the canonical encoding's, so the value re-encodes; go-mms itself still always sends the canonical form (millisecond field below one day). Applies to Data values and to journal times.
-- Still rejected: the 4-octet form with a field ≥ 86 400 000 (it carries no date to carry into), and a 6-octet value whose carried instant falls after 2163-06-05, the last day the form can represent. Both would decode to a value go-mms cannot send back.
+- **A TimeOfDay (BinaryTime) millisecond field of one day or more is accepted** instead of failing the whole PDU. §7.5.1 only requires bits 28–31 to be zero. In the 4-octet form the value is the field itself (up to 2^28−1 ms, about 3.1 days), so a deadline past midnight survives; in the 6-octet form the field carries into the following days. Applies to Data values and to journal times.
+- **`NewBinaryTime` encodes more values.** 0 to 2^28−1 go out in the 4-octet form (previously only below one day). Instants after 2163-06-05, up to 2^28−1 ms after its start, go out on that last day with the remainder in the millisecond field (previously an error). Every value go-mms decodes can be sent back in the form it came in.
+- A received millisecond field with bits 28–31 set is rejected, as §7.5.1 requires. Such values were already rejected before, since they exceed one day.
 
 ### Tests
 
-- Unit table of carried and rejected encodings, each accepted one checked to re-encode to the same instant; three FuzzValueCodec regression inputs (4-octet one day, 6-octet carried day, 6-octet past the last day).
-- e2e over TCP: a client reads a TimeOfDay rewritten in transit to the carried form, gets the same instant and writes it back; a carried instant past 2163-06-05 fails with `ErrDecodeFailed` and the association stays usable.
+- Unit table of accepted and rejected encodings in both forms, each accepted one checked to re-encode to the same value and length; FuzzValueCodec regression inputs for both forms, the last instant of the 6-octet form and a set leading bit.
+- e2e over TCP: a TimeOfDay rewritten in transit to the carried form reads as the same instant and writes back; one with bit 28 set fails with `ErrDecodeFailed` and the association stays usable; a 4-octet deadline past midnight and 6-octet instants after 2163-06-05 write and read back unchanged.
 
 ---
 

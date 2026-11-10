@@ -527,39 +527,60 @@ func decodeUTCTime(data []byte) (time.Time, uint8, error) {
 
 // BinaryTime encoding:
 //
-// Decoder accepts both forms:
-//   - 4-byte form: ms since midnight (big-endian uint32), no date info
-//   - 6-byte form: 4 bytes ms since midnight + 2 bytes days since 1984-01-01
+// TimeOfDay (ISO 9506-2:2003 §7.5.1) is four octets of milliseconds since
+// midnight, optionally followed by two octets of days since 1984-01-01.
+// "Bits twenty-eight through thirty-one shall always be set to zero", so
+// the millisecond field is 28 bits wide; nothing limits it to one day.
 //
-// Encoder emits the 4-byte form for values below one day and the 6-byte
-// form, with a millisecond field below one day, for everything else.
+// go-mms represents the 4-octet form as the millisecond field itself,
+// 0..2^28-1, and the 6-octet form as milliseconds since the Unix epoch,
+// from 1984-01-01 on. The two ranges do not overlap, so the encoder picks
+// the form from the value and every decoded value is sent back in the
+// form it came in.
 
 var epoch1984 = time.Date(1984, 1, 1, 0, 0, 0, 0, time.UTC)
 
-// binaryTimeRange is the span the 6-byte form can carry: uint16 days
-// since 1984-01-01.
-var (
-	binaryTimeMinMs = epoch1984.UnixMilli()
-	binaryTimeMaxMs = epoch1984.AddDate(0, 0, 0xffff+1).UnixMilli() - 1
+const (
+	// msPerDay is the length of the canonical millisecond field.
+	msPerDay = 24 * 60 * 60 * 1000
+	// timeOfDayMsMax is the largest millisecond field §7.5.1 permits.
+	timeOfDayMsMax = 1<<28 - 1
 )
 
-// encodeBinaryTimeChecked encodes msEpoch (ms since the Unix epoch) as
-// TimeOfDay, rejecting instants the 6-byte form cannot represent.
-//
-// Values in [0, msPerDay) are encoded in the 4-octet form (milliseconds
-// since midnight, no date), which is what decodeBinaryTime returns for a
-// 4-octet value, so either form received from a peer can be sent back.
+var (
+	// binaryTimeMinMs and binaryTimeMaxMs span the 6-octet form with a
+	// millisecond field below one day: uint16 days since 1984-01-01.
+	binaryTimeMinMs = epoch1984.UnixMilli()
+	binaryTimeMaxMs = epoch1984.AddDate(0, 0, 0xffff+1).UnixMilli() - 1
+	// binaryTimeLastDayMs is the start of the last day, 2163-06-05.
+	// Instants after binaryTimeMaxMs go out on that day with the
+	// millisecond field above one day, up to binaryTimeOverflowMaxMs.
+	binaryTimeLastDayMs     = epoch1984.AddDate(0, 0, 0xffff).UnixMilli()
+	binaryTimeOverflowMaxMs = binaryTimeLastDayMs + timeOfDayMsMax
+)
+
+// encodeBinaryTimeChecked encodes msEpoch as TimeOfDay. Values in
+// [0, 2^28) are the 4-octet form's millisecond field. Instants from
+// 1984-01-01 through 2163-06-05 use the 6-octet form with the field below
+// one day; later instants, up to 2^28-1 ms after the start of 2163-06-05,
+// keep the last day and carry the remainder in the field. Anything else
+// fails rather than wrapping.
 func encodeBinaryTimeChecked(msEpoch int64) ([]byte, error) {
-	if msEpoch >= 0 && msEpoch < msPerDay {
+	switch {
+	case msEpoch >= 0 && msEpoch <= timeOfDayMsMax:
 		buf := make([]byte, 4)
 		binary.BigEndian.PutUint32(buf, uint32(msEpoch))
 		return buf, nil
+	case msEpoch >= binaryTimeMinMs && msEpoch <= binaryTimeMaxMs:
+		return encodeBinaryTime(msEpoch), nil
+	case msEpoch > binaryTimeMaxMs && msEpoch <= binaryTimeOverflowMaxMs:
+		buf := make([]byte, 6)
+		binary.BigEndian.PutUint32(buf[0:4], uint32(msEpoch-binaryTimeLastDayMs))
+		binary.BigEndian.PutUint16(buf[4:6], 0xffff)
+		return buf, nil
 	}
-	if msEpoch < binaryTimeMinMs || msEpoch > binaryTimeMaxMs {
-		return nil, fmt.Errorf("pdu: binary time %s outside 1984-01-01..2163-06-05 (and not a 4-octet time of day)",
-			time.UnixMilli(msEpoch).UTC().Format(time.RFC3339))
-	}
-	return encodeBinaryTime(msEpoch), nil
+	return nil, fmt.Errorf("pdu: binary time %s outside 1984-01-01..%s (and not a 4-octet time of day below 2^28 ms)",
+		time.UnixMilli(msEpoch).UTC().Format(time.RFC3339), time.UnixMilli(binaryTimeOverflowMaxMs).UTC().Format(time.RFC3339Nano))
 }
 
 func encodeBinaryTime(msEpoch int64) []byte {
@@ -576,40 +597,24 @@ func encodeBinaryTime(msEpoch int64) []byte {
 	return buf
 }
 
-// msPerDay bounds the milliseconds-since-midnight field of TimeOfDay.
-const msPerDay = 24 * 60 * 60 * 1000
-
-// decodeBinaryTime decodes a TimeOfDay: four octets of milliseconds since
-// midnight, optionally followed by two octets of days since 1984-01-01.
-// It returns milliseconds since midnight for the 4-octet form and
-// milliseconds since the Unix epoch for the 6-octet form, the two ranges
-// encodeBinaryTimeChecked accepts, so every decoded value can be sent back.
-//
-// In the 6-octet form a millisecond field of one day or more is tolerated
-// and carried into the following days, as libiec61850, Wireshark,
-// dscsystems/go-iec61850 and iec61850-rust read it; the resulting instant
-// must still lie on or before the last day the form can carry. The
-// 4-octet form has no date to carry into, so its field stays below one day.
+// decodeBinaryTime decodes a TimeOfDay (ISO 9506-2:2003 §7.5.1). It
+// returns the millisecond field for the 4-octet form and milliseconds
+// since the Unix epoch for the 6-octet form, where a field of one day or
+// more carries into the following days. Bits 28 through 31 of the field
+// must be zero.
 func decodeBinaryTime(data []byte) (int64, error) {
 	if len(data) != 4 && len(data) != 6 {
 		return 0, fmt.Errorf("TimeOfDay must be 4 or 6 bytes, got %d", len(data))
 	}
 	msOfDay := int64(binary.BigEndian.Uint32(data[0:4]))
+	if msOfDay > timeOfDayMsMax {
+		return 0, fmt.Errorf("TimeOfDay: bits 28 through 31 must be zero (ISO 9506-2 §7.5.1), got %#08x", msOfDay)
+	}
 	if len(data) == 4 {
-		if msOfDay >= msPerDay {
-			return 0, fmt.Errorf("TimeOfDay: %d ms since midnight exceeds one day in the 4-octet form, which carries no date", msOfDay)
-		}
 		return msOfDay, nil
 	}
-
 	days := int(binary.BigEndian.Uint16(data[4:6]))
-	// No overflow: 2^16 days plus 2^32 ms is far inside int64 milliseconds.
-	unixMilli := epoch1984.AddDate(0, 0, days).UnixMilli() + msOfDay
-	if unixMilli > binaryTimeMaxMs {
-		return 0, fmt.Errorf("TimeOfDay: %s is past 2163-06-05, the last day the 6-octet form carries",
-			time.UnixMilli(unixMilli).UTC().Format(time.RFC3339Nano))
-	}
-	return unixMilli, nil
+	return epoch1984.AddDate(0, 0, days).UnixMilli() + msOfDay, nil
 }
 
 // ASN.1 REAL encoding (ITU-T X.690 §8.5).

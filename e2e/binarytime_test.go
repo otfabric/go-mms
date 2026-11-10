@@ -108,16 +108,17 @@ func TestClient_BinaryTimeCarriedMillisecondOfDay(t *testing.T) {
 	mustEqual(t, "written back", m.get(dom+"/NewBinaryTime"), mms.NewBinaryTime(want))
 }
 
-// TestClient_BinaryTimePastLastDay reads a 6-octet TimeOfDay whose carried
-// millisecond field lands after 2163-06-05, the last day the form can
-// carry: the client reports a decode failure and the association stays
-// usable.
-func TestClient_BinaryTimePastLastDay(t *testing.T) {
+// TestClient_BinaryTimeLeadingBitsSet reads a 6-octet TimeOfDay whose
+// millisecond field has bit 28 set, which ISO 9506-2:2003 §7.5.1 requires
+// to be zero: the client reports a decode failure and the association
+// stays usable.
+func TestClient_BinaryTimeLeadingBitsSet(t *testing.T) {
 	m := startModel(t)
 	canonical := canonicalTimeOfDay6(t0.UnixMilli() + 123)
-	pastLast := timeOfDay6(24*60*60*1000, 0xffff)
+	days := binary.BigEndian.Uint16(canonical[6:8])
+	bad := timeOfDay6(1<<28, days)
 
-	c, hits := dialRewriting(t, m.addr, canonical, pastLast)
+	c, hits := dialRewriting(t, m.addr, canonical, bad)
 	ctx := timeout(t)
 	_, err := c.Read(ctx, mms.ReadRequest{DomainID: dom, ItemID: "NewBinaryTime"})
 	if hits.Load() == 0 {
@@ -128,5 +129,34 @@ func TestClient_BinaryTimePastLastDay(t *testing.T) {
 	}
 	if _, err := c.Read(ctx, mms.ReadRequest{DomainID: dom, ItemID: "NewInteger"}); err != nil {
 		t.Fatalf("Read after the decode failure: %v", err)
+	}
+}
+
+// TestClientServer_BinaryTimeMillisecondFieldOverflow writes and reads
+// back TimeOfDay values whose millisecond field is one day or more: a
+// 4-octet deadline past midnight and a 6-octet instant after 2163-06-05,
+// which goes out on the last day with the remainder in the field.
+func TestClientServer_BinaryTimeMillisecondFieldOverflow(t *testing.T) {
+	m := startModel(t)
+	c := dial(t, m.addr)
+	ctx := timeout(t)
+	lastDay := epoch1984.AddDate(0, 0, 0xffff)
+	for _, ms := range []int64{
+		24*60*60*1000 + 90_000,                  // 4-octet: 00:01:30 tomorrow
+		1<<28 - 1,                               // 4-octet: field maxed
+		lastDay.Add(36 * time.Hour).UnixMilli(), // 6-octet: 2163-06-06T12:00Z
+		lastDay.UnixMilli() + 1<<28 - 1,         // 6-octet: last instant of the form
+	} {
+		if _, err := c.Write(ctx, mms.WriteRequest{DomainID: dom, ItemID: "NewBinaryTime", Value: mms.NewBinaryTime(ms)}); err != nil {
+			t.Fatalf("Write %d: %v", ms, err)
+		}
+		mustEqual(t, "written", m.get(dom+"/NewBinaryTime"), mms.NewBinaryTime(ms))
+		got, err := c.Read(ctx, mms.ReadRequest{DomainID: dom, ItemID: "NewBinaryTime"})
+		if err != nil {
+			t.Fatalf("Read %d: %v", ms, err)
+		}
+		if back, ok := got.Value.BinaryTime(); !ok || back != ms {
+			t.Fatalf("Read back = %d, %v; want %d", back, ok, ms)
+		}
 	}
 }
