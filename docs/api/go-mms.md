@@ -290,6 +290,12 @@ var ErrFileAccessDenied = errors.New("mms: file access denied")
 
 ErrFileAccessDenied may be returned by [FileProvider](#type-fileprovider) implementations to signal a permission error. The server maps it to MMS error class "file", code "file-access-denied".
 
+```go
+var ErrNotMMS = errors.New("mms: not an MMS session unit")
+```
+
+ErrNotMMS is returned by [DecodeTSDU](#func-decodetsdu) for a unit that does not decode as the session layer of an MMS association.
+
 ## Functions
 
 ### func IsRetryable
@@ -599,6 +605,177 @@ Example authenticator for AP-title policy:
 	    }
 	    return mms.AuthResult{Accept: true}, nil
 	}
+
+### type Captured
+
+```go
+type Captured struct {
+	// Session is the session SPDU: "connect", "accept", "refuse",
+	// "finish", "disconnect", "abort" or "data".
+	Session string
+	// Presentation is the presentation PPDU: "CP", "CPA", "user-data",
+	// or "" when the SPDU carries none (or one this decoder does not
+	// model, such as an abort PPDU).
+	Presentation string
+	// ACSE is set for an association control APDU (AARQ, AARE, RLRQ,
+	// RLRE, ABRT).
+	ACSE *CapturedACSE
+	// PDU is the MMS PDU, when the unit carries one.
+	PDU *CapturedPDU
+}
+```
+
+Captured is one decoded transport service data unit of an MMS association.
+
+#### func DecodeTSDU
+
+```go
+func DecodeTSDU(b []byte) (*Captured, error)
+```
+
+DecodeTSDU decodes a transport service data unit of an MMS association. It fails with an error wrapping ErrNotMMS when the unit is not a session SPDU, and returns what it decoded with the error of the first layer above that does not decode.
+
+### type CapturedACSE
+
+```go
+type CapturedACSE struct {
+	// Kind is "AARQ", "AARE", "RLRQ", "RLRE" or "ABRT".
+	Kind string
+	// Result of an AARE: 0 accepted, 1 rejected (permanent), 2 rejected
+	// (transient); nil for other APDUs.
+	Result *int
+	// Authentication of an AARQ: "none", "password" or "other".
+	Authentication string
+}
+```
+
+CapturedACSE is an association control APDU. Credentials are never decoded: only whether and how the association request authenticates.
+
+### type CapturedIdentify
+
+```go
+type CapturedIdentify struct {
+	Vendor, Model, Revision string
+}
+```
+
+CapturedIdentify is an Identify response.
+
+### type CapturedInitiate
+
+```go
+type CapturedInitiate struct {
+	LocalDetail                  int
+	MaxServicesOutstandingCall   int
+	MaxServicesOutstandingCalled int
+	DataStructureNesting         int
+	Version                      int
+}
+```
+
+CapturedInitiate holds the parameters of an Initiate request or response.
+
+### type CapturedNameListRequest
+
+```go
+type CapturedNameListRequest struct {
+	ObjectClass   int
+	Scope         ObjectScope
+	Domain        string
+	ContinueAfter string
+}
+```
+
+CapturedNameListRequest is a GetNameList request.
+
+### type CapturedPDU
+
+```go
+type CapturedPDU struct {
+	// Kind is one of the PDU kinds: "confirmed-request",
+	// "confirmed-response", "confirmed-error", "unconfirmed", "reject",
+	// "initiate-request", "initiate-response", "initiate-error",
+	// "conclude-request", "conclude-response", "conclude-error",
+	// "cancel-request", "cancel-response", "cancel-error".
+	Kind        string
+	InvokeID    uint32
+	HasInvokeID bool
+	// Service names the confirmed service as ISO 9506-2 does ("Read",
+	// "Write", "GetNameList", "Kill", ...; "Service<n>" for a tag it does
+	// not define) or "InformationReport" for an unconfirmed PDU.
+	Service string
+
+	// Variables are the variables a Read or Write request names, or an
+	// InformationReport carries; ListName is the named variable list
+	// they name instead.
+	Variables []CapturedVariable
+	ListName  *ObjectName
+	// Values are a Read response's results, a Write request's data or an
+	// InformationReport's access results, in order. A failed result is a
+	// value of type ValueTypeDataAccessError.
+	Values []*Value
+	// WriteResults are a Write response's results, in order: nil for
+	// success, the data access error otherwise.
+	WriteResults []*DataAccessError
+
+	NameListRequest  *CapturedNameListRequest
+	NameList         []string
+	NameListMore     bool
+	Identify         *CapturedIdentify
+	VariableName     *ObjectName // GetVariableAccessAttributes request
+	TypeSpec         *TypeSpec   // GetVariableAccessAttributes response
+	Initiate         *CapturedInitiate
+	Error            *CapturedServiceError
+	Reject           *CapturedReject
+	NamedListMembers []CapturedVariable // GetNamedVariableListAttributes response
+
+	// Raw is the service content of a service this decoder does not
+	// model, and DecodeError why a modelled service did not decode.
+	Raw         []byte
+	DecodeError string
+}
+```
+
+CapturedPDU is an MMS PDU. Kind and the invoke ID identify it; the service fields are set for the services this decoder models, and Raw holds the service content of the others.
+
+#### func DecodePDU
+
+```go
+func DecodePDU(b []byte) (*CapturedPDU, error)
+```
+
+DecodePDU decodes an MMS PDU. A service it models but cannot decode sets DecodeError and keeps the content in Raw; only a PDU whose outer structure does not decode is an error.
+
+### type CapturedReject
+
+```go
+type CapturedReject struct {
+	Type, Reason int
+}
+```
+
+CapturedReject is a Reject PDU: the rejected PDU type and the reason.
+
+### type CapturedServiceError
+
+```go
+type CapturedServiceError struct {
+	Class, Code int
+}
+```
+
+CapturedServiceError is a confirmed (or initiate, conclude, cancel) error: the error class and code of ISO 9506-2.
+
+### type CapturedVariable
+
+```go
+type CapturedVariable struct {
+	Name   ObjectName
+	Access []AccessSelector
+}
+```
+
+CapturedVariable is a variable a PDU names, with its alternate access.
 
 ### type Client
 

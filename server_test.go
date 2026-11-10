@@ -26,43 +26,61 @@ func loopbackPair() (client, server Transport) {
 	s2c := make(chan []byte, 16)
 	cl := &chanTransport{send: c2s, recv: s2c, done: make(chan struct{})}
 	sr := &chanTransport{send: s2c, recv: c2s, done: make(chan struct{})}
+	cl.peerDone, sr.peerDone = sr.done, cl.done
 	return cl, sr
 }
 
+// chanTransport is one end of a loopbackPair. Close may run concurrently
+// with Send and Receive, as on a real connection: the send channel is never
+// closed, and each end sees the other's Close through peerDone after
+// draining the frames already sent.
 type chanTransport struct {
-	send chan []byte
-	recv chan []byte
-	done chan struct{} // closed by Close; unblocks Receive like a real transport
+	send     chan []byte
+	recv     chan []byte
+	done     chan struct{} // closed by Close; unblocks Send and Receive
+	peerDone chan struct{} // the other end's done
 
 	mu     sync.Mutex
 	closed bool
 }
 
+var errChanTransportClosed = errors.New("transport closed")
+
 func (t *chanTransport) Send(_ context.Context, data []byte) error {
 	t.mu.Lock()
-	if t.closed {
-		t.mu.Unlock()
-		return errors.New("transport closed")
-	}
+	closed := t.closed
 	t.mu.Unlock()
+	if closed {
+		return errChanTransportClosed
+	}
 
 	cp := make([]byte, len(data))
 	copy(cp, data)
-	t.send <- cp
-	return nil
+	select {
+	case t.send <- cp:
+		return nil
+	case <-t.done:
+		return errChanTransportClosed
+	case <-t.peerDone:
+		return errChanTransportClosed
+	}
 }
 
 func (t *chanTransport) Receive(ctx context.Context) ([]byte, error) {
 	select {
 	case data := <-t.recv:
-		if data == nil {
-			return nil, errors.New("transport closed")
-		}
 		return data, nil
 	case <-t.done:
-		return nil, errors.New("transport closed")
+		return nil, errChanTransportClosed
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	case <-t.peerDone:
+		select {
+		case data := <-t.recv:
+			return data, nil
+		default:
+			return nil, errChanTransportClosed
+		}
 	}
 }
 
@@ -71,7 +89,6 @@ func (t *chanTransport) Close() error {
 	defer t.mu.Unlock()
 	if !t.closed {
 		t.closed = true
-		close(t.send)
 		if t.done != nil {
 			close(t.done)
 		}

@@ -1,9 +1,9 @@
 # go-mms Releases
 
-## v1.5.1
+## v1.7.2
 
 **Date:** 2026-11-10
-**Previous release:** v1.5.0
+**Previous release:** v1.7.1
 
 TimeOfDay follows the 28-bit millisecond field of ISO 9506-2:2003 §7.5.1: a field of one day or more is accepted in both forms and can be sent, and bits 28 through 31 must be zero (otfabric/go-mms#30, @pascaldekloe).
 
@@ -17,6 +17,57 @@ TimeOfDay follows the 28-bit millisecond field of ISO 9506-2:2003 §7.5.1: a fie
 
 - Unit table of accepted and rejected encodings in both forms, each accepted one checked to re-encode to the same value and length; FuzzValueCodec regression inputs for both forms, the last instant of the 6-octet form and a set leading bit.
 - e2e over TCP: a TimeOfDay rewritten in transit to the carried form reads as the same instant and writes back; one with bit 28 set fails with `ErrDecodeFailed` and the association stays usable; a 4-octet deadline past midnight and 6-octet instants after 2163-06-05 write and read back unchanged.
+
+---
+
+## v1.7.1
+
+**Date:** 2026-11-09
+**Previous release:** v1.7.0
+
+### Fixed
+
+- **`Client.Close` is bounded by its context while a request write is stalled.** A request write to a peer that stopped reading holds the write lock, and the ConcludeRequest of `Close` waited for that lock without regard to `ctx`, so `Close` could block until the connection failed. As `Abort` already did, `Close` now closes the transport when `ctx` is done, which fails the stalled write; it returns an error matching the context error. Found by the byte-fault chaos test of go-iec61850 (`DialOptions.Dialer`, otfabric/go-iec61850#59).
+- **The client closes its transport when the reader loop stops on its own** (connection lost, undecodable or oversized PDU, peer release). The association could not complete another request, but the connection stayed open, so a stalled write kept the write lock; now it fails at once, and `Close` returns without waiting for its context.
+
+### Tests
+
+- `TestCloseBoundedByContextWhileWriteStalled` and `TestReaderExitClosesTransport` use a transport whose writes block until it is closed; both failed before the fix. The in-memory loopback transport of the tests no longer closes its send channel, so `Close` may run concurrently with `Send` as on a real connection.
+
+---
+
+## v1.7.0
+
+**Date:** 2026-11-09
+**Previous release:** v1.6.0
+
+### Changed
+
+- **Passive decoding names every MMS service.** `CapturedPDU.Service` gives the ISO 9506-2 name of every confirmed service ("Kill", "TakeControl", "GetDomainAttributes", ...), and `Service<n>` for a tag the standard does not define; before, services go-mms does not implement were named `Unknown`.
+- **A confirmed PDU whose envelope does not decode but whose invoke ID does** (such as a confirmed response without a service, which some stacks send in reply to a conclude) is returned by `DecodePDU` with its invoke ID, `Raw` and `DecodeError`, so that a trace can still pair it; before, it was an error.
+
+### Fixed
+
+- A GetVariableAccessAttributes response with the optional `address` [1] encoded primitive (`0x81`, as some servers send it) failed with "expected typeSpecification [2] (0xa2), got 0x81". The client and the passive decoder now skip it in either form.
+
+### Tests
+
+- Found by comparing go-mms-trace with Wireshark over public captures (ADSC Zeek MMS traces, ITI ICS-Security-Tools): the service names, the response without a service, and the primitive address.
+
+---
+
+## v1.6.0
+
+**Date:** 2026-11-09
+**Previous release:** v1.5.0
+
+### Added
+
+- **Passive decoding of captured MMS traffic: `DecodeTSDU` and `DecodePDU`.** `DecodeTSDU` decodes one transport service data unit (the user data of the COTP data TPDUs of a TSDU, as `DialOptions.RawHook` sees it) through the session, presentation and ACSE layers to the MMS PDU; `DecodePDU` decodes an MMS PDU alone. The result names the session SPDU, the presentation PPDU, an ACSE APDU (an AARE's result; an AARQ's authentication mechanism, never its credentials) and the MMS PDU: kind, invoke ID, service, and for Read, Write, GetNameList, Identify, GetVariableAccessAttributes, GetNamedVariableListAttributes, InformationReport, Initiate, errors and Reject the decoded content with the public types (`ObjectName`, `AccessSelector`, `Value`, `TypeSpec`, `DataAccessError`). Other services keep their content in `Raw`. Nothing is sent and no state is kept. `ErrNotMMS` marks a unit that is not a session SPDU. Requested by the trace analysis of otfabric/iec61850-explorer (milestone M4).
+
+### Tests
+
+- Every unit of a real association, client and server in both directions, decodes: association, Identify, Read with and without alternate access, Write, GetNameList, GetVariableAccessAttributes, a named variable list defined and inspected, a refused file service, an InformationReport and the conclude (unit and e2e over TCP). Release and abort, an AARQ with a password (reported as `password`, not decoded), a rejecting AARE, list-name reads, index and range selectors, write failures, reject, cancel, unmodelled services, and malformed bodies of every modelled service. `FuzzDecodeTSDU` (8 million inputs locally, no failure). `decode.go` is fully covered.
 
 ---
 

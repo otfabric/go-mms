@@ -102,10 +102,11 @@ func UnmarshalGetVarAccessResponse(serviceData asn1.RawValue) (*GetVarAccessResu
 	}
 	deletable := len(inner) == 1 && inner[0] != 0
 
-	// Skip optional address [1] EXPLICIT
+	// Skip the optional address [1] (ISO 9506-2: Address is a CHOICE, so
+	// [1] is constructed; some servers send it primitive, as 0x81).
 	if offset < len(content) {
 		nextTag := content[offset]
-		if nextTag == 0xa1 {
+		if nextTag == 0xa1 || nextTag == 0x81 {
 			_, _, n, err := berutil.DecodeTLVAt(content, offset)
 			if err != nil {
 				return nil, fmt.Errorf("pdu: getvaraccess response: address: %w", err)

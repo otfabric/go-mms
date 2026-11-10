@@ -16,6 +16,7 @@ Error taxonomy: [ERRORS.md](ERRORS.md).
 - [Error types](#error-types)
 - [Metrics](#metrics)
 - [Retry](#retry)
+- [Passive decoding](#passive-decoding)
 - [Transport interfaces](#transport-interfaces)
 - [transport/iso](#transportiso)
 - [Identity, auth, and options](#identity-auth-and-options)
@@ -590,6 +591,73 @@ The zero `RetryPolicy` performs a single attempt. `IsRetryable` returns false fo
 returns nil on success, otherwise the last error, joined with `ctx.Err()` when the
 context ended the retries. Use it with `Client.Done` to reconnect, or use
 `iso.WithRetry` for dialing.
+
+---
+
+## Passive decoding
+
+For trace analysis: decode captured MMS traffic without an association. A
+unit is the user data of the COTP data TPDUs of one TSDU, reassembled (what
+`DialOptions.RawHook` sees). Nothing is sent and no state is kept; pair
+requests and responses by invoke ID.
+
+```go
+func DecodeTSDU(b []byte) (*Captured, error) // session, presentation, ACSE, MMS
+func DecodePDU(b []byte) (*CapturedPDU, error) // one MMS PDU
+
+var ErrNotMMS error // the unit is not a session SPDU
+
+type Captured struct {
+    Session      string        // connect, accept, refuse, finish, disconnect, abort, data
+    Presentation string        // CP, CPA, user-data, or "" (none, or an abort PPDU)
+    ACSE         *CapturedACSE // AARQ, AARE, RLRQ, RLRE, ABRT
+    PDU          *CapturedPDU
+}
+
+type CapturedACSE struct {
+    Kind           string
+    Result         *int   // AARE: 0 accepted, 1 rejected-permanent, 2 rejected-transient
+    Authentication string // AARQ: none, password or other; credentials are never decoded
+}
+
+type CapturedPDU struct {
+    Kind        string // confirmed-request, confirmed-response, confirmed-error, unconfirmed, reject, initiate-*, conclude-*, cancel-*
+    InvokeID    uint32
+    HasInvokeID bool
+    Service     string // Read, Write, GetNameList, ..., InformationReport
+
+    Variables        []CapturedVariable // Read/Write request, InformationReport
+    ListName         *ObjectName        // or the named variable list instead
+    Values           []*Value           // Read response, Write request, InformationReport
+    WriteResults     []*DataAccessError // Write response: nil for success
+    NameListRequest  *CapturedNameListRequest
+    NameList         []string
+    NameListMore     bool
+    Identify         *CapturedIdentify
+    VariableName     *ObjectName // GetVariableAccessAttributes request
+    TypeSpec         *TypeSpec   // GetVariableAccessAttributes response
+    Initiate         *CapturedInitiate
+    Error            *CapturedServiceError // class and code
+    Reject           *CapturedReject       // type and reason
+    NamedListMembers []CapturedVariable    // GetNamedVariableListAttributes response
+
+    Raw         []byte // content of a service not modelled
+    DecodeError string // why a modelled service did not decode (Raw holds it)
+}
+```
+
+`Service` is the ISO 9506-2 name of the confirmed service for every tag the
+standard defines (`Service<n>` otherwise). A confirmed PDU whose envelope
+does not decode but whose invoke ID does is returned with the invoke ID,
+`Raw` and `DecodeError`, so that it can still be paired.
+
+Modelled services: Read, Write, GetNameList, Identify,
+GetVariableAccessAttributes, GetNamedVariableListAttributes (requests and
+responses), InformationReport, Initiate, confirmed errors and Reject. Every
+other service keeps its content in `Raw`. Only a PDU whose outer structure
+does not decode is an error; a service body that does not decode sets
+`DecodeError`. The decoders are those of the client and server, bounded the
+same way, and `FuzzDecodeTSDU` fuzzes the whole path.
 
 ---
 
