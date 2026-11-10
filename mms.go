@@ -50,6 +50,7 @@ type Client struct {
 	readerDone   chan struct{} // closed when reader loop exits
 	readerErr    error         // why the reader loop exited; guarded by mu
 	concludeCh   chan struct{} // receives signal when ConcludeResponse arrives
+	concludeErr  error         // the Conclude-ErrorPDU received, if any; guarded by mu
 
 	reportMu      sync.RWMutex
 	reportHandler InformationReportHandler
@@ -425,7 +426,7 @@ func (c *Client) conclude(ctx context.Context) error {
 
 	select {
 	case <-c.concludeCh:
-		return nil
+		return c.concludeResult()
 	case <-ctx.Done():
 		return fmt.Errorf("mms: conclude: %w", ctx.Err())
 	case <-c.readerDone:
@@ -434,11 +435,30 @@ func (c *Client) conclude(ctx context.Context) error {
 		// Drain concludeCh to avoid a false-negative race.
 		select {
 		case <-c.concludeCh:
-			return nil
+			return c.concludeResult()
 		default:
 			return &ProtocolError{Phase: PhaseMMS, Message: "connection closed before conclude response"}
 		}
 	}
+}
+
+// concludeResult is the outcome of a completed conclude exchange: nil for
+// a Conclude-ResponsePDU, the peer's ServiceError (or the error decoding
+// it) for a Conclude-ErrorPDU.
+func (c *Client) concludeResult() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.concludeErr
+}
+
+// decodeConcludeError converts Conclude-ErrorPDU contents to the error
+// Close returns.
+func (c *Client) decodeConcludeError(content []byte) error {
+	se, err := pdu.DecodeConcludeError(content)
+	if err != nil {
+		return decodeErrorf("mms: %w", err)
+	}
+	return serviceErrorFromWire(se, 0)
 }
 
 // Identify sends an MMS Identify request and returns the server's identity.
@@ -724,11 +744,32 @@ func (c *Client) handleConfirmedError(expectedID codec.InvokeID, content []byte)
 			Message: fmt.Sprintf("confirmed error invoke ID mismatch: sent %d, received %d", expectedID, ce.InvokeID),
 		}
 	}
-	return &ServiceError{
-		Class:    ErrorClass(ce.ErrorClass),
-		Code:     ce.ErrorCode,
-		InvokeID: InvokeID(ce.InvokeID),
+	se := serviceErrorFromWire(ce.Detail, InvokeID(ce.InvokeID))
+	se.ModifierPosition = ce.ModifierPosition
+	return se
+}
+
+// serviceErrorFromWire converts a decoded ServiceError (ISO 9506-2
+// clause 7.4.1) to the public error.
+func serviceErrorFromWire(w pdu.ServiceErrorWire, invokeID InvokeID) *ServiceError {
+	se := &ServiceError{
+		Class:          ErrorClass(w.ErrorClass),
+		Code:           w.ErrorCode,
+		InvokeID:       invokeID,
+		AdditionalCode: w.AdditionalCode,
 	}
+	if w.AdditionalDescription != nil {
+		se.AdditionalDescription = *w.AdditionalDescription
+	}
+	if w.ServiceSpecific != nil {
+		se.ServiceSpecific = &ServiceSpecificInfo{
+			Kind:     w.ServiceSpecific.Kind,
+			Raw:      w.ServiceSpecific.Raw,
+			HasValue: w.ServiceSpecific.HasValue,
+			Value:    w.ServiceSpecific.Value,
+		}
+	}
+	return se
 }
 
 func (c *Client) handleReject(expectedID codec.InvokeID, content []byte) error {
@@ -837,6 +878,9 @@ func (c *Client) readerLoop(ctx context.Context) {
 
 		kind, content, err := pdu.DecodePdu(mmsPayload)
 		if err != nil {
+			if c.rejectMalformed(ctx, mmsPayload, err) {
+				continue
+			}
 			c.logger.Debug("mms: reader loop PDU error", "error", err)
 			c.stopReader(classify(decodeErrorf("mms: decode PDU: %w", err), ErrClosed))
 			return
@@ -863,7 +907,13 @@ func (c *Client) readerLoop(ctx context.Context) {
 			return
 
 		case pdu.PduConcludeError:
-			c.logger.Warn("mms: server rejected conclude")
+			// Conclude-ErrorPDU ::= ServiceError (ISO 9506-2 clause
+			// 8.4.3); Close reports it as a *ServiceError.
+			concludeErr := c.decodeConcludeError(content)
+			c.logger.Warn("mms: server rejected conclude", "error", concludeErr)
+			c.mu.Lock()
+			c.concludeErr = concludeErr
+			c.mu.Unlock()
 			select {
 			case c.concludeCh <- struct{}{}:
 			default:
@@ -877,9 +927,9 @@ func (c *Client) readerLoop(ctx context.Context) {
 }
 
 func (c *Client) dispatchConfirmed(kind pdu.PduKind, content []byte) {
-	invokeID, err := pdu.ExtractInvokeID(content)
+	invokeID, err := pdu.ExtractInvokeIDFor(kind, content)
 	if err != nil {
-		c.logger.Warn("mms: reader cannot extract invoke ID", "error", err)
+		c.dispatchWithoutInvokeID(kind, content, err)
 		return
 	}
 
@@ -900,6 +950,70 @@ func (c *Client) dispatchConfirmed(kind pdu.PduKind, content []byte) {
 		}
 	}
 }
+
+// dispatchWithoutInvokeID handles a confirmed-service PDU without a
+// usable invoke ID. ISO 9506-2 clause 8.6 makes originalInvokeID of a
+// RejectPDU OPTIONAL: such a Reject is delivered to the only outstanding
+// request, or fails all outstanding requests when several are pending,
+// rather than leaving them to time out (MMS-PDU-07). A response or error
+// whose invoke ID cannot be read fails the only outstanding request with a
+// decode error.
+func (c *Client) dispatchWithoutInvokeID(kind pdu.PduKind, content []byte, extractErr error) {
+	if kind == pdu.PduReject {
+		if rj, err := pdu.DecodeRejectPDU(content); err == nil && !rj.HasInvokeID {
+			if id, ok := c.tracker.Sole(); ok {
+				c.tracker.Complete(id, invoke.Response{Kind: int(kind), Data: content})
+				return
+			}
+			rejErr := &RejectError{Type: RejectType(rj.RejectType), Reason: rj.RejectReason}
+			c.logger.Warn("mms: reject without invoke ID", "error", rejErr)
+			c.tracker.CancelAll(rejErr)
+			return
+		}
+	}
+	c.logger.Warn("mms: reader cannot extract invoke ID", "kind", kind, "error", extractErr)
+	if id, ok := c.tracker.Sole(); ok {
+		c.tracker.Cancel(id, decodeErrorf("mms: %s without a valid invoke ID: %w", kind, extractErr))
+	}
+}
+
+// rejectMalformed handles an MMS PDU that does not decode but whose
+// invoke ID can be read: the request it answers fails with a decode
+// error, the PDU is rejected (ISO 9506-2 clause 8.6; IEC 61850-8-1
+// clause 8.1.3.4.1 leaves the content of a Reject for a mal-formed PDU a
+// local issue) and the association continues. It reports false when the
+// invoke ID cannot be recovered.
+func (c *Client) rejectMalformed(ctx context.Context, mmsPayload []byte, decodeErr error) bool {
+	kind, id, ok := pdu.RecoverInvokeID(mmsPayload)
+	if !ok {
+		return false
+	}
+	c.logger.Warn("mms: rejecting malformed PDU", "kind", kind, "invoke_id", id, "error", decodeErr)
+	c.tracker.Cancel(id, decodeErrorf("mms: decode %s: %w", kind, decodeErr))
+	rejectType := 0
+	switch kind {
+	case pdu.PduConfirmedResponse:
+		rejectType = int(RejectConfirmedResponse)
+	case pdu.PduConfirmedError:
+		rejectType = int(RejectConfirmedError)
+	default:
+		return true // a RejectPDU is not rejected
+	}
+	c.sendReject(ctx, codec.MarshalRejectPDU(id, rejectType, 0))
+	return true
+}
+
+// sendReject sends a RejectPDU best-effort, bounded by rejectSendTimeout.
+func (c *Client) sendReject(ctx context.Context, rejectPDU []byte) {
+	sctx, cancel := context.WithTimeout(ctx, rejectSendTimeout)
+	defer cancel()
+	if err := c.send(sctx, isostack.EncodeDataRequest(rejectPDU)); err != nil {
+		c.logger.Debug("mms: send reject", "error", err)
+	}
+}
+
+// rejectSendTimeout bounds how long the reader waits to queue a Reject.
+const rejectSendTimeout = 5 * time.Second
 
 func (c *Client) dispatchUnconfirmed(content []byte) {
 	report, err := pdu.UnmarshalInformationReport(content)

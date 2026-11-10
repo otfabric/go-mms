@@ -176,6 +176,8 @@ func DecodeInteger(data []byte) (int, error) {
 	if len(data) == 0 {
 		return 0, fmt.Errorf("empty INTEGER content")
 	}
+	// BER receivers accept redundant leading octets (see TrimInteger).
+	data = TrimInteger(data)
 	if len(data) > 4 {
 		return 0, fmt.Errorf("INTEGER too large (%d bytes)", len(data))
 	}
@@ -302,6 +304,8 @@ func DecodeUnsigned(data []byte) (uint32, error) {
 	if data[0]&0x80 != 0 {
 		return 0, fmt.Errorf("unsigned INTEGER has negative encoding")
 	}
+	// BER receivers accept redundant leading octets (see TrimInteger).
+	data = TrimInteger(data)
 	// Leading 0x00 is BER sign-padding for positive values > 0x7f.
 	if data[0] == 0x00 && len(data) > 1 {
 		data = data[1:]

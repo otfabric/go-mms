@@ -286,6 +286,14 @@ func DecodePDU(b []byte) (*CapturedPDU, error) {
 		}
 		out.InvokeID, out.HasInvokeID = r.InvokeID, r.HasInvokeID
 		out.Reject = &CapturedReject{Type: r.RejectType, Reason: r.RejectReason}
+	case pdu.PduConcludeError:
+		// Conclude-ErrorPDU ::= ServiceError (ISO 9506-2 clause 8.4.3).
+		se, err := pdu.DecodeConcludeError(content)
+		if err != nil {
+			out.fail(content, err)
+			break
+		}
+		out.Error = &CapturedServiceError{Class: se.ErrorClass, Code: se.ErrorCode}
 	case pdu.PduUnconfirmed:
 		out.Service = "InformationReport"
 		out.decodeReport(content)

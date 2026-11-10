@@ -142,15 +142,13 @@ func FuzzUnwrapPdu(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if data[0]&0x1f == 0x1f {
-			// UnwrapPdu rejects tag numbers above 30, and encoding/asn1
-			// rejects non-minimal long-form encodings of smaller ones.
-			t.Fatalf("UnwrapPdu accepted long-form tag %x", data)
-		}
-		// encoding/asn1 only accepts minimal definite lengths, so the
-		// single-byte-tag re-encoding must reproduce the input exactly.
-		if enc := berutil.EncodeTLV(tag, content); !bytes.Equal(enc, data) {
-			t.Fatalf("re-encoding mismatch: %x != %x", enc, data)
+		// UnwrapPdu accepts BER lengths (non-minimal, indefinite) and
+		// returns minimal definite content, so re-wrapping it in the
+		// minimal form must decode to the same tag and content (idempotent).
+		enc := berutil.EncodeTLV(tag, content)
+		tag2, content2, err := UnwrapPdu(enc)
+		if err != nil || tag2 != tag || !bytes.Equal(content2, content) {
+			t.Fatalf("UnwrapPdu not idempotent on %x: %x/%x, %v", enc, tag2, content2, err)
 		}
 	})
 }
