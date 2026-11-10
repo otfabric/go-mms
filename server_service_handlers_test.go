@@ -119,20 +119,21 @@ func TestHandleGetNameList_Edges(t *testing.T) {
 		}
 	}
 
-	// Unsupported combo.
+	// IEC 61850-8-1 Table 15 conflict.
 	bad, _ := pdu.MarshalGetNameListRequest(1, int(ObjectClassDomain), pdu.ScopeDomain, "d", "")
-	if _, _, _, err := s.handleGetNameList(ctx, extractConfirmedBody(t, bad)); err == nil {
-		t.Fatal("unsupported combo")
+	if _, _, _, err := s.handleGetNameList(ctx, extractConfirmedBody(t, bad)); err != errObjectConstraint {
+		t.Fatalf("conflicting combo: %v", err)
 	}
 
-	// Association scope without / with ServerConn.
+	// Association scope without a ServerConn has no objects: empty list
+	// (IEC 61850-8-1 clause 8.1.3.4.2.4).
 	aaNVL, _ := pdu.MarshalGetNameListRequest(1, int(ObjectClassNamedVariableList), pdu.ScopeAssociation, "", "")
-	if _, _, _, err := s.handleGetNameList(ctx, extractConfirmedBody(t, aaNVL)); err == nil {
-		t.Fatal("aa nvl without conn")
+	if _, _, _, err := s.handleGetNameList(ctx, extractConfirmedBody(t, aaNVL)); err != nil {
+		t.Fatalf("aa nvl without conn: %v", err)
 	}
 	aaVar, _ := pdu.MarshalGetNameListRequest(1, int(ObjectClassNamedVariable), pdu.ScopeAssociation, "", "")
-	if _, _, _, err := s.handleGetNameList(ctx, extractConfirmedBody(t, aaVar)); err == nil {
-		t.Fatal("aa var without conn")
+	if _, _, _, err := s.handleGetNameList(ctx, extractConfirmedBody(t, aaVar)); err != nil {
+		t.Fatalf("aa var without conn: %v", err)
 	}
 	sc := &ServerConn{}
 	ctxSC := context.WithValue(ctx, serverConnCtxKey{}, sc)

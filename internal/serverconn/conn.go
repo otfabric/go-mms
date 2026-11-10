@@ -35,10 +35,50 @@ type Transport interface {
 type ServiceHandler func(ctx context.Context, invokeID codec.InvokeID, serviceTag int, serviceBody []byte) (respTag int, constructed bool, respPayload []byte, err error)
 
 // ServiceError indicates the handler wants to produce a ConfirmedErrorPDU.
+// Fields carries the optional ServiceError components (ISO 9506-2
+// clause 7.4.1).
 type ServiceError struct {
 	ErrorClass int
 	ErrorCode  int
+	Fields     codec.ServiceErrorFields
 }
+
+// RejectError indicates the handler wants the request answered with a
+// RejectPDU carrying the request's invokeID as originalInvokeID
+// (ISO 9506-2 clause 8.6). Type is the rejectReason alternative
+// (RejectConfirmedRequest for a confirmed request) and Reason its value.
+type RejectError struct {
+	Type   int
+	Reason int
+}
+
+func (e *RejectError) Error() string {
+	return fmt.Sprintf("reject: type=%d reason=%d", e.Type, e.Reason)
+}
+
+// RejectPDU rejectReason alternatives and values used by the server
+// (ISO 9506-2 clause 8.6).
+const (
+	RejectConfirmedRequest = 1
+	RejectPDUError         = 5
+	RejectCancelRequest    = 6
+
+	// confirmed-requestPDU reasons
+	ReasonOther                = 0
+	ReasonUnrecognizedService  = 1
+	ReasonInvalidInvokeID      = 3
+	ReasonInvalidArgument      = 4
+	ReasonMaxRecursionExceeded = 8
+	ReasonValueOutOfRange      = 9
+
+	// pdu-error reasons
+	ReasonUnknownPDUType = 0
+	ReasonInvalidPDU     = 1
+
+	// cancel-requestPDU reasons
+	ReasonCancelOther           = 0
+	ReasonCancelInvalidInvokeID = 1
+)
 
 func (e *ServiceError) Error() string {
 	return fmt.Sprintf("service error: class=%d code=%d", e.ErrorClass, e.ErrorCode)
@@ -201,46 +241,86 @@ func (c *Conn) Serve(ctx context.Context) error {
 			return fmt.Errorf("serverconn: decode data: %w", err)
 		}
 
-		if c.mmsOpts.MaxPDUSize > 0 && len(mmsPayload) > c.mmsOpts.MaxPDUSize {
-			c.logger.Warn("mms: PDU exceeds negotiated size", "size", len(mmsPayload), "max", c.mmsOpts.MaxPDUSize)
-			continue
-		}
-
-		kind, content, err := pdu.DecodePdu(mmsPayload)
-		if err != nil {
-			c.logger.Warn("mms: malformed PDU", "error", err)
-			continue
-		}
-
-		switch kind {
-		case pdu.PduConcludeRequest:
-			return c.handleConclude(ctx)
-		case pdu.PduConfirmedRequest:
-			if err := c.handleConfirmedRequest(ctx, content); err != nil {
-				return err
+		if err := c.dispatchPDU(ctx, mmsPayload); err != nil {
+			if errors.Is(err, errConcluded) {
+				return nil
 			}
-		case pdu.PduCancelRequest:
-			if err := c.handleCancelRequest(ctx, content); err != nil {
-				return err
-			}
-		default:
-			c.logger.Warn("mms: unexpected PDU kind", "kind", kind)
+			return err
 		}
 	}
+}
+
+// errConcluded ends Serve after a Conclude exchange.
+var errConcluded = errors.New("serverconn: concluded")
+
+// dispatchPDU handles one MMS PDU received after the association is
+// established. A PDU that cannot be processed is answered with a RejectPDU
+// (ISO 9506-2 clause 8.6) instead of being dropped, so the peer's request
+// does not wait for its timeout; the association continues.
+func (c *Conn) dispatchPDU(ctx context.Context, mmsPayload []byte) error {
+	if c.mmsOpts.MaxPDUSize > 0 && len(mmsPayload) > c.mmsOpts.MaxPDUSize {
+		c.logger.Warn("mms: PDU exceeds negotiated size", "size", len(mmsPayload), "max", c.mmsOpts.MaxPDUSize)
+		return c.rejectOversized(ctx, mmsPayload)
+	}
+
+	kind, content, err := pdu.DecodePdu(mmsPayload)
+	if err != nil {
+		c.logger.Warn("mms: malformed PDU", "error", err)
+		reason := ReasonInvalidPDU
+		if errors.Is(err, pdu.ErrUnknownPduType) {
+			reason = ReasonUnknownPDUType
+		}
+		return c.sendData(ctx, codec.MarshalRejectPDUNoInvokeID(RejectPDUError, reason))
+	}
+
+	switch kind {
+	case pdu.PduConcludeRequest:
+		if err := c.handleConclude(ctx); err != nil {
+			return err
+		}
+		return errConcluded
+	case pdu.PduConfirmedRequest:
+		return c.handleConfirmedRequest(ctx, content)
+	case pdu.PduCancelRequest:
+		return c.handleCancelRequest(ctx, content)
+	default:
+		c.logger.Warn("mms: unexpected PDU kind", "kind", kind)
+		return nil
+	}
+}
+
+// rejectOversized answers a PDU larger than the negotiated
+// localDetailCalled. For a Confirmed-Request whose invokeID can be read,
+// IEC 61850-8-1 clause 8.1.3.5 (Write) and 8.1.3.6.1 (DefineNamedVariableList)
+// require Reject confirmed-requestPDU value-out-of-range (ISO 9506-2
+// clause 8.6); otherwise Reject pdu-error invalid-pdu without an invokeID.
+func (c *Conn) rejectOversized(ctx context.Context, mmsPayload []byte) error {
+	if kind, content, err := pdu.DecodePdu(mmsPayload); err == nil && kind == pdu.PduConfirmedRequest {
+		invokeID, _, err := codec.UnmarshalConfirmedRequest(content)
+		if envErr, ok := errors.AsType[*codec.EnvelopeError](err); ok && envErr.HasInvokeID {
+			invokeID, err = envErr.InvokeID, nil
+		}
+		if err == nil {
+			return c.sendData(ctx, codec.MarshalRejectPDU(invokeID, RejectConfirmedRequest, ReasonValueOutOfRange))
+		}
+	}
+	return c.sendData(ctx, codec.MarshalRejectPDUNoInvokeID(RejectPDUError, ReasonInvalidPDU))
 }
 
 func (c *Conn) handleConfirmedRequest(ctx context.Context, content []byte) error {
 	invokeID, serviceRaw, err := codec.UnmarshalConfirmedRequest(content)
 	if err != nil {
 		c.logger.Warn("mms: malformed confirmed request", "error", err)
-		rejectPdu := codec.MarshalRejectPDU(0, 1, 0) // confirmed-request-pdu, other
-		return c.sendData(ctx, rejectPdu)
+		return c.rejectEnvelope(ctx, err)
 	}
 
 	respTag, constructed, respPayload, err := c.handler(ctx, invokeID, serviceRaw.Tag, serviceRaw.Bytes)
 	if err != nil {
+		if rejErr, ok := errors.AsType[*RejectError](err); ok {
+			return c.sendData(ctx, codec.MarshalRejectPDU(invokeID, rejErr.Type, rejErr.Reason))
+		}
 		if svcErr, ok := errors.AsType[*ServiceError](err); ok {
-			return c.sendError(ctx, invokeID, svcErr.ErrorClass, svcErr.ErrorCode)
+			return c.sendData(ctx, codec.MarshalConfirmedErrorFields(invokeID, svcErr.ErrorClass, svcErr.ErrorCode, svcErr.Fields))
 		}
 		return c.sendError(ctx, invokeID, 7, 1) // access: object-access-unsupported
 	}
@@ -250,21 +330,47 @@ func (c *Conn) handleConfirmedRequest(ctx context.Context, content []byte) error
 		return fmt.Errorf("serverconn: marshal response: %w", err)
 	}
 
+	// A response that does not fit the negotiated PDU size is answered
+	// with ServiceError service pdu-size (IEC 61850-8-1 clauses
+	// 8.1.3.4.3.2, 8.1.3.4.3.5 and Table 17: value 3 of ISO 9506:1990).
 	if c.mmsOpts.MaxPDUSize > 0 && len(respPdu) > c.mmsOpts.MaxPDUSize {
 		c.logger.Warn("mms: response exceeds negotiated PDU size",
 			"invoke_id", invokeID, "size", len(respPdu), "max", c.mmsOpts.MaxPDUSize)
-		return c.sendError(ctx, invokeID, errorClassResource, errorCodeOther)
+		return c.sendError(ctx, invokeID, ErrorClassService, ErrorCodePDUSize)
 	}
 
 	return c.sendData(ctx, respPdu)
 }
 
-// ServiceError class resource (3), code other (0): sent when a response
-// does not fit the negotiated PDU size.
+// rejectEnvelope answers a Confirmed-Request whose envelope could not be
+// decoded: with originalInvokeID when it was read (reason
+// invalid-argument), without it otherwise (reason invalid-invokeID when
+// the invokeID is outside Unsigned32, pdu-error invalid-pdu when it is
+// unreadable). ISO 9506-2 clause 8.6.
+func (c *Conn) rejectEnvelope(ctx context.Context, err error) error {
+	envErr, _ := errors.AsType[*codec.EnvelopeError](err)
+	switch {
+	case envErr != nil && envErr.HasInvokeID:
+		return c.sendData(ctx, codec.MarshalRejectPDU(envErr.InvokeID, RejectConfirmedRequest, ReasonInvalidArgument))
+	case envErr != nil && envErr.InvalidInvokeID:
+		return c.sendData(ctx, codec.MarshalRejectPDUNoInvokeID(RejectConfirmedRequest, ReasonInvalidInvokeID))
+	default:
+		return c.sendData(ctx, codec.MarshalRejectPDUNoInvokeID(RejectPDUError, ReasonInvalidPDU))
+	}
+}
+
+// ServiceError class service (4), code pdu-size (3) (IEC 61850-8-1
+// Table 17): sent when a response does not fit the negotiated PDU size.
 const (
-	errorClassResource = 3
-	errorCodeOther     = 0
+	ErrorClassService = 4
+	ErrorCodePDUSize  = 3
 )
+
+// NestingLevel returns the negotiated dataStructureNestingLevel, or the
+// locally configured level before the association is accepted.
+func (c *Conn) NestingLevel() int {
+	return c.mmsOpts.DataStructureNestingLevel
+}
 
 // MaxPDUSize returns the negotiated maximum MMS PDU size, or the locally
 // configured maximum before the association is accepted.
@@ -359,9 +465,15 @@ func (c *Conn) Close() error {
 // cancel — respond with CancelError (invokeID-unknown).
 func (c *Conn) handleCancelRequest(ctx context.Context, content []byte) error {
 	invokeID, err := berutil.DecodeUnsigned(content)
-	if err != nil {
+	if err != nil || invokeID > codec.MaxInvokeID {
+		// Cancel-RequestPDU ::= Unsigned32; a malformed one is answered
+		// with Reject cancel-requestPDU (ISO 9506-2 clause 8.6).
 		c.logger.Warn("mms: malformed cancel request", "error", err)
-		return nil
+		reason := ReasonCancelOther
+		if err == nil {
+			reason = ReasonCancelInvalidInvokeID
+		}
+		return c.sendData(ctx, codec.MarshalRejectPDUNoInvokeID(RejectCancelRequest, reason))
 	}
 	cancelErr := codec.MarshalCancelError(codec.InvokeID(invokeID), 10, 1) // cancel: invoke-id-unknown
 	return c.sendData(ctx, cancelErr)

@@ -13,6 +13,7 @@ import (
 
 	"github.com/otfabric/go-mms/internal/acse"
 	"github.com/otfabric/go-mms/internal/asn1util"
+	"github.com/otfabric/go-mms/internal/berutil"
 	"github.com/otfabric/go-mms/internal/codec"
 	"github.com/otfabric/go-mms/internal/pdu"
 	"github.com/otfabric/go-mms/internal/serverconn"
@@ -27,31 +28,47 @@ import (
 // confirmed-service error domain and per-variable access-error domain
 // independent.
 const (
-	serviceErrorClassVMD      = int(ErrorClassVMDState)
-	serviceErrorClassResource = int(ErrorClassResource)
-	serviceErrorClassService  = int(ErrorClassService)
-	serviceErrorClassAccess   = int(ErrorClassAccess)
+	serviceErrorClassService = int(ErrorClassService)
+	serviceErrorClassAccess  = int(ErrorClassAccess)
 
 	// Confirmed service-error codes within their class.
 	// Access-class codes match the mms-extended.asn1 AccessError ENUMERATED:
 	//   other(0), objectaccessunsupported(1), objectnonexistent(2),
 	//   objectaccessdenied(3), objectinvalidated(4)
-	svcErrOther               = 0 // generic "other"
-	svcErrObjectAccessUnsupp  = 1 // access: object-access-unsupported
-	svcErrObjectNonExistent   = 2 // access: object-non-existent
-	svcErrObjectAccessDenied  = 3 // access: object-access-denied
-	svcErrServiceUnsupported  = 4 // vmd-state: other (no handler)
-	svcErrServiceNotSupported = 5 // vmd-state: service-not-supported
+	svcErrOther              = 0 // generic "other"
+	svcErrObjectAccessUnsupp = 1 // access: object-access-unsupported
+	svcErrObjectNonExistent  = 2 // access: object-non-existent
+	svcErrObjectAccessDenied = 3 // access: object-access-denied
+
+	// Service-class codes (ISO 9506-2 clause 7.4.1 service; pdu-size is
+	// value 3 of ISO 9506:1990, kept by IEC 61850-8-1 Table 17).
+	svcErrPDUSize                  = 3
+	svcErrContinuationInvalid      = 4
+	svcErrObjectConstraintConflict = 5
 )
 
 var (
-	errServiceUnsupported = &serverconn.ServiceError{ErrorClass: serviceErrorClassVMD, ErrorCode: svcErrServiceUnsupported}
-	errObjectNonExistent  = &serverconn.ServiceError{ErrorClass: serviceErrorClassAccess, ErrorCode: svcErrObjectNonExistent}
-	errAccessDenied       = &serverconn.ServiceError{ErrorClass: serviceErrorClassAccess, ErrorCode: svcErrObjectAccessDenied}
-	errInvalidRequest     = &serverconn.ServiceError{ErrorClass: serviceErrorClassService, ErrorCode: svcErrOther}
-	errUnsupportedFeature = &serverconn.ServiceError{ErrorClass: serviceErrorClassVMD, ErrorCode: svcErrServiceNotSupported}
-	errAccessUnsupported  = &serverconn.ServiceError{ErrorClass: serviceErrorClassAccess, ErrorCode: svcErrObjectAccessUnsupp}
-	errResourceOther      = &serverconn.ServiceError{ErrorClass: serviceErrorClassResource, ErrorCode: svcErrOther}
+	// errServiceUnsupported answers a confirmed service this server does
+	// not implement, or whose handler or provider is not configured:
+	// IEC 61850-8-1 clause 8.1.3.4.1 requires Reject confirmed-requestPDU
+	// unrecognized-service with originalInvokeID present (MMS-PDU-02).
+	errServiceUnsupported = &serverconn.RejectError{Type: serverconn.RejectConfirmedRequest, Reason: serverconn.ReasonUnrecognizedService}
+	// errInvalidRequest answers a request body that cannot be decoded:
+	// Reject confirmed-requestPDU invalid-argument (ISO 9506-2 clause 8.6).
+	errInvalidRequest = &serverconn.RejectError{Type: serverconn.RejectConfirmedRequest, Reason: serverconn.ReasonInvalidArgument}
+	// errMaxRecursion answers a request whose Data nesting exceeds the
+	// negotiated dataStructureNestingLevel (ISO 9506-2 clause 8.6
+	// confirmed-requestPDU max-recursion-exceeded, MMS-PDU-27).
+	errMaxRecursion = &serverconn.RejectError{Type: serverconn.RejectConfirmedRequest, Reason: serverconn.ReasonMaxRecursionExceeded}
+
+	errObjectNonExistent = &serverconn.ServiceError{ErrorClass: serviceErrorClassAccess, ErrorCode: svcErrObjectNonExistent}
+	errAccessDenied      = &serverconn.ServiceError{ErrorClass: serviceErrorClassAccess, ErrorCode: svcErrObjectAccessDenied}
+	errAccessUnsupported = &serverconn.ServiceError{ErrorClass: serviceErrorClassAccess, ErrorCode: svcErrObjectAccessUnsupp}
+	errPDUSize           = &serverconn.ServiceError{ErrorClass: serviceErrorClassService, ErrorCode: svcErrPDUSize}
+	// errObjectConstraint answers conflicting GetNameList objectClass and
+	// objectScope (IEC 61850-8-1 clause 8.1.3.4.2.4, Table 15).
+	errObjectConstraint    = &serverconn.ServiceError{ErrorClass: serviceErrorClassService, ErrorCode: svcErrObjectConstraintConflict}
+	errContinuationInvalid = &serverconn.ServiceError{ErrorClass: serviceErrorClassService, ErrorCode: svcErrContinuationInvalid}
 )
 
 // Per-variable data-access error codes for Read/Write result lists.
@@ -452,7 +469,14 @@ func toWireServiceError(err error) error {
 		return err
 	}
 	if se, ok := errors.AsType[*ServiceError](err); ok {
-		return &serverconn.ServiceError{ErrorClass: int(se.Class), ErrorCode: se.Code}
+		f := codec.ServiceErrorFields{AdditionalCode: se.AdditionalCode, AdditionalDescription: se.AdditionalDescription}
+		if sp := se.ServiceSpecific; sp != nil {
+			f.HasSpecific, f.SpecificKind, f.SpecificContent = true, sp.Kind, sp.Raw
+			if sp.HasValue && sp.Raw == nil {
+				f.SpecificContent = berutil.EncodeInt(sp.Value)
+			}
+		}
+		return &serverconn.ServiceError{ErrorClass: int(se.Class), ErrorCode: se.Code, Fields: f}
 	}
 	return err
 }
@@ -1004,7 +1028,8 @@ func (s *Server) dispatch(ctx context.Context, invokeID codec.InvokeID, serviceT
 	case asn1util.TagNumReadJournal:
 		return s.handleReadJournal(ctx, serviceBody)
 	default:
-		return 0, false, nil, errUnsupportedFeature
+		// IEC 61850-8-1 clause 8.1.3.4.1: Reject unrecognized-service.
+		return 0, false, nil, errServiceUnsupported
 	}
 }
 
@@ -1055,23 +1080,34 @@ func (s *Server) handleStatus(ctx context.Context, body []byte) (int, bool, []by
 
 // handleGetNameList serves the GetNameList service.
 //
-// Supported combinations (strict matrix):
+// Served combinations:
 //
-//	ObjectClassDomain           + ScopeVMD    → list domains
-//	ObjectClassNamedVariable    + ScopeDomain → list domain variables
-//	ObjectClassNamedVariable    + ScopeVMD    → list VMD-scoped variables
-//	ObjectClassNamedVariableList + ScopeDomain → list domain NVLs
-//	ObjectClassNamedVariableList + ScopeVMD    → list VMD-scoped NVLs
+//	ObjectClassDomain            + ScopeVMD         → list domains
+//	ObjectClassNamedVariable     + ScopeDomain/VMD/AA → list variables
+//	ObjectClassNamedVariableList + ScopeDomain/VMD/AA → list NVLs
+//	ObjectClassJournal           + ScopeDomain      → list journals (JournalProvider)
 //
-// All other combinations are rejected with a service error.
+// IEC 61850-8-1 clause 8.1.3.4.2.4: the conflicting combinations of
+// Table 15 (domain+domainSpecific, journal+aaSpecific, domain+aaSpecific)
+// get service/object-constraint-conflict, a missing domain with
+// domainSpecific scope gets access/object-non-existent, and every other
+// well-formed request without matching objects gets an empty list with
+// moreFollows FALSE (MMS-PDU-08).
 func (s *Server) handleGetNameList(ctx context.Context, body []byte) (int, bool, []byte, error) {
 	req, err := pdu.UnmarshalGetNameListRequest(body)
 	if err != nil {
 		return 0, false, nil, errInvalidRequest
 	}
 
-	// Journal names come from the JournalProvider, not the registry.
-	if req.ObjectClass == int(ObjectClassJournal) && req.Scope == pdu.ScopeDomain {
+	switch {
+	case req.ObjectClass == int(ObjectClassDomain) && req.Scope != pdu.ScopeVMD,
+		req.ObjectClass == int(ObjectClassJournal) && req.Scope == pdu.ScopeAssociation:
+		return 0, false, nil, errObjectConstraint
+	}
+
+	// Journal names come from the JournalProvider, not the registry; the
+	// provider decides which domains hold journals.
+	if req.ObjectClass == int(ObjectClassJournal) && req.Scope == pdu.ScopeDomain && s.journalProvider != nil {
 		return s.handleGetNameListJournal(ctx, req)
 	}
 
@@ -1080,6 +1116,7 @@ func (s *Server) handleGetNameList(ctx context.Context, body []byte) (int, bool,
 	}
 
 	var result servermodel.NameListResult
+	sc, _ := ctx.Value(serverConnCtxKey{}).(*ServerConn)
 	switch {
 	case req.ObjectClass == int(ObjectClassDomain) && req.Scope == pdu.ScopeVMD:
 		result = s.registry.ListDomains(req.ContinueAfter, 0)
@@ -1091,20 +1128,12 @@ func (s *Server) handleGetNameList(ctx context.Context, body []byte) (int, bool,
 		result = s.registry.ListDomainNVLs(req.DomainID, req.ContinueAfter, 0)
 	case req.ObjectClass == int(ObjectClassNamedVariableList) && req.Scope == pdu.ScopeVMD:
 		result = s.registry.ListVMDNVLs(req.ContinueAfter, 0)
-	case req.ObjectClass == int(ObjectClassNamedVariableList) && req.Scope == pdu.ScopeAssociation:
-		sc, _ := ctx.Value(serverConnCtxKey{}).(*ServerConn)
-		if sc == nil {
-			return 0, false, nil, errUnsupportedFeature
-		}
+	case req.ObjectClass == int(ObjectClassNamedVariableList) && req.Scope == pdu.ScopeAssociation && sc != nil:
 		result = sc.listAssocNVLs(req.ContinueAfter, 0)
-	case req.ObjectClass == int(ObjectClassNamedVariable) && req.Scope == pdu.ScopeAssociation:
-		sc, _ := ctx.Value(serverConnCtxKey{}).(*ServerConn)
-		if sc == nil {
-			return 0, false, nil, errUnsupportedFeature
-		}
+	case req.ObjectClass == int(ObjectClassNamedVariable) && req.Scope == pdu.ScopeAssociation && sc != nil:
 		result = sc.listAssocVars(req.ContinueAfter, 0)
 	default:
-		return 0, false, nil, errUnsupportedFeature
+		// No objects of this class in this scope: empty list.
 	}
 
 	respBytes, err := fitList(len(result.Names), s.responseBudget(ctx), func(k int, truncated bool) ([]byte, error) {
@@ -1139,7 +1168,9 @@ func (s *Server) handleGetNameListJournal(ctx context.Context, req *pdu.GetNameL
 			}
 		}
 		if !found {
-			return 0, false, nil, errInvalidRequest
+			// continueAfter names no journal (ISO 9506-2 clause 7.4.1
+			// service continuation-invalid).
+			return 0, false, nil, errContinuationInvalid
 		}
 	}
 
@@ -1274,6 +1305,18 @@ func (s *Server) handleWrite(ctx context.Context, body []byte) (int, bool, []byt
 
 	wireData := req.Values
 
+	// ISO 9506-2 clause 8.2: the negotiated dataStructureNestingLevel
+	// bounds the nesting of structured data the server must accept; a
+	// deeper listOfData is rejected (clause 8.6 confirmed-requestPDU
+	// max-recursion-exceeded, MMS-PDU-27).
+	if limit := s.nestingBudget(ctx); limit > 0 {
+		for _, dv := range wireData {
+			if dataNesting(dv) > limit {
+				return 0, false, nil, errMaxRecursion
+			}
+		}
+	}
+
 	var results []pdu.WriteResult
 	for i, spec := range specs {
 		if i >= len(wireData) {
@@ -1330,6 +1373,28 @@ func (s *Server) handleWrite(ctx context.Context, body []byte) (int, bool, []byt
 		return 0, false, nil, fmt.Errorf("marshal write response: %w", err)
 	}
 	return asn1util.TagNumWrite, true, respBytes, nil
+}
+
+// nestingBudget is the dataStructureNestingLevel negotiated on the
+// connection serving ctx (0: not known, no limit).
+func (s *Server) nestingBudget(ctx context.Context) int {
+	if sc := serverConnFromCtx(ctx); sc != nil && sc.conn != nil {
+		return sc.conn.NestingLevel()
+	}
+	return 0
+}
+
+// dataNesting is the number of structure/array levels of dv: 0 for a
+// simple value, 1 for a structure or array of simple values.
+func dataNesting(dv *pdu.DataValue) int {
+	if dv == nil || (dv.Tag != pdu.TagDataArray && dv.Tag != pdu.TagDataStructure) {
+		return 0
+	}
+	deepest := 0
+	for _, e := range dv.Elements {
+		deepest = max(deepest, dataNesting(e))
+	}
+	return deepest + 1
 }
 
 // lookupVariable resolves a variable by scope. For association scope,
@@ -1444,7 +1509,7 @@ func (s *Server) handleDefineNVL(ctx context.Context, body []byte) (int, bool, [
 	if req.ListName.Scope == pdu.ScopeAssociation {
 		sc, _ := ctx.Value(serverConnCtxKey{}).(*ServerConn)
 		if sc == nil {
-			return 0, false, nil, errUnsupportedFeature
+			return 0, false, nil, errAccessUnsupported
 		}
 		if err := sc.defineAssocNVL(entry); err != nil {
 			return 0, false, nil, errObjectNonExistent
@@ -1548,7 +1613,7 @@ func (s *Server) handleDeleteNVL(ctx context.Context, body []byte) (int, bool, [
 	case 1: // aa-specific: delete all association-scope NVLs for this connection
 		sc, _ := ctx.Value(serverConnCtxKey{}).(*ServerConn)
 		if sc == nil {
-			return 0, false, nil, errUnsupportedFeature
+			return 0, false, nil, errAccessUnsupported
 		}
 		matched, deleted = sc.deleteAllAssocNVLs()
 	case 2: // domain-scope: delete all deletable NVLs in the specified domain
@@ -1559,7 +1624,9 @@ func (s *Server) handleDeleteNVL(ctx context.Context, body []byte) (int, bool, [
 	case 3: // VMD-scope: delete all deletable VMD-scoped NVLs
 		matched, deleted = s.registry.DeleteAllVMDNVLs()
 	default:
-		return 0, false, nil, errUnsupportedFeature
+		// scopeOfDelete is ENUMERATED specific(0)..vmd(3) (ISO 9506-2
+		// clause 11.5); the decoder rejects other values.
+		return 0, false, nil, errInvalidRequest
 	}
 
 	respBytes, err := pdu.MarshalDeleteNVLResponse(matched, deleted)

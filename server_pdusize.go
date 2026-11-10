@@ -12,8 +12,9 @@ import (
 const confirmedResponseOverhead = 16
 
 // errResponseTooLarge is returned when not even one list element fits
-// the negotiated PDU size.
-var errResponseTooLarge = errResourceOther
+// the negotiated PDU size: ServiceError service pdu-size (IEC 61850-8-1
+// clauses 8.1.3.4.3.2, 8.1.3.4.3.5, Table 17; MMS-PDU-11).
+var errResponseTooLarge = errPDUSize
 
 // responseBudget is the largest service payload that fits the PDU size
 // negotiated on the connection serving ctx.
