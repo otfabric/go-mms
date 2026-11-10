@@ -234,13 +234,17 @@ func TestParseDataInvalidHeader(t *testing.T) {
 }
 
 func TestParseRefuse(t *testing.T) {
-	data := []byte{0x0c, 0x03, 0x01, 0x02, 0x03}
+	// PI 17 (transport released), PI 50 reason 2 + user data 03.
+	data := []byte{0x0c, 0x07, 0x11, 0x01, 0x01, 0x32, 0x02, 0x02, 0x03}
 	result, err := Parse(data)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Type != SpduRefuse {
 		t.Fatalf("got type %s, want REFUSE", result.Type)
+	}
+	if !result.HasReason || result.Reason != ReasonUserData || !bytes.Equal(result.UserData, []byte{0x03}) {
+		t.Fatalf("reason=%v/%d user data=%x", result.HasReason, result.Reason, result.UserData)
 	}
 }
 
