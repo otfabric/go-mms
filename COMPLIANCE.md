@@ -61,7 +61,7 @@
 | OctetString      | ✅ | ✅ | ✅ | ✅ | `0x89` [9]  | Raw bytes |
 | VisibleString    | ✅ | ✅ | ✅ | ✅ | `0x8a` [10] | VisibleString |
 | GeneralizedTime  | ✅ | ✅ | ✅ | ✅ | `0x8b` [11] | ASN.1 GeneralizedTime |
-| BinaryTime       | ✅ | ✅ | ✅ | ✅ | `0x8c` [12] | MMS TimeOfDay: 4-octet form (ms since midnight) for values 0–86399999, 6-octet dated form otherwise; ms-of-day ≥ 86400000 rejected on decode |
+| BinaryTime       | ✅ | ✅ | ✅ | ✅ | `0x8c` [12] | MMS TimeOfDay (ISO 9506-2:2003 §7.5.1): a 28-bit millisecond field, bits 28–31 zero, and in the 6-octet form 16-bit days since 1984-01-01. The field may exceed one day in both forms; the 6-octet form carries it into the following days. 4-octet form for values 0–2^28−1, 6-octet form (field below one day) for 1984-01-01…2163-06-05, and the last day with the remainder in the field after that; a field with bits 28–31 set is rejected |
 | BCD              | ✅ | ✅ | ✅ | ✅ | `0x8d` [13] | Binary-coded decimal |
 | BooleanArray     | ✅ | ✅ | ✅ | ✅ | `0x8e` [14] | Packed booleans using BIT STRING encoding |
 | ObjectIdentifier | ✅ | ✅ | ✅ | ✅ | `0x8f` [15] | ASN.1 OBJECT IDENTIFIER |
