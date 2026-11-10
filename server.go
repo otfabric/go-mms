@@ -1255,14 +1255,16 @@ func (s *Server) handleRead(ctx context.Context, body []byte) (int, bool, []byte
 			continue
 		}
 
+		ts := extractTypeSpec(entry.TypeSpec)
 		if len(spec.AlternateAccess) > 0 {
-			ts := extractTypeSpec(entry.TypeSpec)
-			val = applyAlternateAccessRead(val, ts, spec.AlternateAccess)
+			ts = selectTypeSpec(ts, spec.AlternateAccess)
+			val = applyAlternateAccessRead(val, extractTypeSpec(entry.TypeSpec), spec.AlternateAccess)
 			if val == nil {
 				accessResults = append(accessResults, &pdu.AccessResult{IsError: true, ErrorCode: wireErrCode(wireErrObjectUndefined)})
 				continue
 			}
 		}
+		val = withDeclaredFloatWidth(val, ts)
 
 		dv, err := valueToDataValue(val)
 		if err != nil {
@@ -1373,6 +1375,76 @@ func (s *Server) handleWrite(ctx context.Context, body []byte) (int, bool, []byt
 		return 0, false, nil, fmt.Errorf("marshal write response: %w", err)
 	}
 	return asn1util.TagNumWrite, true, respBytes, nil
+}
+
+// withDeclaredFloatWidth returns val with every Floatingpoint whose width
+// was not declared ([NewFloat]) set to the width of the variable's type
+// (ISO 9506-2 clause 14.4: format-width/exponent-width belong to the
+// TypeDescription; MMS-PDU-16). val is copied before it is changed.
+func withDeclaredFloatWidth(val *Value, ts *TypeSpec) *Value {
+	if val == nil || ts == nil || !hasUndeclaredFloat(val) {
+		return val
+	}
+	val = val.Clone()
+	setFloatWidth(val, ts)
+	return val
+}
+
+func hasUndeclaredFloat(v *Value) bool {
+	if v.typ == ValueTypeFloat {
+		return v.floatWidth == 0
+	}
+	for _, e := range v.elementsVal {
+		if e != nil && hasUndeclaredFloat(e) {
+			return true
+		}
+	}
+	return false
+}
+
+func setFloatWidth(v *Value, ts *TypeSpec) {
+	switch {
+	case v == nil || ts == nil:
+	case v.typ == ValueTypeFloat && ts.Type == ValueTypeFloat && v.floatWidth == 0:
+		if ts.FormatWidth == 64 || ts.ExponentWidth == 11 {
+			v.floatWidth = 64
+		}
+	case v.typ == ValueTypeStructure && ts.Type == ValueTypeStructure:
+		for i, e := range v.elementsVal {
+			if i < len(ts.Elements) {
+				setFloatWidth(e, &ts.Elements[i].Type)
+			}
+		}
+	case v.typ == ValueTypeArray && ts.Type == ValueTypeArray:
+		for _, e := range v.elementsVal {
+			setFloatWidth(e, ts.Element)
+		}
+	default:
+	}
+}
+
+// selectTypeSpec follows an alternate access chain through ts; nil when
+// the chain does not match the type.
+func selectTypeSpec(ts *TypeSpec, chain []pdu.AccessSelectorWire) *TypeSpec {
+	for _, sel := range chain {
+		switch {
+		case ts == nil:
+			return nil
+		case sel.Component != "" && ts.Type == ValueTypeStructure:
+			var next *TypeSpec
+			for i := range ts.Elements {
+				if ts.Elements[i].Name == sel.Component {
+					next = &ts.Elements[i].Type
+				}
+			}
+			ts = next
+		case sel.HasIndex && ts.Type == ValueTypeArray:
+			ts = ts.Element
+		default:
+			return nil // index range: the result is an array of the element type
+		}
+	}
+	return ts
 }
 
 // requestDecodeError maps a request body decode failure: an

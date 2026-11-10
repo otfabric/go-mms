@@ -2480,8 +2480,9 @@ func valueToDataValue(v *Value) (*pdu.DataValue, error) {
 	case ValueTypeUnsigned:
 		return &pdu.DataValue{Tag: pdu.TagDataUnsigned, Uint: v.uintVal}, nil
 	case ValueTypeFloat:
-		wide := float64(float32(v.floatVal)) != v.floatVal
-		return &pdu.DataValue{Tag: pdu.TagDataFloat, Float: v.floatVal, FloatWide: wide}, nil
+		// The width is the declared one (MMS-PDU-16); an undeclared
+		// width is single precision (IEC 61850 FLOAT32).
+		return &pdu.DataValue{Tag: pdu.TagDataFloat, Float: v.floatVal, FloatWide: v.floatWidth == 64}, nil
 	case ValueTypeBitString:
 		return &pdu.DataValue{Tag: pdu.TagDataBitString, Bytes: copyBytes(v.bytesVal), BitLen: v.bitLen}, nil
 	case ValueTypeOctetString:
@@ -2546,7 +2547,11 @@ func dataValueToValue(dv *pdu.DataValue) (*Value, error) {
 	case pdu.TagDataUnsigned:
 		return &Value{typ: ValueTypeUnsigned, uintVal: dv.Uint}, nil
 	case pdu.TagDataFloat:
-		return &Value{typ: ValueTypeFloat, floatVal: dv.Float}, nil
+		width := uint8(32)
+		if dv.FloatWide {
+			width = 64
+		}
+		return &Value{typ: ValueTypeFloat, floatVal: dv.Float, floatWidth: width}, nil
 	case pdu.TagDataBitString:
 		return &Value{typ: ValueTypeBitString, bytesVal: copyBytes(dv.Bytes), bitLen: dv.BitLen}, nil
 	case pdu.TagDataOctetString:

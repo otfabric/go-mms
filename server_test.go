@@ -459,8 +459,9 @@ func TestServerWrite(t *testing.T) {
 	if !ok {
 		t.Fatal("expected float value after write")
 	}
-	if f != 99.9 {
-		t.Errorf("value after write = %f, want 99.9", f)
+	// NewFloat is sent single-precision (MMS-PDU-16).
+	if f != float64(float32(99.9)) {
+		t.Errorf("value after write = %f, want float32(99.9)", f)
 	}
 }
 

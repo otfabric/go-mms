@@ -372,3 +372,68 @@ func TestSpec_9506_2_14_2_2_9_SiblingAlternateAccessUnsupported(t *testing.T) {
 	req := hx(t, "a01d020109"+"a418"+"a116"+"a014"+"3012"+"a008a1061a01441a0176"+"a506810161810162")
 	expectPDUs(t, serverExchange(t, srv, 10, req), "a20a800109a205a003870101")
 }
+
+// TestSpec_9506_2_14_4_FloatWidthFromType: the Floatingpoint width is the
+// declared one, not picked from the value (MMS-PDU-16).
+func TestSpec_9506_2_14_4_FloatWidthFromType(t *testing.T) {
+	for name, tc := range map[string]struct {
+		v    *Value
+		wire string
+	}{
+		"NewFloat(0.1)":   {NewFloat(0.1), "8705083dcccccd"},
+		"NewFloat32(0.1)": {NewFloat32(0.1), "8705083dcccccd"},
+		"NewFloat64(0.1)": {NewFloat64(0.1), "87090b3fb999999999999a"},
+		"NewFloat64(1.5)": {NewFloat64(1.5), "87090b3ff8000000000000"},
+	} {
+		dv, err := valueToDataValue(tc.v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := pdu.MarshalData(dv)
+		if err != nil || !bytes.Equal(got, hx(t, tc.wire)) {
+			t.Errorf("%s = %x, %v; want %s", name, got, err, tc.wire)
+		}
+	}
+	// A decoded 9-octet value keeps its width when re-encoded.
+	dv, _, err := pdu.UnmarshalDataElement(hx(t, "87090b3ff8000000000000"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := dataValueToValue(dv)
+	if err != nil || v.FloatWidth() != 64 {
+		t.Fatalf("decoded width = %d, %v", v.FloatWidth(), err)
+	}
+	back, _ := valueToDataValue(v)
+	if got, _ := pdu.MarshalData(back); !bytes.Equal(got, hx(t, "87090b3ff8000000000000")) {
+		t.Errorf("re-encoded = %x", got)
+	}
+	if NewFloat(1).FloatWidth() != 0 || NewInteger(1).FloatWidth() != 0 || NewFloat32(1).Clone().FloatWidth() != 32 {
+		t.Error("FloatWidth")
+	}
+
+	// The server serves an undeclared-width value at the variable's
+	// declared width, including inside a structure.
+	ts := TypeSpec{Type: ValueTypeStructure, Elements: []TypeSpecElement{
+		{Name: "d", Type: TypeSpec{Type: ValueTypeFloat, FormatWidth: 64, ExponentWidth: 11}},
+		{Name: "s", Type: TypeSpec{Type: ValueTypeFloat, FormatWidth: 32, ExponentWidth: 8}},
+		{Name: "a", Type: TypeSpec{Type: ValueTypeArray, Count: 1, Element: &TypeSpec{Type: ValueTypeFloat, FormatWidth: 64, ExponentWidth: 11}}},
+	}}
+	val := NewStructure([]*Value{NewFloat(0.1), NewFloat(0.1), NewArray([]*Value{NewFloat(0.5)})})
+	out := withDeclaredFloatWidth(val, &ts)
+	if out.elementsVal[0].FloatWidth() != 64 || out.elementsVal[1].FloatWidth() != 0 || out.elementsVal[2].elementsVal[0].FloatWidth() != 64 {
+		t.Errorf("declared widths = %+v", out)
+	}
+	if val.elementsVal[0].FloatWidth() != 0 {
+		t.Error("the handler's value was modified")
+	}
+	if withDeclaredFloatWidth(NewFloat64(1), &ts) == nil || withDeclaredFloatWidth(nil, &ts) != nil {
+		t.Error("nil handling")
+	}
+	if sel := selectTypeSpec(&ts, []pdu.AccessSelectorWire{{Component: "a"}, {HasIndex: true}}); sel == nil || sel.FormatWidth != 64 {
+		t.Errorf("selectTypeSpec = %+v", sel)
+	}
+	if selectTypeSpec(&ts, []pdu.AccessSelectorWire{{Component: "zz"}, {Component: "x"}}) != nil ||
+		selectTypeSpec(&ts, []pdu.AccessSelectorWire{{IndexRange: &pdu.IndexRangeWire{}}}) != nil {
+		t.Error("selectTypeSpec mismatch")
+	}
+}

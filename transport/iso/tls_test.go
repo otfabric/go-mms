@@ -284,8 +284,10 @@ func TestTLSEndToEndMMS(t *testing.T) {
 	if !ok {
 		t.Fatal("expected float value")
 	}
-	if f != 36.6 {
-		t.Errorf("temperature = %v, want 36.6", f)
+	// The variable is FLOAT32; NewFloat is served single-precision
+	// (MMS-PDU-16).
+	if f != float64(float32(36.6)) {
+		t.Errorf("temperature = %v, want float32(36.6)", f)
 	}
 }
 
