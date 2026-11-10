@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/asn1"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
 
@@ -254,4 +255,62 @@ func FuzzRecoverInvokeID(f *testing.F) {
 			t.Fatalf("RecoverInvokeID(%x) = %d", data, id)
 		}
 	})
+}
+
+// TestSpec_9506_2_14_2_2_9_AlternateAccess: inside selectAlternateAccess
+// the nested AlternateAccess is untagged (universal SEQUENCE OF, 0x30);
+// [5] is the named alternative of a SEQUENCE OF element, and several
+// elements are sibling selections, not a path (MMS-PDU-05).
+func TestSpec_9506_2_14_2_2_9_AlternateAccess(t *testing.T) {
+	golden := []struct {
+		chain []AccessSelectorWire
+		wire  string
+	}{
+		{[]AccessSelectorWire{{Component: "a"}, {Component: "b"}}, "a008 800161 3003 810162"},
+		{[]AccessSelectorWire{{HasIndex: true, Index: 2}, {Component: "q"}}, "a008 810102 3003 810171"},
+		{[]AccessSelectorWire{{Component: "a"}, {HasIndex: true, Index: 1}, {Component: "c"}}, "a00f 800161 300a a008 810101 3003 810163"},
+		{[]AccessSelectorWire{{Component: "q"}}, "810171"},
+	}
+	for _, g := range golden {
+		enc, err := encodeAlternateAccess(g.chain)
+		if err != nil || !bytes.Equal(enc, hx(t, g.wire)) {
+			t.Errorf("encode %+v = %x, %v; want %s", g.chain, enc, err, g.wire)
+		}
+		dec, err := decodeAlternateAccess(hx(t, g.wire))
+		if err != nil || len(dec) != len(g.chain) {
+			t.Errorf("decode %s = %+v, %v", g.wire, dec, err)
+			continue
+		}
+		for i := range dec {
+			if dec[i].Component != g.chain[i].Component || dec[i].HasIndex != g.chain[i].HasIndex || dec[i].Index != g.chain[i].Index {
+				t.Errorf("decode %s level %d = %+v", g.wire, i, dec[i])
+			}
+		}
+	}
+	// go-mms up to v1.7.2 wrapped the nested chain in [5]; accepted.
+	if dec, err := decodeAlternateAccess(hx(t, "a008 800161 a503 810162")); err != nil || len(dec) != 2 || dec[1].Component != "b" {
+		t.Errorf("legacy [5] nesting: %+v, %v", dec, err)
+	}
+	for name, in := range map[string]string{
+		"named":              "a506 80016e 810171",
+		"sibling selections": "810161 810162",
+		"allElements":        "8400",
+		"nested allElements": "a006 8300 3002 8400",
+		"nested siblings":    "a00b 800161 3006 810162 810163",
+	} {
+		if _, err := decodeAlternateAccess(hx(t, in)); !errors.Is(err, ErrUnsupportedAlternateAccess) {
+			t.Errorf("%s: decode(%s) = %v, want ErrUnsupportedAlternateAccess", name, in, err)
+		}
+	}
+	for name, in := range map[string]string{
+		"missing nested":   "a003 800161",
+		"wrong nested tag": "a008 800161 a103 810162",
+		"trailing":         "a00a 800161 3003 810162 0500",
+		"bad sibling":      "810161 81",
+		"empty":            "",
+	} {
+		if _, err := decodeAlternateAccess(hx(t, in)); err == nil || errors.Is(err, ErrUnsupportedAlternateAccess) {
+			t.Errorf("%s: decode(%s) = %v, want a decode error", name, in, err)
+		}
+	}
 }

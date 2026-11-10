@@ -1220,7 +1220,7 @@ func (s *Server) handleGetVarAccess(ctx context.Context, body []byte) (int, bool
 func (s *Server) handleRead(ctx context.Context, body []byte) (int, bool, []byte, error) {
 	req, err := pdu.UnmarshalReadRequestParsed(body)
 	if err != nil {
-		return 0, false, nil, errInvalidRequest
+		return 0, false, nil, requestDecodeError(err)
 	}
 
 	var specs []pdu.VariableSpecWire
@@ -1289,7 +1289,7 @@ func (s *Server) handleRead(ctx context.Context, body []byte) (int, bool, []byte
 func (s *Server) handleWrite(ctx context.Context, body []byte) (int, bool, []byte, error) {
 	req, err := pdu.UnmarshalWriteRequestParsed(body)
 	if err != nil {
-		return 0, false, nil, errInvalidRequest
+		return 0, false, nil, requestDecodeError(err)
 	}
 
 	var specs []pdu.VariableSpecWire
@@ -1373,6 +1373,18 @@ func (s *Server) handleWrite(ctx context.Context, body []byte) (int, bool, []byt
 		return 0, false, nil, fmt.Errorf("marshal write response: %w", err)
 	}
 	return asn1util.TagNumWrite, true, respBytes, nil
+}
+
+// requestDecodeError maps a request body decode failure: an
+// AlternateAccess form this server does not model (sibling selections,
+// named, allElements; ISO 9506-2 clause 14.2.2.9) is a well-formed request
+// answered with access/object-access-unsupported (MMS-PDU-05), anything
+// else is Reject invalid-argument.
+func requestDecodeError(err error) error {
+	if errors.Is(err, pdu.ErrUnsupportedAlternateAccess) {
+		return errAccessUnsupported
+	}
+	return errInvalidRequest
 }
 
 // nestingBudget is the dataStructureNestingLevel negotiated on the
@@ -1471,7 +1483,7 @@ func (s *Server) resolveNVLMembers(ctx context.Context, listName *pdu.ObjectName
 func (s *Server) handleDefineNVL(ctx context.Context, body []byte) (int, bool, []byte, error) {
 	req, err := pdu.UnmarshalDefineNVLRequest(body)
 	if err != nil {
-		return 0, false, nil, errInvalidRequest
+		return 0, false, nil, requestDecodeError(err)
 	}
 
 	vars := make([]servermodel.NVLVariable, len(req.Variables))

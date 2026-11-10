@@ -3,6 +3,7 @@
 package pdu
 
 import (
+	"errors"
 	"fmt"
 	"math"
 
@@ -30,9 +31,24 @@ type VariableSpecWire struct {
 	AlternateAccess []AccessSelectorWire
 }
 
-// BER tags for alternate access encoding.
+// ErrUnsupportedAlternateAccess reports a well-formed AlternateAccess
+// this implementation does not model: several sibling selections in one
+// SEQUENCE OF (which select several components into a new structure),
+// the named [5] alternative, or allElements. A server answers it with
+// access/object-access-unsupported.
+var ErrUnsupportedAlternateAccess = errors.New("pdu: unsupported alternate access")
+
+// BER tags for alternate access encoding (ISO 9506-2 clause 14.2.2.9).
 const (
-	tagAltAccessWrapper byte = 0xa5 // [5] CONSTRUCTED — alternateAccess in ListOfVariableSeq
+	// tagAltAccessWrapper is the [5] IMPLICIT tag of AlternateAccess
+	// where VariableAccessSpecification (clause 14.2.3) and
+	// DefineNamedVariableList reference it; inside an AlternateAccess
+	// SEQUENCE OF the same tag is the named alternative.
+	tagAltAccessWrapper byte = 0xa5
+
+	// tagNestedAltAccess is the untagged AlternateAccess (universal
+	// SEQUENCE OF) inside selectAlternateAccess.
+	tagNestedAltAccess byte = 0x30
 
 	tagSelectAltAccess byte = 0xa0 // [0] CONSTRUCTED — selectAlternateAccess
 
@@ -40,9 +56,12 @@ const (
 	tagSAIndex      byte = 0x81 // [1] IMPLICIT — index (inside selectAlternateAccess)
 	tagSAIndexRange byte = 0xa2 // [2] CONSTRUCTED — indexRange (inside selectAlternateAccess)
 
-	tagSSComponent  byte = 0x81 // [1] IMPLICIT — component (selectAccess)
-	tagSSIndex      byte = 0x82 // [2] IMPLICIT — index (selectAccess)
-	tagSSIndexRange byte = 0xa3 // [3] CONSTRUCTED — indexRange (selectAccess)
+	tagSAAllElements byte = 0x83 // [3] IMPLICIT NULL — allElements (inside selectAlternateAccess)
+
+	tagSSComponent   byte = 0x81 // [1] IMPLICIT — component (selectAccess)
+	tagSSIndex       byte = 0x82 // [2] IMPLICIT — index (selectAccess)
+	tagSSIndexRange  byte = 0xa3 // [3] CONSTRUCTED — indexRange (selectAccess)
+	tagSSAllElements byte = 0x84 // [4] IMPLICIT NULL — allElements (selectAccess)
 )
 
 // encodeAlternateAccess encodes a chain of AccessSelectorWire values
@@ -81,7 +100,10 @@ func encodeTerminalSelector(sel AccessSelectorWire) ([]byte, error) {
 
 // encodeNestedSelector encodes selectAlternateAccess [0] with the
 // first selector as the accessSelection, and the remaining selectors
-// recursively as a nested AlternateAccess.
+// recursively as the nested AlternateAccess, which is untagged there: a
+// universal SEQUENCE OF, 0x30 (ISO 9506-2 clause 14.2.2.9; libiec61850's
+// asn1c encoder agrees). Releases up to v1.7.2 wrapped it in [5] (0xa5),
+// which a conformant peer reads as the named alternative (MMS-PDU-05).
 func encodeNestedSelector(sel AccessSelectorWire, rest []AccessSelectorWire) ([]byte, error) {
 	var accessSel []byte
 	switch {
@@ -106,7 +128,7 @@ func encodeNestedSelector(sel AccessSelectorWire, rest []AccessSelectorWire) ([]
 	if err != nil {
 		return nil, fmt.Errorf("nested alternate access: %w", err)
 	}
-	nestedWrapped := berutil.EncodeTLV(tagAltAccessWrapper, nested)
+	nestedWrapped := berutil.EncodeTLV(tagNestedAltAccess, nested)
 
 	content := make([]byte, 0, len(accessSel)+len(nestedWrapped))
 	content = append(content, accessSel...)
@@ -133,52 +155,57 @@ func encodeIndexRange(tag byte, ir *IndexRangeWire) ([]byte, error) {
 }
 
 // decodeAlternateAccess decodes an AlternateAccess SEQUENCE OF from
-// raw BER content (without the outer [5] wrapper tag).
+// raw BER content (without the outer [5] wrapper tag) into a selection
+// chain: each level is one AlternateAccessSelection, a
+// selectAlternateAccess descending into its nested AlternateAccess.
+//
+// ISO 9506-2 clause 14.2.2.9: the SEQUENCE OF elements are sibling
+// selections, not a path. Exactly one element is modelled; several
+// siblings, the named [5] alternative and allElements yield
+// ErrUnsupportedAlternateAccess (MMS-PDU-05).
 func decodeAlternateAccess(data []byte) ([]AccessSelectorWire, error) {
-	var chain []AccessSelectorWire
-	offset := 0
-
-	for offset < len(data) {
-		tag, content, n, err := berutil.DecodeTLVAt(data, offset)
-		if err != nil {
-			return nil, fmt.Errorf("alternate access element: %w", err)
-		}
-		offset += n
-
-		switch tag {
-		case tagSelectAltAccess:
-			sels, err := decodeSelectAlternateAccess(content)
-			if err != nil {
-				return nil, err
-			}
-			chain = append(chain, sels...)
-		case tagSSComponent:
-			name, err := decodeComponentName(content)
-			if err != nil {
-				return nil, err
-			}
-			chain = append(chain, AccessSelectorWire{Component: name})
-		case tagSSIndex:
-			idx, err := berutil.DecodeUnsigned(content)
-			if err != nil {
-				return nil, fmt.Errorf("selectAccess index: %w", err)
-			}
-			chain = append(chain, AccessSelectorWire{HasIndex: true, Index: int(idx)})
-		case tagSSIndexRange:
-			ir, err := decodeIndexRange(content)
-			if err != nil {
-				return nil, fmt.Errorf("selectAccess indexRange: %w", err)
-			}
-			chain = append(chain, AccessSelectorWire{IndexRange: ir})
-		default:
-			return nil, fmt.Errorf("unexpected alternate access tag 0x%02x", tag)
-		}
-	}
-
-	if len(chain) == 0 {
+	if len(data) == 0 {
 		return nil, fmt.Errorf("empty alternate access")
 	}
-	return chain, nil
+	tag, content, n, err := berutil.DecodeTLVAt(data, 0)
+	if err != nil {
+		return nil, fmt.Errorf("alternate access element: %w", err)
+	}
+	if n != len(data) {
+		if _, _, _, err := berutil.DecodeTLVAt(data, n); err != nil {
+			return nil, fmt.Errorf("alternate access element: %w", err)
+		}
+		return nil, fmt.Errorf("%w: several sibling selections", ErrUnsupportedAlternateAccess)
+	}
+
+	switch tag {
+	case tagSelectAltAccess:
+		return decodeSelectAlternateAccess(content)
+	case tagSSComponent:
+		name, err := decodeComponentName(content)
+		if err != nil {
+			return nil, err
+		}
+		return []AccessSelectorWire{{Component: name}}, nil
+	case tagSSIndex:
+		idx, err := berutil.DecodeUnsigned(content)
+		if err != nil {
+			return nil, fmt.Errorf("selectAccess index: %w", err)
+		}
+		return []AccessSelectorWire{{HasIndex: true, Index: int(idx)}}, nil
+	case tagSSIndexRange:
+		ir, err := decodeIndexRange(content)
+		if err != nil {
+			return nil, fmt.Errorf("selectAccess indexRange: %w", err)
+		}
+		return []AccessSelectorWire{{IndexRange: ir}}, nil
+	case tagSSAllElements:
+		return nil, fmt.Errorf("%w: allElements", ErrUnsupportedAlternateAccess)
+	case tagAltAccessWrapper:
+		return nil, fmt.Errorf("%w: named alternate access", ErrUnsupportedAlternateAccess)
+	default:
+		return nil, fmt.Errorf("unexpected alternate access tag 0x%02x", tag)
+	}
 }
 
 func decodeComponentName(content []byte) (string, error) {
@@ -224,20 +251,28 @@ func decodeSelectAlternateAccess(data []byte) ([]AccessSelectorWire, error) {
 			return nil, fmt.Errorf("selectAlternateAccess indexRange: %w", err)
 		}
 		sel = AccessSelectorWire{IndexRange: ir}
+	case tagSAAllElements:
+		return nil, fmt.Errorf("%w: allElements", ErrUnsupportedAlternateAccess)
 	default:
 		return nil, fmt.Errorf("selectAlternateAccess: unexpected accessSelection tag 0x%02x", tag)
 	}
 
 	chain := []AccessSelectorWire{sel}
 
-	if offset < len(data) {
+	// The nested alternateAccess is mandatory and untagged (0x30). A [5]
+	// (0xa5) wrapper, as go-mms up to v1.7.2 sent it, cannot be any valid
+	// component here and is accepted for compatibility with those peers.
+	if offset >= len(data) {
+		return nil, fmt.Errorf("selectAlternateAccess: missing nested alternateAccess")
+	}
+	{
 		tag2, content2, n2, err := berutil.DecodeTLVAt(data, offset)
 		if err != nil {
 			return nil, fmt.Errorf("selectAlternateAccess nested: %w", err)
 		}
 		offset += n2
-		if tag2 != tagAltAccessWrapper {
-			return nil, fmt.Errorf("selectAlternateAccess: expected nested [5] (0xa5), got 0x%02x", tag2)
+		if tag2 != tagNestedAltAccess && tag2 != tagAltAccessWrapper {
+			return nil, fmt.Errorf("selectAlternateAccess: expected nested SEQUENCE OF (0x30), got 0x%02x", tag2)
 		}
 		nested, err := decodeAlternateAccess(content2)
 		if err != nil {

@@ -362,3 +362,13 @@ func TestSpec_9506_2_7_4_1_ServiceErrorFields(t *testing.T) {
 		t.Fatalf("modifierPosition = %+v, %v", se, err)
 	}
 }
+
+// TestSpec_9506_2_14_2_2_9_SiblingAlternateAccessUnsupported: sibling
+// selections (several AlternateAccess elements) are well-formed but not
+// modelled; the server answers access/object-access-unsupported instead
+// of misreading them as a path (MMS-PDU-05).
+func TestSpec_9506_2_14_2_2_9_SiblingAlternateAccessUnsupported(t *testing.T) {
+	srv := NewServer(ServerOptions{})
+	req := hx(t, "a01d020109"+"a418"+"a116"+"a014"+"3012"+"a008a1061a01441a0176"+"a506810161810162")
+	expectPDUs(t, serverExchange(t, srv, 10, req), "a20a800109a205a003870101")
+}
