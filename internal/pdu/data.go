@@ -508,6 +508,10 @@ func decodeBitString(data []byte) ([]byte, int, error) {
 	}
 	rawBytes := make([]byte, len(data)-1)
 	copy(rawBytes, data[1:])
+	// The unused bits carry no value; BER leaves them to the sender
+	// (zero only in DER, X.690 clause 11.2.1). They are cleared so a
+	// received value equals the one it re-encodes to.
+	rawBytes[len(rawBytes)-1] &= byte(0xff << unused)
 	bitLen := len(rawBytes)*8 - unused
 	return rawBytes, bitLen, nil
 }

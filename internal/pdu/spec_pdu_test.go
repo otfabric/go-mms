@@ -521,6 +521,11 @@ func TestSpec_X690_8_6_2_BitStringEncode(t *testing.T) {
 			t.Errorf("(%s, %d) = %x, want error", tc.data, tc.bitLen, got)
 		}
 	}
+	// Received padding bits are cleared (X.690 clause 11.2.1 leaves them
+	// to a BER sender), so the value equals its re-encoding.
+	if dv, _, err := UnmarshalDataElement(hx(t, "84020530"), 0); err != nil || dv.BitLen != 3 || !bytes.Equal(dv.Bytes, []byte{0x20}) {
+		t.Errorf("padded bit string = %+v, %v", dv, err)
+	}
 	if _, err := MarshalData(&DataValue{Tag: TagDataBitString, Bytes: []byte{0xe0, 0xff}, BitLen: 3}); err == nil {
 		t.Error("MarshalData: bit string length mismatch encoded")
 	}
