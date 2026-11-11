@@ -4,6 +4,7 @@ package session
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
 
@@ -109,6 +110,10 @@ func FuzzSessionRoundTrip(f *testing.F) {
 			calling, called = nil, nil
 		}
 		if err != nil {
+			// Selectors above 16 octets are refused (ISO 8327-1 PI 51/52).
+			if errors.Is(err, ErrSelectorTooLong) && (len(calling) > 16 || len(called) > 16) {
+				return
+			}
 			if len(calling)+len(called)+len(data) < maxLI-32 {
 				t.Fatalf("encode failed for %d bytes: %v", len(calling)+len(called)+len(data), err)
 			}
