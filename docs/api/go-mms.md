@@ -341,6 +341,14 @@ A typical reconnect loop:
 	    }
 	}
 
+### func ValidateIdentifier
+
+```go
+func ValidateIdentifier(name string) error
+```
+
+ValidateIdentifier reports whether name is a strict MMS Identifier (ISO 9506-2 clause 7.5.2): 1..MaxIdentifierLength characters from A-Z a-z 0-9 $ \_. The client and server only enforce the length, so that names peers use outside the character set stay reachable; call this to check names you define yourself. The error matches ErrInvalidArgument.
+
 ## Types
 
 ### type APTitle

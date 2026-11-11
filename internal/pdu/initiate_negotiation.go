@@ -3,7 +3,6 @@
 package pdu
 
 import (
-
 	"github.com/otfabric/go-mms/internal/asn1util"
 	"github.com/otfabric/go-mms/internal/berutil"
 )

@@ -91,6 +91,7 @@ var apiCoverage = map[string][]string{
 	"SelectIndex":           {"TestClient_ReadVariables_WriteVariables"},
 	"SelectRange":           {"TestClient_ReadVariables_WriteVariables"},
 	"ServerConnFromContext": {"TestServerConn_RegisterVariable", "TestServerConn_SendInformationReport"},
+	"ValidateIdentifier":    {"TestIdentifier_PeerNamesOutsideCharset"},
 }
 
 func TestAPICoverage(t *testing.T) {

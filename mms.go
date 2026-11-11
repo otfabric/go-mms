@@ -2316,18 +2316,34 @@ func isIdentifierChar(c byte) bool {
 	return false
 }
 
-// validateIdentifier checks an outbound or registered Identifier
-// (ISO 9506-2 clause 7.5.2): Identifier ::= VisibleString
-// (FROM ("A".."Z" | "a".."z" | "0".."9" | "$" | "_")) (SIZE
-// (1..maxIdentifier)), with maxIdentifier 64 (IEC 61850-8-1 Annex F.3.2
-// and clause 24.2.2.1). Names decoded from a peer are not checked.
+// validateIdentifier checks the length of an outbound or registered
+// Identifier: 1..maxIdentifier characters, maxIdentifier 64 (ISO 9506-2
+// clause 7.5.2, IEC 61850-8-1 Annex F.3.2 and clause 24.2.2.1). The
+// character set is not enforced here: peers serve names outside it (the
+// iec61850-interop fixture and libiec61850 use "visible-string"), and a
+// client must be able to address what a server lists. Use
+// [ValidateIdentifier] for the strict check. Names decoded from a peer
+// are not checked.
 func validateIdentifier(what, s string) error {
 	if s == "" || len(s) > MaxIdentifierLength {
 		return invalidArgf("%s %q: an Identifier has 1..%d characters (ISO 9506-2 clause 7.5.2)", what, s, MaxIdentifierLength)
 	}
-	for i := 0; i < len(s); i++ {
-		if c := s[i]; !isIdentifierChar(c) {
-			return invalidArgf("%s %q: character %q is outside the Identifier character set A-Z a-z 0-9 $ _ (ISO 9506-2 clause 7.5.2)", what, s, c)
+	return nil
+}
+
+// ValidateIdentifier reports whether name is a strict MMS Identifier
+// (ISO 9506-2 clause 7.5.2): 1..[MaxIdentifierLength] characters from
+// A-Z a-z 0-9 $ _. The client and server only enforce the length, so
+// that names peers use outside the character set stay reachable; call
+// this to check names you define yourself. The error matches
+// [ErrInvalidArgument].
+func ValidateIdentifier(name string) error {
+	if err := validateIdentifier("Identifier", name); err != nil {
+		return err
+	}
+	for i := 0; i < len(name); i++ {
+		if c := name[i]; !isIdentifierChar(c) {
+			return invalidArgf("Identifier %q: character %q is outside the Identifier character set A-Z a-z 0-9 $ _ (ISO 9506-2 clause 7.5.2)", name, c)
 		}
 	}
 	return nil

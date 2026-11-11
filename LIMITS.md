@@ -39,7 +39,7 @@ The server also enforces the negotiated `dataStructureNestingLevel` (ISO 9506-2 
 |-------|------:|----------|---------|
 | File name | 255 bytes | `internal/pdu/file.go` | Decoded (all elements joined with `/`) and sent FileName; IEC 61850-8-1 clause 23.1 |
 | Identifier name (received) | 1,024 bytes | `internal/pdu/getnamelist.go` | Caps individual identifier strings from a peer |
-| Identifier name (sent, registered) | 1..64 characters, A–Z a–z 0–9 `$` `_` | `mms.go` (`validateIdentifier`) | ISO 9506-2 clause 7.5.2, IEC 61850-8-1 Annex F.3.2 |
+| Identifier name (sent, registered) | 1..64 characters | `mms.go` (`validateIdentifier`) | ISO 9506-2 clause 7.5.2, IEC 61850-8-1 Annex F.3.2; the character set only with `ValidateIdentifier` |
 
 ## BER encoding limits
 

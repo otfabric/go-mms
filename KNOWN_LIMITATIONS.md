@@ -41,7 +41,7 @@ but no client methods, server handlers, or PDU encoders/decoders exist.
 | Object identifier arcs | `NewObjectIdentifier` requires a first arc of 0, 1 or 2 and, unless the first arc is 2, a second arc below 40 (X.690 §8.19.4). |
 | Real `[8]` is an extension | ISO 9506-2:2003 clause 14.4.2 reserves Data `[8]`. go-mms encodes `NewReal` values there as an ASN.1 REAL, as earlier MMS editions did, and decodes it. Conformant IEC 61850 peers reject it: use `NewFloat32` / `NewFloat64` (floating-point `[7]`). |
 | Floating-point width | `NewFloat` and `NewFloat32` produce a single-precision value (format width 32, exponent width 8), `NewFloat64` a double. A server encodes a Read result with the width its variable's TypeSpec declares. A decoded value keeps its width. |
-| Identifier constraint | Names the client sends and names a server registers must be ISO 9506-2 Identifiers: 1..64 characters (`MaxIdentifierLength`, IEC 61850-8-1 Annex F.3.2) from A–Z a–z 0–9 `$` `_` (clause 7.5.2). Names received from a peer are not checked (up to 1,024 octets). |
+| Identifier constraint | Names the client sends and names a server registers must have 1..64 characters (`MaxIdentifierLength`, IEC 61850-8-1 Annex F.3.2). The character set A–Z a–z 0–9 `$` `_` of ISO 9506-2 clause 7.5.2 is not enforced, because peers serve names outside it (see INTEROP.md); `ValidateIdentifier` is the strict check. Names received from a peer are not checked (up to 1,024 octets). |
 | FileName | A received FileName may have several GraphicString elements (ISO 9506-2 clause 7.5.7); they are joined with `/`. A FileName has at most 255 octets (IEC 61850-8-1 clause 23.1); go-mms sends one element. |
 | GeneralizedTime | All X.680 clause 46 forms are accepted; local time (no `Z` or offset) is read as UTC. go-mms sends UTC with `Z`. |
 | EntryTime | Journal times (start, stop, after, occurrence) are always sent as a 6-octet TimeOfDay (IEC 61850-8-1 clause 8.1.3.8); times before 1984-01-01 are sent as 1984-01-01. |
@@ -59,7 +59,7 @@ but no client methods, server handlers, or PDU encoders/decoders exist.
 | Journal entries per response | 10,000 | Per-response cap for journal reads |
 | GetNameList identifiers | 100,000 | Per-response cap for name lists |
 | File name length | 255 bytes | Decoded and sent FileName (IEC 61850-8-1 clause 23.1) |
-| Identifier name length | 1,024 bytes received, 64 sent | Received identifier cap; sent and registered names follow the Identifier constraint above |
+| Identifier name length | 1,024 bytes received, 64 sent | Received identifier cap; sent and registered names follow the Identifier length above |
 
 ### PDU Size
 

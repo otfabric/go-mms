@@ -526,32 +526,48 @@ func TestSpec_8_1_Table124_ReadJournalOptions(t *testing.T) {
 	}
 }
 
-// TestSpec_9506_2_7_5_2_Identifier: an outbound or registered Identifier
-// is 1..64 characters from A-Z a-z 0-9 $ _ (ISO 9506-2 clause 7.5.2,
-// IEC 61850-8-1 Annex F.3.2) (MMS-PDU-15).
+// TestSpec_9506_2_7_5_2_Identifier: an Identifier is 1..64 characters
+// from A-Z a-z 0-9 $ _ (ISO 9506-2 clause 7.5.2, IEC 61850-8-1 Annex
+// F.3.2) (MMS-PDU-15). The client and server enforce the length on what
+// they send and register; the character set is checked by
+// ValidateIdentifier only, because peers serve names outside it (the
+// iec61850-interop fixture's "visible-string", served by libiec61850).
 func TestSpec_9506_2_7_5_2_Identifier(t *testing.T) {
 	for _, s := range []string{"LLN0$ST$Mod", strings.Repeat("a", 64), "_x9", "IED1LD0"} {
-		if err := validateIdentifier("x", s); err != nil {
-			t.Errorf("%q: %v", s, err)
+		if err := ValidateIdentifier(s); err != nil {
+			t.Errorf("ValidateIdentifier(%q): %v", s, err)
 		}
 	}
 	for _, s := range []string{"", strings.Repeat("a", 65), "a b", "LD.1", "a-b", "é"} {
+		if err := ValidateIdentifier(s); !errors.Is(err, ErrInvalidArgument) {
+			t.Errorf("ValidateIdentifier(%q) = %v, want ErrInvalidArgument", s, err)
+		}
+	}
+	for _, s := range []string{"", strings.Repeat("a", 65)} {
 		if err := validateIdentifier("x", s); !errors.Is(err, ErrInvalidArgument) {
-			t.Errorf("%q: err = %v, want ErrInvalidArgument", s, err)
+			t.Errorf("length %d: err = %v, want ErrInvalidArgument", len(s), err)
+		}
+	}
+	for _, s := range []string{"visible-string", "LD.1"} {
+		if err := validateIdentifier("x", s); err != nil {
+			t.Errorf("%q refused on send/register: %v", s, err)
 		}
 	}
 	srv := NewServer(ServerOptions{})
-	if err := srv.RegisterDomain("LD.1"); !errors.Is(err, ErrInvalidArgument) {
-		t.Errorf("RegisterDomain(LD.1) = %v", err)
+	if err := srv.RegisterDomain(strings.Repeat("D", 65)); !errors.Is(err, ErrInvalidArgument) {
+		t.Errorf("RegisterDomain(65 chars) = %v", err)
 	}
-	if err := srv.RegisterDomain("LD1"); err != nil {
+	if err := srv.RegisterDomain("interop"); err != nil {
 		t.Fatal(err)
 	}
-	if err := srv.RegisterVariable(Variable{Name: ObjectName{Scope: ObjectScopeDomain, Domain: "LD1", ItemID: "a b"}, TypeSpec: TypeSpec{Type: ValueTypeBoolean}}); !errors.Is(err, ErrInvalidArgument) {
-		t.Errorf("RegisterVariable(a b) = %v", err)
+	if err := srv.RegisterVariable(Variable{Name: ObjectName{Scope: ObjectScopeDomain, Domain: "interop", ItemID: "visible-string"}, TypeSpec: TypeSpec{Type: ValueTypeBoolean}}); err != nil {
+		t.Errorf("RegisterVariable(visible-string) = %v", err)
 	}
-	if err := validateObjectName(ObjectName{Scope: ObjectScopeDomain, Domain: "L D", ItemID: "x"}); !errors.Is(err, ErrInvalidArgument) {
-		t.Errorf("domain charset not checked: %v", err)
+	if err := srv.RegisterVariable(Variable{Name: ObjectName{Scope: ObjectScopeDomain, Domain: "interop", ItemID: ItemID(strings.Repeat("v", 65))}, TypeSpec: TypeSpec{Type: ValueTypeBoolean}}); !errors.Is(err, ErrInvalidArgument) {
+		t.Errorf("RegisterVariable(65 chars) = %v", err)
+	}
+	if err := validateObjectName(ObjectName{Scope: ObjectScopeDomain, Domain: DomainID(strings.Repeat("L", 65)), ItemID: "x"}); !errors.Is(err, ErrInvalidArgument) {
+		t.Errorf("domain length not checked: %v", err)
 	}
 }
 
