@@ -414,3 +414,46 @@ func TestSpec_9506_2_23_8_1_JournalAnnotation(t *testing.T) {
 		t.Error("data and annotation encoded together")
 	}
 }
+
+// TestSpec_9506_2_7_5_7_FileNameSequence: FileName is a SEQUENCE OF
+// GraphicString (ISO 9506-2 clause 7.5.7) of at most 255 octets
+// (IEC 61850-8-1 clause 23.1) (MMS-PDU-14).
+func TestSpec_9506_2_7_5_7_FileNameSequence(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"1903646972 1903612e62", "dir/a.b"},
+		{"a00a 1903646972 1903612e62", "dir/a.b"},
+		{"1903612e62", "a.b"},
+	} {
+		got, err := decodeFileName(hx(t, tc.in))
+		if err != nil || got != tc.want {
+			t.Errorf("%s = %q, %v; want %q", tc.in, got, err, tc.want)
+		}
+	}
+	long := append([]byte{0x19, 0x81, 0xff}, bytes.Repeat([]byte{'a'}, 255)...)
+	if got, err := decodeFileName(long); err != nil || len(got) != 255 {
+		t.Errorf("255-octet name: %d, %v", len(got), err)
+	}
+	// 128 + "/" + 127 = 256 octets.
+	split := append(append([]byte{0x19, 0x81, 0x80}, bytes.Repeat([]byte{'a'}, 128)...), append([]byte{0x19, 0x7f}, bytes.Repeat([]byte{'b'}, 127)...)...)
+	for _, in := range [][]byte{split, hx(t, "1903646972 1a03612e62"), hx(t, "a000"), hx(t, "1903646972 19")} {
+		if _, err := decodeFileName(in); err == nil {
+			t.Errorf("%x accepted", in)
+		}
+	}
+	tooLong := strings.Repeat("a", 256)
+	if _, err := MarshalFileOpenRequest(1, tooLong, 0); err == nil {
+		t.Error("FileOpen with a 256-octet name encoded")
+	}
+	if _, err := MarshalFileRenameRequest(1, "a", tooLong); err == nil {
+		t.Error("FileRename with a 256-octet name encoded")
+	}
+	if _, err := MarshalFileDeleteRequest(1, tooLong); err == nil {
+		t.Error("FileDelete with a 256-octet name encoded")
+	}
+	if _, err := MarshalFileDirectoryRequest(1, "", tooLong); err == nil {
+		t.Error("FileDirectory with a 256-octet name encoded")
+	}
+	if _, err := MarshalObtainFileRequest(1, tooLong, "b"); err == nil {
+		t.Error("ObtainFile with a 256-octet name encoded")
+	}
+}
