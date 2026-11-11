@@ -80,7 +80,8 @@ func (r *Rejection) Error() string {
 // session congestion, presentation temporary-congestion, or ACSE
 // rejected (transient).
 func (r *Rejection) Transient() bool {
-	return (r.SessionReason >= 0 && session.ReasonTransient(byte(r.SessionReason))) ||
+	reason := r.SessionReason
+	return (reason >= 0 && reason <= 0xff && session.ReasonTransient(byte(reason))) ||
 		r.ProviderReason == presentation.ProviderReasonTemporaryCongestion ||
 		r.ACSEResult == acse.ResultRejectedTransient
 }

@@ -42,11 +42,12 @@ func UnwrapPdu(data []byte) (tag byte, content []byte, err error) {
 
 	// Every MMS PDU tag fits the single-byte form; a long-form tag
 	// number must not be truncated into one of them.
-	if el.Tag > 30 {
-		return 0, nil, fmt.Errorf("codec: unwrap PDU: tag number %d is not an MMS PDU", el.Tag)
+	tagNum := el.Tag
+	if tagNum < 0 || tagNum > 30 {
+		return 0, nil, fmt.Errorf("codec: unwrap PDU: tag number %d is not an MMS PDU", tagNum)
 	}
 
-	tag = el.Class | byte(el.Tag)
+	tag = el.Class | byte(tagNum)
 	if el.Constructed {
 		tag |= asn1util.ConstructedFlag
 	}
