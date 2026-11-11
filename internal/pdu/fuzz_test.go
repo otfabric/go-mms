@@ -552,10 +552,10 @@ func FuzzDecodeReal(f *testing.F) {
 
 // FuzzDecodeBooleanArray fuzzes the BooleanArray data element decoder.
 func FuzzDecodeBooleanArray(f *testing.F) {
-	f.Add(encodeBitString([]byte{0xff}, 8))
-	f.Add(encodeBitString([]byte{0xaa, 0x55}, 16))
-	f.Add(encodeBitString([]byte{0xf0}, 4))
-	f.Add(encodeBitString(nil, 0))
+	f.Add(mustBitString([]byte{0xff}, 8))
+	f.Add(mustBitString([]byte{0xaa, 0x55}, 16))
+	f.Add(mustBitString([]byte{0xf0}, 4))
+	f.Add(mustBitString(nil, 0))
 	f.Add([]byte{0x00})
 
 	f.Fuzz(func(t *testing.T, content []byte) {
@@ -618,4 +618,12 @@ func FuzzDecodeObjectIdentifier(f *testing.F) {
 			}
 		}
 	})
+}
+
+func mustBitString(data []byte, bitLen int) []byte {
+	b, err := encodeBitString(data, bitLen)
+	if err != nil {
+		panic(err)
+	}
+	return b
 }

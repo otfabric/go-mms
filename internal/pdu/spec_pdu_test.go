@@ -492,3 +492,86 @@ func TestSpec_9506_2_14_9_GetVarAccessResponse(t *testing.T) {
 		}
 	}
 }
+
+// TestSpec_X690_8_6_2_BitStringEncode: the initial octet gives the unused
+// bits of the last octet (X.690 clause 8.6.2), so the contents must hold
+// exactly ceil(bitLen/8) octets; unused bits are sent as zero (MMS-PDU-19).
+func TestSpec_X690_8_6_2_BitStringEncode(t *testing.T) {
+	for _, tc := range []struct {
+		data   string
+		bitLen int
+		want   string
+	}{
+		{"ff", 3, "05e0"},
+		{"", 0, "00"},
+		{"ffff", 0, "00ffff"},
+		{"ffff", 13, "03fff8"},
+		{"aa", 8, "00aa"},
+	} {
+		got, err := encodeBitString(hx(t, tc.data), tc.bitLen)
+		if err != nil || hex.EncodeToString(got) != tc.want {
+			t.Errorf("(%s, %d) = %x, %v; want %s", tc.data, tc.bitLen, got, err, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		data   string
+		bitLen int
+	}{{"e0ff", 3}, {"", 3}, {"ff", -1}, {"ff", 9}} {
+		if got, err := encodeBitString(hx(t, tc.data), tc.bitLen); err == nil {
+			t.Errorf("(%s, %d) = %x, want error", tc.data, tc.bitLen, got)
+		}
+	}
+	if _, err := MarshalData(&DataValue{Tag: TagDataBitString, Bytes: []byte{0xe0, 0xff}, BitLen: 3}); err == nil {
+		t.Error("MarshalData: bit string length mismatch encoded")
+	}
+	if _, err := MarshalData(&DataValue{Tag: TagDataBooleanArray, Bytes: []byte{0xe0, 0xff}, BitLen: 3}); err == nil {
+		t.Error("MarshalData: boolean array length mismatch encoded")
+	}
+}
+
+// TestSpec_9506_2_14_4_2_BCDNotNegative: bcd [13] "shall not be negative"
+// (ISO 9506-2 clause 14.4.2) on encode and decode (MMS-PDU-21).
+func TestSpec_9506_2_14_4_2_BCDNotNegative(t *testing.T) {
+	if _, err := MarshalData(&DataValue{Tag: TagDataBCD, Int: -1}); err == nil {
+		t.Error("negative BCD encoded")
+	}
+	if _, _, err := UnmarshalDataElement(hx(t, "8d01ff"), 0); err == nil {
+		t.Error("negative BCD decoded")
+	}
+	if dv, _, err := UnmarshalDataElement(hx(t, "8d0109"), 0); err != nil || dv.Int != 9 {
+		t.Errorf("BCD 9 = %+v, %v", dv, err)
+	}
+}
+
+// TestSpec_X680_46_GeneralizedTime: every GeneralizedTime form of X.680
+// clause 46 is accepted; local time is read as UTC (MMS-PDU-22).
+func TestSpec_X680_46_GeneralizedTime(t *testing.T) {
+	base := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	for in, want := range map[string]time.Time{
+		"20240101120000Z":     base,
+		"20240101120000.123Z": base.Add(123 * time.Millisecond),
+		"20240101120000,5Z":   base.Add(500 * time.Millisecond),
+		"20240101120000":      base,
+		"20240101120000+0100": base.Add(-time.Hour),
+		"20240101120000-01":   base.Add(time.Hour),
+		"202401011200Z":       base,
+		"2024010112Z":         base,
+		"2024010112.5Z":       base.Add(30 * time.Minute),
+		"202401011230.5":      base.Add(30*time.Minute + 30*time.Second),
+	} {
+		got, err := ParseGeneralizedTime(in)
+		if err != nil || !got.Equal(want) {
+			t.Errorf("%s = %v, %v; want %v", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "2024", "20241301120000Z", "20240230120000Z", "20240101250000Z", "20240101120000.Z",
+		"20240101120000X", "20240101120000+01000", "20240101120000+2400", "2024010112000", "20240101120060Z", "2024010112a0Z"} {
+		if _, err := ParseGeneralizedTime(in); err == nil {
+			t.Errorf("%q accepted", in)
+		}
+	}
+	dv, _, err := UnmarshalDataElement(append([]byte{0x8b, 19}, "20240101120000+0100"...), 0)
+	if err != nil || !dv.Time.Equal(base.Add(-time.Hour)) {
+		t.Errorf("Data generalized-time = %+v, %v", dv, err)
+	}
+}

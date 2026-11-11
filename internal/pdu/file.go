@@ -475,7 +475,7 @@ func parseFileAttributes(data []byte, r *FileOpenResult) (hasSize bool, _ error)
 			r.Size = int64(v)
 			hasSize = true
 		case 0x81: // lastModified
-			t, err := time.Parse("20060102150405Z", string(inner))
+			t, err := ParseGeneralizedTime(string(inner))
 			if err != nil {
 				return false, fmt.Errorf("pdu: file lastModified: %w", err)
 			}
