@@ -199,6 +199,9 @@ func (s *Server) HandleStatus(h func(context.Context, StatusRequest) (*ServerSta
 
 // RegisterDomain adds a domain to the server's MMS object model.
 func (s *Server) RegisterDomain(name string) error {
+	if err := validateIdentifier("domain", name); err != nil {
+		return invalidArgf("mms: register domain: %w", err)
+	}
 	return s.registry.RegisterDomain(name)
 }
 

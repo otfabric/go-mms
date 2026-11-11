@@ -2313,6 +2313,9 @@ func validateObjectName(n ObjectName) error {
 	if n.ItemID == "" {
 		return invalidArgf("empty ItemID")
 	}
+	if err := validateIdentifier("ItemID", string(n.ItemID)); err != nil {
+		return err
+	}
 	switch n.Scope {
 	case ObjectScopeVMD, ObjectScopeAssociation:
 		// valid
@@ -2320,8 +2323,33 @@ func validateObjectName(n ObjectName) error {
 		if n.Domain == "" {
 			return invalidArgf("domain scope requires non-empty Domain")
 		}
+		if err := validateIdentifier("Domain", string(n.Domain)); err != nil {
+			return err
+		}
 	default:
 		return invalidArgf("unknown scope %d", int(n.Scope))
+	}
+	return nil
+}
+
+// MaxIdentifierLength is maxIdentifier of the IEC 61850-8-1 MMS profile
+// (8-1 Annex F.3.2): an Identifier has 1 to 64 characters.
+const MaxIdentifierLength = 64
+
+// validateIdentifier checks an outbound or registered Identifier
+// (ISO 9506-2 clause 7.5.2): Identifier ::= VisibleString
+// (FROM ("A".."Z" | "a".."z" | "0".."9" | "$" | "_")) (SIZE
+// (1..maxIdentifier)), with maxIdentifier 64 (IEC 61850-8-1 Annex F.3.2
+// and clause 24.2.2.1). Names decoded from a peer are not checked.
+func validateIdentifier(what, s string) error {
+	if s == "" || len(s) > MaxIdentifierLength {
+		return invalidArgf("%s %q: an Identifier has 1..%d characters (ISO 9506-2 clause 7.5.2)", what, s, MaxIdentifierLength)
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !('A' <= c && c <= 'Z' || 'a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '$' || c == '_') {
+			return invalidArgf("%s %q: character %q is outside the Identifier character set A-Z a-z 0-9 $ _ (ISO 9506-2 clause 7.5.2)", what, s, c)
+		}
 	}
 	return nil
 }
