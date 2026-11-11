@@ -601,9 +601,12 @@ func encodeBinaryTimeChecked(msEpoch int64) ([]byte, error) {
 		return buf, nil
 	case msEpoch >= binaryTimeMinMs && msEpoch <= binaryTimeMaxMs:
 		return encodeBinaryTime(msEpoch), nil
-	case msEpoch > binaryTimeMaxMs && msEpoch <= binaryTimeOverflowMaxMs:
+	}
+	// Past the last day the field carries the milliseconds since its
+	// start (binaryTimeOverflowMaxMs is that day plus timeOfDayMsMax).
+	if field := msEpoch - binaryTimeLastDayMs; msEpoch > binaryTimeMaxMs && field >= 0 && field <= timeOfDayMsMax {
 		buf := make([]byte, 6)
-		binary.BigEndian.PutUint32(buf[0:4], uint32(msEpoch-binaryTimeLastDayMs))
+		binary.BigEndian.PutUint32(buf[0:4], uint32(field))
 		binary.BigEndian.PutUint16(buf[4:6], 0xffff)
 		return buf, nil
 	}

@@ -366,3 +366,22 @@ func TestSpec_8650_ResponderAuthEcho(t *testing.T) {
 		t.Fatalf("%+v %v", r, err)
 	}
 }
+
+// A session reason outside one octet is not read modulo 256: 0x100 plus
+// a congestion reason is not transient.
+func TestRejection_TransientSessionReasonRange(t *testing.T) {
+	for _, tc := range []struct {
+		reason int
+		want   bool
+	}{
+		{-1, false},
+		{int(session.ReasonUserCongestion), true},
+		{0x100 + int(session.ReasonUserCongestion), false},
+	} {
+		r := newRejection()
+		r.SessionReason = tc.reason
+		if got := r.Transient(); got != tc.want {
+			t.Errorf("SessionReason %#x: Transient = %v, want %v", tc.reason, got, tc.want)
+		}
+	}
+}

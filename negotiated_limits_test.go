@@ -320,6 +320,10 @@ func nestingServer(t *testing.T) (*Client, *Server, *wireCapture) {
 	if got := c.Negotiated().NestingLevel; got != 2 {
 		t.Fatalf("negotiated nesting %d, want 2", got)
 	}
+	// The server registers the connection after it has sent the
+	// Initiate-Response, so NewClient can return first; a Broadcast
+	// before then reaches nobody.
+	waitForConnections(t, srv, 1, 5*time.Second)
 	w.take()
 	return c, srv, w
 }
