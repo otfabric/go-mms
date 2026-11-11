@@ -842,8 +842,13 @@ func TestClient_ReadJournalTimeRange(t *testing.T) {
 	if _, err := c.ReadJournalTimeRange(ctx, dom, "nope", t0, t0.Add(time.Hour)); err == nil {
 		t.Error("unknown journal: expected error")
 	}
-	if _, err := c.ReadJournalTimeRange(ctx, dom, journal, time.Time{}, t0); err == nil {
-		t.Error("start before the TimeOfDay epoch: expected error")
+	// A start before 1984 is clamped to the EntryTime epoch (IEC 61850-8-1
+	// clause 8.1.3.8, MMS-PDU-29): the range covers every entry up to t0.
+	if res, err := c.ReadJournalTimeRange(ctx, dom, journal, time.Time{}, t0); err != nil || len(res.Entries) != 1 {
+		t.Errorf("start before the TimeOfDay epoch: %v, %v", res, err)
+	}
+	if _, err := c.ReadJournalTimeRange(ctx, dom, journal, t0, time.Date(2200, 1, 1, 0, 0, 0, 0, time.UTC)); err == nil {
+		t.Error("stop beyond the TimeOfDay range: expected error")
 	}
 }
 
