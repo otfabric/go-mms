@@ -95,7 +95,7 @@
 2. ~~Abort PDU (server→client)~~ — **Resolved.** `ServerConn.Abort()` sends ACSE ABRT before transport close.
 3. ~~Association-scope object listing~~ — **Resolved.** `GetNameList` for association-scope NVLs is now implemented with per-connection storage.
 4. ~~DeleteNamedVariableList scope~~ — **Resolved.** All four `scopeOfDelete` values (0=specific, 1=aa-specific, 2=domain, 3=VMD) are supported by the server; the client exposes 0, 2 and 3 (no aa-specific helper). Goes beyond C reference which only supports `scopeOfDelete=0`.
-5. ~~No fuzz coverage for file/journal PDUs~~ — **Resolved.** 69 fuzz targets across all service categories, the value codec and server dispatch.
+5. ~~No fuzz coverage for file/journal PDUs~~ — **Resolved.** 70 fuzz targets across all service categories, the value codec and server dispatch.
 6. ~~Unsolicited Status~~ — **Resolved.** `ServerConn.SendUnsolicitedStatus()` sends UnconfirmedPDU with VMD status.
 7. ~~Cancel service~~ — **Resolved.** Server handles CancelRequestPDU and responds with CancelError (invoke-id-unknown, since requests are processed synchronously).
 8. ~~No live-wire interop testing~~ — **Resolved.** `interop/` runs both directions against libiec61850 through the iec61850-interop adapter images; see [INTEROP.md](INTEROP.md).

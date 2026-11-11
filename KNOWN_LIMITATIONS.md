@@ -135,7 +135,7 @@ listed here for transparency.
 
 | Gap | Details |
 |-----|---------|
-| Single peer implementation | Live-wire interop (`interop/`, see [INTEROP.md](INTEROP.md)) runs against libiec61850 only. Behaviour where libiec61850 deviates (listOfVariable reports, FileOpen initial position, bulk NVL delete, ObtainFile) is pinned by tests but not cross-checked against a second implementation. |
+| Deviations of the reference peers | Live-wire interop (`interop/`, see [INTEROP.md](INTEROP.md)) runs against libiec61850, dscsystems and iec61850-rust, and iec61850bean as an IED. Where these peers share a deviation (listOfVariable reports, FileOpen initial position, bulk NVL delete, ObtainFile role reversal) the go-mms side of the scenario is pinned by tests; which peer shows which deviation is in INTEROP.md. |
 | Cancel and UnsolicitedStatus not interop-tested | The go-mms client sends no Cancel (the server side is unit-tested), and the libiec61850 client has no UnsolicitedStatus handler (the server side is covered by `e2e`). |
 
 ## Not in Scope

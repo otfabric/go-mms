@@ -113,10 +113,10 @@ exist.
 
 | Stack | Upstream | Result | Quirks | Skipped |
 |-------|----------|--------|--------|---------|
-| libiec61850 | libiec61850 1.6.2.1-89-g6e265c54 | 120 pass | VMD named-list reports only; FileOpen ignores the seek | — |
-| dscsystems | dscsystems/go-iec61850 6bf3f37 (GPL, isolated container) | 112 pass, 8 skip | client drops FileOpen `lastModified`; no write to a named variable list | index-range alternate access (server refuses >1 element); client has no alternate access, association-specific NVLs or NVL write |
-| iec61850bean | beanit iec61850bean 1.9.0 (IED adapters only) | 14 pass (`TestIEDServer_*`); the 118 MMS contract tests skip | no Identify (no response); no Conclude (no response, `Close` ends at its deadline); a read of an unknown name disconnects | MMS contract suite: the image has no `<stack>-mms-server` / `-mms-client` |
-| iec61850-rust | csp0924/iec61850-rust (d4e8952) | 120 pass | — (its known limitations match libiec61850's and are asserted: ObtainFile role reversal answered file-other, domain/VMD NVL deletion object-access-unsupported, client abort closes the transport, in-memory file store) | — |
+| libiec61850 | libiec61850 1.6.2.1-89-g6e265c54 | 121 pass | VMD named-list reports only; FileOpen ignores the seek | — |
+| dscsystems | dscsystems/go-iec61850 6bf3f37 (GPL, isolated container) | 113 pass, 8 skip | client drops FileOpen `lastModified`; no write to a named variable list | index-range alternate access (server refuses >1 element); client has no alternate access, association-specific NVLs or NVL write |
+| iec61850bean | beanit iec61850bean 1.9.0 (IED adapters only) | 14 pass (`TestIEDServer_*`); the 119 MMS contract tests skip | no Identify (no response); no Conclude (no response, `Close` ends at its deadline); a read of an unknown name disconnects | MMS contract suite: the image has no `<stack>-mms-server` / `-mms-client` |
+| iec61850-rust | csp0924/iec61850-rust (d4e8952) | 121 pass | — (its known limitations match libiec61850's and are asserted: ObtainFile role reversal answered file-other, domain/VMD NVL deletion object-access-unsupported, client abort closes the transport, in-memory file store) | — |
 
 Skipped tests per stack:
 

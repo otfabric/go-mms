@@ -252,9 +252,9 @@ correct protocol encoding or decoding defects without being considered breaking
 changes — a standards-correct wire fix can change observable behaviour while
 remaining API-compatible.
 
-- **Well-tested**: 1,000+ unit tests, 60+ end-to-end tests, 200+ negative
-  tests, race/concurrency and chaos tests, 60 fuzz targets, 21 benchmarks.
-- **Quality gates** (CI `quality` job; coverage and the short fuzz pass are
+- **Well-tested**: 1,200+ test functions, 75+ of them end-to-end, 200+ negative
+  tests, race/concurrency and chaos tests, 70 fuzz targets, 22 benchmarks.
+- **Quality gates** (CI; coverage and the short fuzz pass are
   also part of `make check`): ≥ 90% statement
   coverage per package and in total (`make coverage`), a fuzz pass over
   every target (`make fuzz-short`; `make fuzz` for longer runs), and chaos
@@ -263,7 +263,8 @@ remaining API-compatible.
 - **Hardened**: strict decoder validation, bounds checking on all PDU
   fields, resource limits on negotiated parameters.
 - **Interop-verified**: client and server behaviour tested bidirectionally
-  against a pinned libiec61850 adapter; see [INTEROP.md](INTEROP.md).
+  against pinned libiec61850, dscsystems and iec61850-rust adapters, and the
+  client against an iec61850bean IED; see [INTEROP.md](INTEROP.md).
   Testing against physical IEDs has not yet been formally established.
 
 ## Documentation
