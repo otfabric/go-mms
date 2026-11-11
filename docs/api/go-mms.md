@@ -208,7 +208,11 @@ const (
 	// Deprecated: Use [DataAccessErrorTypeUnsupported].
 	DataAccessErrorTypeMismatch = DataAccessErrorTypeUnsupported
 
-	// Deprecated: Use [DataAccessErrorObjectAttributeInconsistent].
+	// Deprecated: Use [DataAccessErrorObjectAttributeInconsistent]. The
+	// name is misleading: object-exists is not a DataAccessError but the
+	// definition-class ServiceError code 5 (ISO 9506-2 clause 7.4.1);
+	// the alias keeps the value of object-attribute-inconsistent (8) for
+	// compatibility.
 	DataAccessErrorObjectExists = DataAccessErrorObjectAttributeInconsistent
 )
 ```
@@ -239,6 +243,12 @@ const (
 ```
 
 UTCTime quality byte bit masks (IEC 61850-8-1 TimeQuality).
+
+```go
+const MaxIdentifierLength = 64
+```
+
+MaxIdentifierLength is maxIdentifier of the IEC 61850-8-1 MMS profile (8-1 Annex F.3.2): an Identifier has 1 to 64 characters.
 
 ```go
 const VMDPhysicalStatusPartiallyOper = VMDPhysicalStatusPartiallyOperational
@@ -787,6 +797,7 @@ type Client struct {
 	// closed when reader loop exits
 	// why the reader loop exited; guarded by mu
 	// receives signal when ConcludeResponse arrives
+	// the Conclude-ErrorPDU received, if any; guarded by mu
 
 	// Negotiated parameters from MMS Initiate handshake.
 
@@ -1751,10 +1762,37 @@ type JournalEntry struct {
 	EntryID        []byte
 	OccurrenceTime time.Time
 	Variables      []JournalVariable
+
+	// Annotation holds the text of an annotation entry (ISO 9506-2
+	// clause 23.8.1 entryForm annotation [3]) when HasAnnotation is set;
+	// such an entry has no Variables.
+	HasAnnotation bool
+	Annotation    string
 }
 ```
 
 JournalEntry is a single entry returned by a ReadJournal call. These types are shared between client results and server-side [JournalProvider](#type-journalprovider) implementations; the journal entry shape is defined by the MMS protocol and is the same on both sides.
+
+### type JournalInitializer
+
+```go
+type JournalInitializer interface {
+	InitializeJournal(ctx context.Context, domain, journal string, limit *JournalLimit) (deleted uint32, err error)
+}
+```
+
+JournalInitializer is an optional extension of [JournalProvider](#type-journalprovider) for the InitializeJournal service (ISO 9506-2 clause 23.4; mandatory for a server with a log model, IEC 61850-8-1 Table 111 c12, Table 126). The server calls InitializeJournal with limit nil to delete every entry. It returns the number of entries deleted. Return an error wrapping [fs.ErrNotExist](https://pkg.go.dev/io/fs#ErrNotExist) for an unknown journal.
+
+### type JournalLimit
+
+```go
+type JournalLimit struct {
+	Time    time.Time
+	EntryID []byte // nil when the request has no limitingEntry
+}
+```
+
+JournalLimit is the limitSpecification of an InitializeJournal request (ISO 9506-2 clause 23.4): delete the entries up to and including Time, or, with EntryID, up to and including that entry at Time.
 
 ### type JournalProvider
 
@@ -1797,6 +1835,53 @@ The provider MAY return fewer than maxEntries entries. When [JournalResult.MoreF
 #### Error mapping {#hdr-Error_mapping}
 
 If the provider returns [fs.ErrNotExist](https://pkg.go.dev/io/fs#ErrNotExist), the server maps it to MMS error class "access" (7), code "object-non-existent" (0). If the provider returns [fs.ErrPermission](https://pkg.go.dev/io/fs#ErrPermission) or ErrFileAccessDenied, the server maps it to "access" (7), code "object-access-denied" (1). All other errors are mapped to "access" (7), code "other" (0).
+
+### type JournalQuery
+
+```go
+type JournalQuery struct {
+	Domain, Journal string
+
+	// Range start: StartTime (startingTime) or StartEntry (startingEntry,
+	// inclusive). Neither set: from the oldest entry.
+	HasStartTime bool
+	StartTime    time.Time
+	StartEntry   []byte
+
+	// Range stop: StopTime (endingTime) or NumberOfEntries. Neither set:
+	// to the newest entry.
+	HasStopTime        bool
+	StopTime           time.Time
+	HasNumberOfEntries bool
+	NumberOfEntries    int
+
+	// entryToStartAfter: return entries after (AfterTime, AfterID).
+	HasStartAfter bool
+	AfterTime     time.Time
+	AfterID       []byte
+
+	// ListOfVariables restricts the variables returned per entry; nil
+	// returns all.
+	ListOfVariables []string
+
+	// MaxEntries is the number of entries the server can send; the
+	// provider may return fewer and set MoreFollows.
+	MaxEntries int
+}
+```
+
+JournalQuery is a complete ReadJournal request (ISO 9506-2 clause 23.2). IEC 61850-8-1 Table 124 requires a server to support every option; the start and stop specifications are independent.
+
+### type JournalQueryProvider
+
+```go
+type JournalQueryProvider interface {
+	JournalProvider
+	ReadJournal(ctx context.Context, q JournalQuery) (*JournalResult, error)
+}
+```
+
+JournalQueryProvider is an optional extension of [JournalProvider](#type-journalprovider): a provider that implements it receives every ReadJournal request in full. Without it the server maps a request onto ReadTimeRange and ReadStartAfter, filtering and truncating the result; a startingEntry range start then cannot be served and is answered with access/object-access-unsupported.
 
 ### type JournalResult
 
@@ -2579,10 +2664,24 @@ type ServiceError struct {
 	Class    ErrorClass
 	Code     int
 	InvokeID InvokeID
+
+	// AdditionalCode is the optional additionalCode [1]; nil when absent.
+	AdditionalCode *int
+	// AdditionalDescription is the optional additionalDescription [2]
+	// (a VisibleString); "" when absent.
+	AdditionalDescription string
+	// ServiceSpecific is the optional serviceSpecificInfo [3]; nil when
+	// absent.
+	ServiceSpecific *ServiceSpecificInfo
+	// ModifierPosition is the optional modifierPosition [1] of the
+	// Confirmed-ErrorPDU (clause 7.4); nil when absent. A server ignores it.
+	ModifierPosition *uint32
 }
 ```
 
 ServiceError represents a remote MMS service error received via ConfirmedErrorPDU. Use [errors.As](https://pkg.go.dev/errors#As) to extract it from wrapped errors.
+
+The optional ServiceError components of ISO 9506-2 clause 7.4.1 are carried when the peer sends them; a [Server](#type-server) handler may set them too. A Conclude-ErrorPDU (Conclude-ErrorPDU ::= ServiceError, clause 8.4.3) is returned by [Client.Close](#func-client-close) as a ServiceError with InvokeID 0.
 
 #### func (ServiceError) CodeName
 
@@ -2603,6 +2702,19 @@ func (e *ServiceError) Error() string
 ```go
 func (e *ServiceError) Unwrap() error
 ```
+
+### type ServiceSpecificInfo
+
+```go
+type ServiceSpecificInfo struct {
+	Kind     int
+	Raw      []byte
+	HasValue bool
+	Value    int
+}
+```
+
+ServiceSpecificInfo is the serviceSpecificInfo \[3] CHOICE of a ServiceError (ISO 9506-2 clause 7.4.1). Kind is the alternative's tag number: 0 obtainFile, 1 start, 2 stop, 3 resume, 4 reset, 5 deleteVariableAccess, 6 deleteNamedVariableList, 7 deleteNamedType, 8 defineEventEnrollment, 9 fileRename, 10 additionalService, 11 changeAccessControl. For the alternatives that are a single INTEGER or ENUMERATED (for example numberDeleted of DeleteNamedVariableList-Error) HasValue is set and Value holds it; Raw always holds the contents octets.
 
 ### type StatusRequest
 
@@ -2754,13 +2866,15 @@ TypeSpecElement represents a single element within a structure type specificatio
 type VMDLogicalStatus int
 ```
 
-VMDLogicalStatus represents the logical status of a VMD (Virtual Manufacturing Device).
+VMDLogicalStatus represents the logical status of a VMD (Virtual Manufacturing Device): vmdLogicalStatus of Status-Response, 0..3 (ISO 9506-2 clause 10.2).
 
 ```go
 const (
 	VMDLogicalStatusStateChangesAllowed VMDLogicalStatus = 0
 	VMDLogicalStatusNoStateChanges      VMDLogicalStatus = 1
 	VMDLogicalStatusLimited             VMDLogicalStatus = 2
+	// VMDLogicalStatusSupportServices is support-services-allowed (3).
+	VMDLogicalStatusSupportServices VMDLogicalStatus = 3
 )
 ```
 
@@ -2804,6 +2918,7 @@ type Value struct {
 
 	// Exactly one of these is populated based on typ.
 
+	// Float: 0 not declared (sent as 32-bit), 32 or 64
 	// OctetString, BitString
 	// BitString: number of valid bits
 	// VisibleString, MmsString
@@ -2903,7 +3018,25 @@ NewDataAccessError creates a [Value](#type-value) of type ValueTypeDataAccessErr
 func NewFloat(f float64) *Value
 ```
 
-NewFloat creates a [Value](#type-value) of type ValueTypeFloat.
+NewFloat creates a [Value](#type-value) of type ValueTypeFloat without a declared width. It is encoded as a single-precision floating-point (format width 32, exponent width 8: IEC 61850 FLOAT32) unless a [Server](#type-server) serves it for a variable whose [TypeSpec](#type-typespec) declares 64 bits. The MMS Floatingpoint width is a property of the variable's type (ISO 9506-2 clause 14.4, TypeDescription floating-point), not of the value. Use [NewFloat64](#func-newfloat64) to send double precision and [NewFloat32](#func-newfloat32) to state single precision.
+
+Up to v1.7.2 the width followed the value (9 octets whenever float32 could not represent it exactly), so a FLOAT32 attribute could be written with a double.
+
+#### func NewFloat32
+
+```go
+func NewFloat32(f float32) *Value
+```
+
+NewFloat32 creates a single-precision ValueTypeFloat (format width 32, exponent width 8; IEC 61850 FLOAT32).
+
+#### func NewFloat64
+
+```go
+func NewFloat64(f float64) *Value
+```
+
+NewFloat64 creates a double-precision ValueTypeFloat (format width 64, exponent width 11; IEC 61850 FLOAT64).
 
 #### func NewGeneralizedTime
 
@@ -3088,6 +3221,14 @@ func (v *Value) Float64() (val float64, ok bool)
 ```
 
 Float64 returns a 64-bit float. ok is false if the value is not ValueTypeFloat.
+
+#### func (Value) FloatWidth
+
+```go
+func (v *Value) FloatWidth() int
+```
+
+FloatWidth returns the declared width of a ValueTypeFloat in bits: 32 or 64 for a value decoded from the wire or made by [NewFloat32](#func-newfloat32) or [NewFloat64](#func-newfloat64), 0 for [NewFloat](#func-newfloat) (encoded as 32 bits). It returns 0 for any other type.
 
 #### func (Value) GeneralizedTime
 

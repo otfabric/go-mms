@@ -222,6 +222,22 @@ The ◐ rows are listed with the test that pins the peer behaviour in the iec618
 
 ## Related test suites
 
+### Wire changes not yet re-run against the pinned peer
+
+The following conformance changes alter bytes on the wire and are covered
+by unit and `e2e` tests only; the table above stays the record of the last
+passing interop run until `make interop-all` is run on them:
+
+- nested AlternateAccess sent as an untagged SEQUENCE OF (0x30), as the
+  libiec61850 asn1c encoder does (ISO 9506-2 clause 14.3.1); 0xa5 is still
+  accepted;
+- `NewFloat` sent as single precision, server Read results with the width of
+  the variable's TypeSpec;
+- RejectPDU instead of ServiceError for unsupported services and malformed
+  requests, and Reject on oversized requests;
+- journal times always as a 6-octet TimeOfDay;
+- InitializeJournal and GetDomainAttributes on the server.
+
 The interop suite complements the in-process quality gates (all without
 Docker):
 

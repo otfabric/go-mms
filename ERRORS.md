@@ -30,6 +30,7 @@ original chain (transport errors, `context` errors, typed errors):
 | Malformed response to a request | `ErrDecodeFailed` |
 | ConfirmedErrorPDU | `*ServiceError`, `ErrServiceRejected` |
 | RejectPDU | `*RejectError`, `*ProtocolError` (phase `mms`), `ErrProtocol` |
+| Conclude-ErrorPDU in answer to `Close` | `*ServiceError` (class Conclude), `ErrServiceRejected`; the association is still released |
 | `Server.Serve` association failure | `ErrAssociationFailed` (or `*AuthenticationError`) |
 | `Server.Serve` association ended abnormally | `ErrClosed` |
 | `Serve` / `ListenAndServe` after `Server.Shutdown` | `ErrServerClosed` |
@@ -81,6 +82,14 @@ confirmed service request (Read, Write, GetNameList, etc.).
 | `Class` | `ErrorClass` | MMS error class (VMDState, ApplicationReference, Definition, Resource, Service, Access, File, etc.) |
 | `Code` | `int` | Error code within the class |
 | `InvokeID` | `InvokeID` | Correlation ID of the failed request |
+| `AdditionalCode` | `*int` | Optional additionalCode [1] (ISO 9506-2 clause 7.4.1); nil when absent |
+| `AdditionalDescription` | `string` | Optional additionalDescription [2]; `""` when absent |
+| `ServiceSpecific` | `*ServiceSpecificInfo` | Optional serviceSpecificInfo [3] (`Kind` is the alternative's tag, `Raw` its contents, `Value` for the single-INTEGER alternatives such as DeleteNamedVariableList numberDeleted); nil when absent |
+| `ModifierPosition` | `*uint32` | Optional modifierPosition of the Confirmed-ErrorPDU; nil when absent |
+
+The client accepts every errorClass alternative 0..12 and reports a
+missing or malformed errorClass as `ErrDecodeFailed` instead of inventing a
+value.
 
 - **Unwraps to:** `ErrServiceRejected`
 - **Check with:** `errors.As(err, &se)` and/or `errors.Is(err, mms.ErrServiceRejected)`
@@ -95,8 +104,27 @@ confirmed service request (Read, Write, GetNameList, etc.).
 `Class` and `Code` sent in the ConfirmedErrorPDU; other handler errors are
 sent as class Access, code 1. `FileProvider` and `JournalProvider` errors
 are mapped by kind (`fs.ErrNotExist`, `fs.ErrPermission`,
-`ErrFileAccessDenied`, other). A Status request with a malformed body is
-answered with class Service, code other (was class Resource).
+`ErrFileAccessDenied`, other). The additional fields above are sent when
+set. A response that does not fit the negotiated PDU size is answered with
+class Service, code pdu-size (3) (IEC 61850-8-1 Table 17).
+
+Requests the server cannot serve get a RejectPDU, not a ServiceError (ISO
+9506-2 clause 8.6, IEC 61850-8-1 clause 8.1.3.4):
+
+| Request | RejectPDU |
+|---------|-----------|
+| Service not implemented, or not configured (no handler or provider) | confirmed-requestPDU unrecognized-service (1) |
+| Malformed service body (Status included) | confirmed-requestPDU invalid-argument (4) |
+| Invoke ID outside 0..2^31−1, or not a universal INTEGER | confirmed-requestPDU invalid-invokeID (3) |
+| Larger than the negotiated PDU size | confirmed-requestPDU value-out-of-range (9) |
+| Data nested deeper than the negotiated nesting level | confirmed-requestPDU max-recursion-exceeded (8) |
+| Write whose listOfData count differs from the variables | confirmed-requestPDU invalid-argument (4) |
+| Malformed Cancel-RequestPDU | cancel-requestPDU invalid-invokeID (1) |
+| Unknown PDU type / undecodable PDU | pdu-error unknown-pdu-type (0) / invalid-pdu (1) |
+
+A GetNameList that conflicts with IEC 61850-8-1 Table 15 (domain names in
+a non-VMD scope, journals in association scope) is answered with class
+Service, code object-constraint-conflict.
 
 ### `*DecodeError`
 
