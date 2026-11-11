@@ -162,17 +162,20 @@ func TestUnmarshalReadJournalRequest_MissingName(t *testing.T) {
 	}
 }
 
-func TestUnmarshalReadJournalRequest_MissingRange(t *testing.T) {
-	// journalName only, no range specification at all.
+// Every range component is OPTIONAL (ISO 9506-2 clause 23.2); a request
+// naming only the journal reads from the oldest entry. IEC 61850-8-1
+// Table 124 c1 constrains clients, not the server (this used to be an
+// error, MMS-PDU-12).
+func TestUnmarshalReadJournalRequest_NameOnly(t *testing.T) {
 	name := encodeDomainObjectName(t, "D", "J")
 	nameWrapped := berutil.EncodeTLV(0xa0, name)
-	_, err := UnmarshalReadJournalRequest(nameWrapped)
-	if err == nil {
-		t.Fatal("expected error for request with no range specification")
+	r, err := UnmarshalReadJournalRequest(nameWrapped)
+	if err != nil || r.HasStartTime || r.HasStopTime || r.IsStartAfter {
+		t.Fatalf("name only = %+v, %v", r, err)
 	}
 }
 
-func TestUnmarshalReadJournalRequest_BothRangeAndStartAfter(t *testing.T) {
+func TestUnmarshalReadJournalRequest_RangeAndStartAfter(t *testing.T) {
 	name := encodeDomainObjectName(t, "D", "J")
 	nameWrapped := berutil.EncodeTLV(0xa0, name)
 
@@ -190,9 +193,11 @@ func TestUnmarshalReadJournalRequest_BothRangeAndStartAfter(t *testing.T) {
 	body = append(body, rangeStop...)
 	body = append(body, startAfter...)
 
-	_, err := UnmarshalReadJournalRequest(body)
-	if err == nil {
-		t.Fatal("expected error when both range and start-after present")
+	// IEC 61850-8-1 QueryLogAfter maps to a start time together with
+	// entryToStartAfter (Table 71); the combination is valid (MMS-PDU-12).
+	r, err := UnmarshalReadJournalRequest(body)
+	if err != nil || !r.IsTimeRange || !r.IsStartAfter {
+		t.Fatalf("range + start-after = %+v, %v", r, err)
 	}
 }
 

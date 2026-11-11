@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/otfabric/go-mms/internal/asn1util"
+	"github.com/otfabric/go-mms/internal/berutil"
 	"github.com/otfabric/go-mms/internal/codec"
 	"github.com/otfabric/go-mms/internal/isostack"
 	"github.com/otfabric/go-mms/internal/pdu"
@@ -435,5 +436,89 @@ func TestSpec_9506_2_14_4_FloatWidthFromType(t *testing.T) {
 	if selectTypeSpec(&ts, []pdu.AccessSelectorWire{{Component: "zz"}, {Component: "x"}}) != nil ||
 		selectTypeSpec(&ts, []pdu.AccessSelectorWire{{IndexRange: &pdu.IndexRangeWire{}}}) != nil {
 		t.Error("selectTypeSpec mismatch")
+	}
+}
+
+type queryJournalProvider struct {
+	*memJournalProvider
+	got []JournalQuery
+}
+
+func (p *queryJournalProvider) ReadJournal(_ context.Context, q JournalQuery) (*JournalResult, error) {
+	p.got = append(p.got, q)
+	return &JournalResult{}, nil
+}
+
+// journalTOD encodes TimeOfDay with date (ISO 9506-2 clause 7.5.5):
+// milliseconds since midnight, then days since 1984-01-01.
+func journalTOD(tm time.Time) []byte {
+	epoch := time.Date(1984, 1, 1, 0, 0, 0, 0, time.UTC)
+	days := int(tm.Sub(epoch).Hours() / 24)
+	ms := tm.Sub(epoch.AddDate(0, 0, days)).Milliseconds()
+	return []byte{byte(ms >> 24), byte(ms >> 16), byte(ms >> 8), byte(ms), byte(days >> 8), byte(days)}
+}
+
+// TestSpec_8_1_Table124_ReadJournalOptions: a server supports every
+// ReadJournal request option of IEC 61850-8-1 Table 124; the range start,
+// range stop and entryToStartAfter components are independent (ISO 9506-2
+// clause 23.2; MMS-PDU-12).
+func TestSpec_8_1_Table124_ReadJournalOptions(t *testing.T) {
+	jp := newMemJournalProvider()
+	jp.addJournal("D", "J")
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := range 4 {
+		jp.addEntry("D", "J", JournalEntry{EntryID: []byte{byte(i)}, OccurrenceTime: base.Add(time.Duration(i) * time.Hour),
+			Variables: []JournalVariable{{Tag: "a", Value: NewInteger(int64(i))}, {Tag: "b", Value: NewBoolean(true)}}})
+	}
+	srv := NewServer(ServerOptions{JournalProvider: jp})
+	tlv := berutil.EncodeTLV
+	cat := func(parts ...[]byte) []byte { return bytes.Join(parts, nil) }
+	name := tlv(0xa0, tlv(0xa1, cat(tlv(0x1a, []byte("D")), tlv(0x1a, []byte("J")))))
+	startAt := func(tm time.Time) []byte { return tlv(0xa1, tlv(0x80, journalTOD(tm))) }
+	stopAt := func(tm time.Time) []byte { return tlv(0xa2, tlv(0x80, journalTOD(tm))) }
+
+	cases := []struct {
+		name    string
+		body    []byte
+		entries int
+		vars    int
+	}{
+		{"name only", name, 4, 2},
+		{"start only", cat(name, startAt(base.Add(2*time.Hour))), 2, 2},
+		{"stop only", cat(name, stopAt(base.Add(time.Hour))), 2, 2},
+		{"start + numberOfEntries", cat(name, startAt(base), tlv(0xa2, tlv(0x81, []byte{1}))), 1, 2},
+		{"start + stop", cat(name, startAt(base.Add(time.Hour)), stopAt(base.Add(2*time.Hour))), 2, 2},
+		{"start + startAfter", cat(name, startAt(base), tlv(0xa5, cat(tlv(0x80, journalTOD(base)), tlv(0x81, []byte{0})))), 3, 2},
+		{"listOfVariables", cat(name, tlv(0xa4, tlv(0x1a, []byte("a")))), 4, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, payload, err := srv.handleReadJournal(context.Background(), tc.body)
+			if err != nil {
+				t.Fatalf("handleReadJournal: %v", err)
+			}
+			entries, _, err := pdu.UnmarshalReadJournalResponse(payload)
+			if err != nil || len(entries) != tc.entries {
+				t.Fatalf("entries = %d, %v; want %d", len(entries), err, tc.entries)
+			}
+			if len(entries[0].Variables) != tc.vars {
+				t.Fatalf("variables = %d, want %d", len(entries[0].Variables), tc.vars)
+			}
+		})
+	}
+
+	// startingEntry has no legacy JournalProvider method: the server
+	// answers access/object-access-unsupported instead of guessing.
+	if _, _, _, err := srv.handleReadJournal(context.Background(), cat(name, tlv(0xa1, tlv(0x81, []byte{1})))); !errors.Is(err, errAccessUnsupported) {
+		t.Fatalf("startingEntry err = %v, want errAccessUnsupported", err)
+	}
+
+	qp := &queryJournalProvider{memJournalProvider: jp}
+	srv = NewServer(ServerOptions{JournalProvider: qp})
+	if _, _, _, err := srv.handleReadJournal(context.Background(), cat(name, tlv(0xa1, tlv(0x81, []byte{7})), tlv(0xa2, tlv(0x81, []byte{2})))); err != nil {
+		t.Fatal(err)
+	}
+	if len(qp.got) != 1 || !bytes.Equal(qp.got[0].StartEntry, []byte{7}) || !qp.got[0].HasNumberOfEntries || qp.got[0].NumberOfEntries != 2 {
+		t.Fatalf("JournalQueryProvider got %+v", qp.got)
 	}
 }

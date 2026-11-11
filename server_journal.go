@@ -69,6 +69,125 @@ type JournalProvider interface {
 		afterID []byte, afterTime time.Time, maxEntries int) (*JournalResult, error)
 }
 
+// JournalQuery is a complete ReadJournal request (ISO 9506-2 clause
+// 23.2). IEC 61850-8-1 Table 124 requires a server to support every
+// option; the start and stop specifications are independent.
+type JournalQuery struct {
+	Domain, Journal string
+
+	// Range start: StartTime (startingTime) or StartEntry (startingEntry,
+	// inclusive). Neither set: from the oldest entry.
+	HasStartTime bool
+	StartTime    time.Time
+	StartEntry   []byte
+
+	// Range stop: StopTime (endingTime) or NumberOfEntries. Neither set:
+	// to the newest entry.
+	HasStopTime        bool
+	StopTime           time.Time
+	HasNumberOfEntries bool
+	NumberOfEntries    int
+
+	// entryToStartAfter: return entries after (AfterTime, AfterID).
+	HasStartAfter bool
+	AfterTime     time.Time
+	AfterID       []byte
+
+	// ListOfVariables restricts the variables returned per entry; nil
+	// returns all.
+	ListOfVariables []string
+
+	// MaxEntries is the number of entries the server can send; the
+	// provider may return fewer and set MoreFollows.
+	MaxEntries int
+}
+
+// JournalQueryProvider is an optional extension of [JournalProvider]: a
+// provider that implements it receives every ReadJournal request in full.
+// Without it the server maps a request onto ReadTimeRange and
+// ReadStartAfter, filtering and truncating the result; a startingEntry
+// range start then cannot be served and is answered with
+// access/object-access-unsupported.
+type JournalQueryProvider interface {
+	JournalProvider
+	ReadJournal(ctx context.Context, q JournalQuery) (*JournalResult, error)
+}
+
+// journalOpenEnd is the stop time used for an open-ended range.
+var journalOpenEnd = time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
+
+// readJournal serves q from the provider (MMS-PDU-12).
+func (s *Server) readJournal(ctx context.Context, q JournalQuery) (*JournalResult, error) {
+	if qp, ok := s.journalProvider.(JournalQueryProvider); ok {
+		return qp.ReadJournal(ctx, q)
+	}
+	limit := q.MaxEntries
+	if q.HasNumberOfEntries && q.NumberOfEntries < limit {
+		limit = q.NumberOfEntries
+	}
+	var (
+		res *JournalResult
+		err error
+	)
+	switch {
+	case q.StartEntry != nil && !q.HasStartAfter:
+		return nil, errAccessUnsupported
+	case q.HasStartAfter:
+		res, err = s.journalProvider.ReadStartAfter(ctx, q.Domain, q.Journal, q.AfterID, q.AfterTime, limit)
+	default:
+		start, stop := time.Time{}, journalOpenEnd
+		if q.HasStartTime {
+			start = q.StartTime
+		}
+		if q.HasStopTime {
+			stop = q.StopTime
+		}
+		res, err = s.journalProvider.ReadTimeRange(ctx, q.Domain, q.Journal, start, stop, limit)
+	}
+	if err != nil || res == nil {
+		return res, err
+	}
+	return filterJournal(res, q, limit), nil
+}
+
+// filterJournal applies the parts of q a legacy provider method does not
+// take: the stop time and start time after a start-after cursor, the
+// entry count and the variable list.
+func filterJournal(res *JournalResult, q JournalQuery, limit int) *JournalResult {
+	out := &JournalResult{MoreFollows: res.MoreFollows}
+	var keep map[string]bool
+	if q.ListOfVariables != nil {
+		keep = make(map[string]bool, len(q.ListOfVariables))
+		for _, v := range q.ListOfVariables {
+			keep[v] = true
+		}
+	}
+	for _, e := range res.Entries {
+		if q.HasStartAfter && q.HasStartTime && e.OccurrenceTime.Before(q.StartTime) {
+			continue
+		}
+		if q.HasStopTime && e.OccurrenceTime.After(q.StopTime) {
+			out.MoreFollows = false
+			break
+		}
+		if len(out.Entries) >= limit {
+			out.MoreFollows = true
+			break
+		}
+		if keep != nil {
+			vars := make([]JournalVariable, 0, len(e.Variables))
+			for _, v := range e.Variables {
+				if keep[v.Tag] {
+					vars = append(vars, v)
+				}
+			}
+			e.Variables = vars
+		}
+		out.Entries = append(out.Entries, e)
+	}
+	return out
+}
+
 func journalError(err error) error {
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -92,18 +211,18 @@ func (s *Server) handleReadJournal(ctx context.Context, body []byte) (int, bool,
 		return 0, false, nil, errInvalidRequest
 	}
 
-	var result *JournalResult
-	switch {
-	case req.IsTimeRange:
-		result, err = s.journalProvider.ReadTimeRange(ctx, req.Domain, req.Journal,
-			req.StartTime, req.StopTime, defaultMaxJournalEntries)
-	case req.IsStartAfter:
-		result, err = s.journalProvider.ReadStartAfter(ctx, req.Domain, req.Journal,
-			req.AfterID, req.AfterTime, defaultMaxJournalEntries)
-	default:
-		return 0, false, nil, errInvalidRequest
+	result, err := s.readJournal(ctx, JournalQuery{
+		Domain: req.Domain, Journal: req.Journal,
+		HasStartTime: req.HasStartTime, StartTime: req.StartTime, StartEntry: startEntry(req),
+		HasStopTime: req.HasStopTime, StopTime: req.StopTime,
+		HasNumberOfEntries: req.HasNumberOfEntries, NumberOfEntries: req.NumberOfEntries,
+		HasStartAfter: req.IsStartAfter, AfterTime: req.AfterTime, AfterID: req.AfterID,
+		ListOfVariables: req.ListOfVariables,
+		MaxEntries:      defaultMaxJournalEntries,
+	})
+	if errors.Is(err, errAccessUnsupported) {
+		return 0, false, nil, errAccessUnsupported
 	}
-
 	if err != nil {
 		return 0, false, nil, journalError(err)
 	}
@@ -124,6 +243,16 @@ func (s *Server) handleReadJournal(ctx context.Context, body []byte) (int, bool,
 	}
 
 	return asn1util.TagNumReadJournal, true, payload, nil
+}
+
+func startEntry(req *pdu.ReadJournalRequest) []byte {
+	if !req.HasStartEntry {
+		return nil
+	}
+	if req.StartEntry == nil {
+		return []byte{}
+	}
+	return req.StartEntry
 }
 
 func journalEntriesToWire(entries []JournalEntry) ([]pdu.JournalEntryWire, error) {

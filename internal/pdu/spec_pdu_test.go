@@ -314,3 +314,32 @@ func TestSpec_9506_2_14_2_2_9_AlternateAccess(t *testing.T) {
 		}
 	}
 }
+
+// TestSpec_9506_2_DeleteNamedVariableListRequest: listOfVariableListName
+// and domainName are OPTIONAL, scopeOfDelete is 0..3 (MMS-PDU-09).
+func TestSpec_9506_2_DeleteNamedVariableListRequest(t *testing.T) {
+	ok := []struct {
+		in     string
+		scope  int
+		names  int
+		domain string
+	}{
+		{"800103", 3, 0, ""},
+		{"8001028203444f4d", 2, 0, "DOM"},
+		{"a10580034e564c", 0, 1, ""},
+		{"800100a10580034e564c", 0, 1, ""},
+		{"800102a1008203444f4d", 2, 0, "DOM"},
+		{"800101", 1, 0, ""},
+	}
+	for _, tc := range ok {
+		r, err := UnmarshalDeleteNVLRequest(hx(t, tc.in))
+		if err != nil || r.ScopeOfDelete != tc.scope || len(r.ListNames) != tc.names || r.DomainName != tc.domain {
+			t.Errorf("%s = %+v, %v", tc.in, r, err)
+		}
+	}
+	for _, in := range []string{"800104a100", "8001ff", "800102", "a100800103", "8200", "8203444f4d a100", "0500"} {
+		if _, err := UnmarshalDeleteNVLRequest(hx(t, in)); err == nil {
+			t.Errorf("%s accepted", in)
+		}
+	}
+}
