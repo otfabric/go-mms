@@ -3,6 +3,7 @@
 package pdu
 
 import (
+	"errors"
 	"fmt"
 	"math"
 
@@ -551,12 +552,20 @@ func MarshalWriteResponse(results []WriteResult) ([]byte, error) {
 
 // MarshalGetVarAccessResponse encodes a GetVariableAccessAttributes response body.
 //
-//	GetVariableAccessAttributesResponse ::= SEQUENCE {
-//	  mmsDeletable      [0] IMPLICIT BOOLEAN
-//	  address           [1] EXPLICIT Address OPTIONAL  -- omitted
-//	  typeSpecification [2] EXPLICIT TypeSpecification
+//	GetVariableAccessAttributes-Response ::= SEQUENCE {
+//	  mmsDeletable    [0] IMPLICIT BOOLEAN,
+//	  address         [1] Address OPTIONAL,  -- omitted
+//	  typeDescription [2] TypeDescription
 //	}
+//
+// In ISO 9506-2:2003 (clause 14.9.2) the [2] component is a
+// TypeDescription, which has no typeName alternative: a top-level
+// typeName [0] is refused. Nested component types are TypeSpecifications
+// and may still be named.
 func MarshalGetVarAccessResponse(deletable bool, ts TypeSpecWire) ([]byte, error) {
+	if ts.Tag == tsTagTypeName {
+		return nil, ErrTypeNameNotDescription
+	}
 	delByte := byte(0x00)
 	if deletable {
 		delByte = 0xff
@@ -574,6 +583,10 @@ func MarshalGetVarAccessResponse(deletable bool, ts TypeSpecWire) ([]byte, error
 	result = append(result, tsTLV...)
 	return result, nil
 }
+
+// ErrTypeNameNotDescription reports a typeName where ISO 9506-2 clause
+// 14.9.2 requires a TypeDescription.
+var ErrTypeNameNotDescription = errors.New("pdu: getvaraccess response: typeDescription cannot be a typeName (ISO 9506-2 clause 14.9.2)")
 
 // EncodeTypeSpec encodes a TypeSpecWire into BER format.
 func EncodeTypeSpec(ts TypeSpecWire) ([]byte, error) {

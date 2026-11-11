@@ -552,3 +552,19 @@ func TestSpec_9506_2_7_5_2_Identifier(t *testing.T) {
 		t.Errorf("domain charset not checked: %v", err)
 	}
 }
+
+// TestSpec_9506_2_14_9_2_GVAANamedType: a variable registered with a
+// named type cannot be described, since the response typeDescription has
+// no typeName alternative (ISO 9506-2 clause 14.9.2): the server answers
+// access/object-access-unsupported (MMS-PDU-17).
+func TestSpec_9506_2_14_9_2_GVAANamedType(t *testing.T) {
+	srv := NewServer(ServerOptions{})
+	tn := ObjectName{Scope: ObjectScopeVMD, ItemID: "T"}
+	if err := srv.RegisterVariable(Variable{Name: ObjectName{Scope: ObjectScopeVMD, ItemID: "v"}, TypeSpec: TypeSpec{Type: ValueTypeNamedType, TypeName: &tn}}); err != nil {
+		t.Fatal(err)
+	}
+	// GetVariableAccessAttributes-Request name [0] { vmd-specific [0] "v" }.
+	if _, _, _, err := srv.handleGetVarAccess(context.Background(), hx(t, "a003800176")); !errors.Is(err, errAccessUnsupported) {
+		t.Fatalf("err = %v, want errAccessUnsupported", err)
+	}
+}

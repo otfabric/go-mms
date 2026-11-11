@@ -457,3 +457,38 @@ func TestSpec_9506_2_7_5_7_FileNameSequence(t *testing.T) {
 		t.Error("ObtainFile with a 256-octet name encoded")
 	}
 }
+
+// TestSpec_9506_2_14_9_GetVarAccessResponse: typeDescription is a
+// TypeDescription with no typeName alternative (MMS-PDU-17); each
+// TypeSpecification alternative is context-specific with a fixed form,
+// decoded exactly, and the optional [3]/[4] after typeDescription are
+// tolerated (ISO 9506-2 clauses 14.2.1 and 14.9; MMS-PDU-18).
+func TestSpec_9506_2_14_9_GetVarAccessResponse(t *testing.T) {
+	if _, err := MarshalGetVarAccessResponse(false, TypeSpecWire{Tag: tsTagTypeName, TypeName: &ObjectNameWire{Scope: 0, ItemID: "T"}}); !errors.Is(err, ErrTypeNameNotDescription) {
+		t.Errorf("typeName typeDescription: %v", err)
+	}
+	named := TypeSpecWire{Tag: tsTagStructure, Components: []StructComponentWire{{Name: "a", Type: TypeSpecWire{Tag: tsTagTypeName, TypeName: &ObjectNameWire{Scope: 0, ItemID: "T"}}}}}
+	if _, err := MarshalGetVarAccessResponse(false, named); err != nil {
+		t.Errorf("nested typeName (a TypeSpecification): %v", err)
+	}
+	for _, in := range []string{"8300", "a003800154", "a706020120020108"} {
+		if _, err := DecodeTypeSpec(hx(t, in)); err != nil {
+			t.Errorf("DecodeTypeSpec(%s): %v", in, err)
+		}
+	}
+	for _, in := range []string{"300102", "a300", "8700", "c30100", "830000", "820100"} {
+		if _, err := DecodeTypeSpec(hx(t, in)); err == nil {
+			t.Errorf("DecodeTypeSpec(%s) accepted", in)
+		}
+	}
+	for _, in := range []string{"800100a2028300830141", "800100a20283008402686d", "800100a2028300830141840100"} {
+		if _, err := UnmarshalGetVarAccessResponse(asn1.RawValue{Bytes: hx(t, in)}); err != nil {
+			t.Errorf("GVAA response %s: %v", in, err)
+		}
+	}
+	for _, in := range []string{"800100a2028300840100830141", "800100a2028300850100"} {
+		if _, err := UnmarshalGetVarAccessResponse(asn1.RawValue{Bytes: hx(t, in)}); err == nil {
+			t.Errorf("GVAA response %s accepted", in)
+		}
+	}
+}

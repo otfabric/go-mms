@@ -1208,7 +1208,10 @@ func (s *Server) handleGetVarAccess(ctx context.Context, body []byte) (int, bool
 	}
 
 	wireTS, err := typeSpecToWire(ts)
-	if err != nil {
+	// A named type cannot be sent as the TypeDescription of the response
+	// (ISO 9506-2 clause 14.9.2) and the server keeps no type definitions
+	// to expand it from: access/object-access-unsupported (MMS-PDU-17).
+	if err != nil || wireTS.TypeName != nil {
 		return 0, false, nil, errAccessUnsupported
 	}
 	respBytes, err := pdu.MarshalGetVarAccessResponse(entry.Deletable, wireTS)
