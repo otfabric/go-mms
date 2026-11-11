@@ -5,7 +5,18 @@
 **Date:** 2026-11-11
 **Previous release:** v1.9.0
 
-No change to the library's behaviour or API.
+No API change. One internal fix; otherwise tests and CI.
+
+### Fixed
+
+- Integer conversions in the PDU unwrapper, the 6-octet TimeOfDay encoder and the association-refusal classification check the converted value itself. A session refusal reason above one octet (never produced by the decoder, which reads one octet) is no longer read modulo 256 when deciding whether a refusal is transient.
+
+### Testing
+
+- `TestRobustness_HalfCloseMidPDU`: a peer that cuts a response TPKT in half and half-closes the connection ends the request in flight and every request waiting at the negotiated max-services-outstanding-calling (1 and 3) with `ErrClosed`; `Done` closes and `Err` is set.
+- `TestLifecycle_CloseWithRequestsWaitingAtLimit`: `Close` while a request is outstanding at a limit of 1 and four wait: the waiters end with `ErrClosed` and `Close` returns once the server has answered in order.
+- `TestRobustness_NoFDLeak`: 40 associations ended by Close, Abort, a mid-PDU cut and a failed dial leave no file descriptor open.
+- `TestSpec_9506_2_8_6_InformationReportNestedTooDeep` no longer fails when the server has not yet registered the connection at the first Broadcast.
 
 ### CI
 
