@@ -8,7 +8,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -566,5 +568,72 @@ func TestSpec_9506_2_14_9_2_GVAANamedType(t *testing.T) {
 	// GetVariableAccessAttributes-Request name [0] { vmd-specific [0] "v" }.
 	if _, _, _, err := srv.handleGetVarAccess(context.Background(), hx(t, "a003800176")); !errors.Is(err, errAccessUnsupported) {
 		t.Fatalf("err = %v, want errAccessUnsupported", err)
+	}
+}
+
+type initJournalProvider struct {
+	*memJournalProvider
+	domain, journal string
+	limit           *JournalLimit
+	deleted         uint32
+	err             error
+}
+
+func (p *initJournalProvider) InitializeJournal(_ context.Context, domain, journal string, limit *JournalLimit) (uint32, error) {
+	p.domain, p.journal, p.limit = domain, journal, limit
+	return p.deleted, p.err
+}
+
+// TestSpec_8_1_Table111_InitializeJournal: InitializeJournal (ISO 9506-2
+// clause 23.4) is served by a JournalInitializer; without one it is
+// Reject unrecognized-service (IEC 61850-8-1 clause 8.1.3.4.1)
+// (MMS-PDU-30).
+func TestSpec_8_1_Table111_InitializeJournal(t *testing.T) {
+	name := "a00ba1091a01441a044a524e4c"
+	// No JournalProvider, and one without JournalInitializer.
+	for _, srv := range []*Server{NewServer(ServerOptions{}), NewServer(ServerOptions{JournalProvider: newMemJournalProvider()})} {
+		expectPDUs(t, serverExchange(t, srv, 10, confReq(t, 3, asn1util.TagNumInitializeJournal, true, hx(t, name))), "a4068001038101"+"01")
+	}
+	p := &initJournalProvider{memJournalProvider: newMemJournalProvider(), deleted: 7}
+	srv := NewServer(ServerOptions{JournalProvider: p})
+	// Without limitSpecification: every entry. Response [67] Unsigned32 7.
+	expectPDUs(t, serverExchange(t, srv, 10, confReq(t, 3, asn1util.TagNumInitializeJournal, true, hx(t, name))), "a1070201039f430107")
+	if p.domain != "D" || p.journal != "JRNL" || p.limit != nil {
+		t.Fatalf("provider got %q %q %+v", p.domain, p.journal, p.limit)
+	}
+	tod := hex.EncodeToString(journalTOD(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)))
+	srv.handleInitializeJournal(context.Background(), hx(t, name+"a10b8006"+tod+"810109"))
+	if p.limit == nil || !p.limit.Time.Equal(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)) || !bytes.Equal(p.limit.EntryID, []byte{9}) {
+		t.Fatalf("limit = %+v", p.limit)
+	}
+	p.deleted = math.MaxUint32
+	if _, _, resp, err := srv.handleInitializeJournal(context.Background(), hx(t, name+"a1088006"+tod)); err != nil || !bytes.Equal(resp, []byte{0x7f, 0xff, 0xff, 0xff}) || p.limit.EntryID != nil {
+		t.Fatalf("clamped count = %x, %v (limit %+v)", resp, err, p.limit)
+	}
+	p.err = fs.ErrNotExist
+	if _, _, _, err := srv.handleInitializeJournal(context.Background(), hx(t, name)); !errors.Is(err, errObjectNonExistent) {
+		t.Fatalf("unknown journal: %v", err)
+	}
+	for _, bad := range []string{"", "a100", name + "a100", name + "a1028100", name + "a1088006" + tod + "00", name + "a2028100", name + "a10b8006" + tod + "820109"} {
+		if _, _, _, err := srv.handleInitializeJournal(context.Background(), hx(t, bad)); !errors.Is(err, errInvalidRequest) {
+			t.Errorf("%s: %v, want errInvalidRequest", bad, err)
+		}
+	}
+}
+
+// TestSpec_8_1_Table111_GetDomainAttributes: GetDomainAttributes (ISO
+// 9506-2 clause 11.13) for a registered domain (MMS-PDU-30).
+func TestSpec_8_1_Table111_GetDomainAttributes(t *testing.T) {
+	srv := NewServer(ServerOptions{})
+	if err := srv.RegisterDomain("LD1"); err != nil {
+		t.Fatal(err)
+	}
+	expectPDUs(t, serverExchange(t, srv, 10, confReq(t, 3, asn1util.TagNumGetDomainAttributes, false, []byte("LD1"))),
+		"a116020103bf2510a0008101028201008301ffa400850100")
+	if _, _, _, err := srv.handleGetDomainAttributes([]byte("nope")); !errors.Is(err, errObjectNonExistent) {
+		t.Errorf("unknown domain: %v", err)
+	}
+	if _, _, _, err := srv.handleGetDomainAttributes(nil); !errors.Is(err, errInvalidRequest) {
+		t.Errorf("empty name: %v", err)
 	}
 }

@@ -63,9 +63,12 @@ const (
 	TagNumGetNamedVariableListAttrs   = 12 // 0x0c
 	TagNumDeleteNamedVariableList     = 13 // 0x0d
 
+	TagNumGetDomainAttributes = 37 // 0x25
+
 	TagNumObtainFile = 46 // 0x2e
 
-	TagNumReadJournal = 65 // 0x41
+	TagNumReadJournal       = 65 // 0x41
+	TagNumInitializeJournal = 67 // 0x43
 
 	TagNumFileOpen      = 72 // 0x48
 	TagNumFileRead      = 73 // 0x49

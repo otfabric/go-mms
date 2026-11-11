@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"time"
 
 	"github.com/otfabric/go-mms/internal/asn1util"
+	"github.com/otfabric/go-mms/internal/berutil"
 	"github.com/otfabric/go-mms/internal/pdu"
 	"github.com/otfabric/go-mms/internal/serverconn"
 )
@@ -243,6 +245,54 @@ func (s *Server) handleReadJournal(ctx context.Context, body []byte) (int, bool,
 	}
 
 	return asn1util.TagNumReadJournal, true, payload, nil
+}
+
+// JournalLimit is the limitSpecification of an InitializeJournal request
+// (ISO 9506-2 clause 23.4): delete the entries up to and including Time,
+// or, with EntryID, up to and including that entry at Time.
+type JournalLimit struct {
+	Time    time.Time
+	EntryID []byte // nil when the request has no limitingEntry
+}
+
+// JournalInitializer is an optional extension of [JournalProvider] for
+// the InitializeJournal service (ISO 9506-2 clause 23.4; mandatory for a
+// server with a log model, IEC 61850-8-1 Table 111 c12, Table 126). The
+// server calls InitializeJournal with limit nil to delete every entry.
+// It returns the number of entries deleted. Return an error wrapping
+// [fs.ErrNotExist] for an unknown journal.
+type JournalInitializer interface {
+	InitializeJournal(ctx context.Context, domain, journal string, limit *JournalLimit) (deleted uint32, err error)
+}
+
+// handleInitializeJournal serves InitializeJournal from a
+// JournalProvider that implements JournalInitializer; without one the
+// service is not supported (Reject unrecognized-service, IEC 61850-8-1
+// clause 8.1.3.4.1) (MMS-PDU-30).
+func (s *Server) handleInitializeJournal(ctx context.Context, body []byte) (int, bool, []byte, error) {
+	ji, ok := s.journalProvider.(JournalInitializer)
+	if !ok {
+		return 0, false, nil, errServiceUnsupported
+	}
+	req, err := pdu.UnmarshalInitializeJournalRequest(body)
+	if err != nil {
+		return 0, false, nil, errInvalidRequest
+	}
+	var limit *JournalLimit
+	if req.HasLimit {
+		limit = &JournalLimit{Time: req.LimitingTime, EntryID: req.LimitingEntry}
+	}
+	deleted, err := ji.InitializeJournal(ctx, req.Name.DomainID, req.Name.ItemID, limit)
+	if err != nil {
+		return 0, false, nil, journalError(err)
+	}
+	// InitializeJournal-Response ::= Unsigned32 (entries deleted), whose
+	// range is 0..2^31-1 in MMS (ISO 9506-2 clause 7.5.2); a larger count
+	// is reported as the maximum.
+	if deleted > math.MaxInt32 {
+		deleted = math.MaxInt32
+	}
+	return asn1util.TagNumInitializeJournal, false, berutil.EncodeUint32(deleted), nil
 }
 
 func startEntry(req *pdu.ReadJournalRequest) []byte {

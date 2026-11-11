@@ -575,3 +575,34 @@ func TestSpec_X680_46_GeneralizedTime(t *testing.T) {
 		t.Errorf("Data generalized-time = %+v, %v", dv, err)
 	}
 }
+
+// TestSpec_9506_2_23_4_InitializeJournalRequest and GetDomainAttributes
+// (ISO 9506-2 clauses 23.4 and 11.13; MMS-PDU-30).
+func TestSpec_9506_2_23_4_InitializeJournalRequest(t *testing.T) {
+	name := "a00ba1091a01441a044a524e4c"
+	r, err := UnmarshalInitializeJournalRequest(hx(t, name))
+	if err != nil || r.HasLimit || r.Name.DomainID != "D" || r.Name.ItemID != "JRNL" {
+		t.Fatalf("name only = %+v, %v", r, err)
+	}
+	r, err = UnmarshalInitializeJournalRequest(hx(t, name+"a10b8006000000000000810109"))
+	if err != nil || !r.HasLimit || !r.LimitingTime.Equal(epoch1984) || !bytes.Equal(r.LimitingEntry, []byte{9}) {
+		t.Fatalf("with limit = %+v, %v", r, err)
+	}
+	for _, bad := range []string{"", "a100", "8000", name + "a100", name + "a2028100", name + "a1028100", name + "a1088006000000000000a100",
+		name + "a1088006ffffffff0000", name + "a10b8006000000000000820109", name + "a1088006000000000000" + "00"} {
+		if _, err := UnmarshalInitializeJournalRequest(hx(t, bad)); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+	if n, err := UnmarshalGetDomainAttributesRequest([]byte("LD1")); err != nil || n != "LD1" {
+		t.Errorf("domain = %q, %v", n, err)
+	}
+	for _, bad := range [][]byte{nil, bytes.Repeat([]byte{'a'}, maxIdentifierLen+1)} {
+		if _, err := UnmarshalGetDomainAttributesRequest(bad); err == nil {
+			t.Errorf("domain name of %d octets accepted", len(bad))
+		}
+	}
+	if got := hex.EncodeToString(MarshalGetDomainAttributesResponse(DomainStateReady, true, false)); got != "a0008101028201ff830100a400850100" {
+		t.Errorf("response = %s", got)
+	}
+}

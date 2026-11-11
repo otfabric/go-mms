@@ -1030,10 +1030,32 @@ func (s *Server) dispatch(ctx context.Context, invokeID codec.InvokeID, serviceT
 		return s.handleObtainFile(ctx, serviceBody)
 	case asn1util.TagNumReadJournal:
 		return s.handleReadJournal(ctx, serviceBody)
+	case asn1util.TagNumInitializeJournal:
+		return s.handleInitializeJournal(ctx, serviceBody)
+	case asn1util.TagNumGetDomainAttributes:
+		return s.handleGetDomainAttributes(serviceBody)
 	default:
 		// IEC 61850-8-1 clause 8.1.3.4.1: Reject unrecognized-service.
 		return 0, false, nil, errServiceUnsupported
 	}
+}
+
+// --- GetDomainAttributes ---
+
+// handleGetDomainAttributes answers GetDomainAttributes (ISO 9506-2
+// clause 11.13), which IEC 61850-8-1 Table 111 (c14) makes mandatory for
+// a server with logical devices. A registered domain is reported as a
+// static one: no capabilities, state ready, not deletable, sharable, no
+// program invocations and no upload in progress (MMS-PDU-30).
+func (s *Server) handleGetDomainAttributes(body []byte) (int, bool, []byte, error) {
+	name, err := pdu.UnmarshalGetDomainAttributesRequest(body)
+	if err != nil {
+		return 0, false, nil, errInvalidRequest
+	}
+	if !s.registry.HasDomain(name) {
+		return 0, false, nil, errObjectNonExistent
+	}
+	return asn1util.TagNumGetDomainAttributes, true, pdu.MarshalGetDomainAttributesResponse(pdu.DomainStateReady, false, true), nil
 }
 
 // --- Identify ---

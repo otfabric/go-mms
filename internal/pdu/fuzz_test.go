@@ -627,3 +627,20 @@ func mustBitString(data []byte, bitLen int) []byte {
 	}
 	return b
 }
+
+// FuzzUnmarshalInitializeJournalRequest fuzzes the InitializeJournal
+// request decoder (ISO 9506-2 clause 23.4): no panic, and a decoded
+// limitingEntry is only set with a limit.
+func FuzzUnmarshalInitializeJournalRequest(f *testing.F) {
+	f.Add([]byte{0xa0, 0x0b, 0xa1, 0x09, 0x1a, 0x01, 'D', 0x1a, 0x04, 'J', 'R', 'N', 'L'})
+	f.Add([]byte{0xa0, 0x03, 0x80, 0x01, 'J', 0xa1, 0x0b, 0x80, 0x06, 0, 0, 0, 0, 0, 0, 0x81, 0x01, 0x09})
+	f.Add([]byte{0xa0, 0x03, 0x80, 0x01, 'J', 0xa1, 0x08, 0x80, 0x06, 0, 0, 0, 0, 0, 0})
+	f.Add([]byte{})
+	f.Fuzz(func(t *testing.T, data []byte) {
+		req, err := UnmarshalInitializeJournalRequest(data)
+		if err == nil && !req.HasLimit && req.LimitingEntry != nil {
+			t.Fatalf("limitingEntry without limitSpecification: %+v", req)
+		}
+		_, _ = UnmarshalGetDomainAttributesRequest(data)
+	})
+}
