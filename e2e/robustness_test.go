@@ -257,9 +257,10 @@ func TestLifecycle_CloseWithRequestsWaitingAtLimit(t *testing.T) {
 	}
 }
 
-// openFDs counts this process's open file descriptors, or -1 where the
-// platform has no /dev/fd.
-func openFDs(t *testing.T) int {
+// openSockets counts this process's open socket descriptors, or -1
+// where the platform has no /dev/fd. Other descriptors are left out: the
+// test binary's own pipes come and go, and go-mms opens only sockets.
+func openSockets(t *testing.T) int {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		return -1
@@ -268,15 +269,22 @@ func openFDs(t *testing.T) int {
 	if err != nil {
 		return -1
 	}
-	return len(ents)
+	n := 0
+	for _, e := range ents {
+		if fi, err := os.Stat("/dev/fd/" + e.Name()); err == nil && fi.Mode()&os.ModeSocket != 0 {
+			n++
+		}
+	}
+	return n
 }
 
 // Associations that end every way (Close, Abort, the peer half-closing
-// mid-PDU, a failed dial) release their sockets on both sides.
+// mid-PDU, a failed dial) release their sockets on both sides; no socket
+// descriptor is left open.
 func TestRobustness_NoFDLeak(t *testing.T) {
 	g := startGatedServer(t, mms.ServerOptions{})
 	p := startCutProxy(t, g.addr)
-	if openFDs(t) < 0 {
+	if openSockets(t) < 0 {
 		t.Skip("no /dev/fd on this platform")
 	}
 	ctx := timeout(t)
@@ -316,7 +324,7 @@ func TestRobustness_NoFDLeak(t *testing.T) {
 	for i := range 4 {
 		cycle(i)
 	}
-	before := openFDs(t)
+	before := openSockets(t)
 	const cycles = 40
 	for i := range cycles {
 		cycle(i)
@@ -324,13 +332,13 @@ func TestRobustness_NoFDLeak(t *testing.T) {
 	// The server closes its side asynchronously.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		after := openFDs(t)
+		after := openSockets(t)
 		if after <= before {
-			t.Logf("%d open descriptors before, %d after %d associations", before, after, cycles)
+			t.Logf("%d open sockets before, %d after %d associations", before, after, cycles)
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("%d open descriptors before, %d after %d associations: sockets leak", before, after, cycles)
+			t.Fatalf("%d open sockets before, %d after %d associations: sockets leak", before, after, cycles)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
