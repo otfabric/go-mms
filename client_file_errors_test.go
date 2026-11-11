@@ -110,11 +110,14 @@ func TestFileJournal_MalformedResponse(t *testing.T) {
 func TestReadJournal_InvalidTimes(t *testing.T) {
 	client, srv, _, ctx := associateMockClient(t)
 	defer closeMockClient(t, client, srv, ctx)
-	tooEarly := time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC)
-	if _, err := client.ReadJournalTimeRange(ctx, "d", "j", tooEarly, tooEarly); !errors.Is(err, ErrInvalidArgument) {
+	// A time before 1984 is clamped to the EntryTime epoch (IEC 61850-8-1
+	// clause 8.1.3.8, MMS-PDU-29: no entry can be older), so only a time
+	// beyond the six-octet TimeOfDay range is invalid.
+	tooLate := time.Date(2200, 1, 1, 0, 0, 0, 0, time.UTC)
+	if _, err := client.ReadJournalTimeRange(ctx, "d", "j", tooLate, tooLate); !errors.Is(err, ErrInvalidArgument) {
 		t.Errorf("ReadJournalTimeRange = %v, want ErrInvalidArgument", err)
 	}
-	if _, err := client.ReadJournalStartAfter(ctx, "d", "j", tooEarly, []byte{1}); !errors.Is(err, ErrInvalidArgument) {
+	if _, err := client.ReadJournalStartAfter(ctx, "d", "j", tooLate, []byte{1}); !errors.Is(err, ErrInvalidArgument) {
 		t.Errorf("ReadJournalStartAfter = %v, want ErrInvalidArgument", err)
 	}
 }

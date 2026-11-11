@@ -9,6 +9,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/otfabric/go-mms/internal/codec"
 )
@@ -341,5 +342,75 @@ func TestSpec_9506_2_DeleteNamedVariableListRequest(t *testing.T) {
 		if _, err := UnmarshalDeleteNVLRequest(hx(t, in)); err == nil {
 			t.Errorf("%s accepted", in)
 		}
+	}
+}
+
+// TestSpec_8_1_8_1_3_8_EntryTimeSixOctets: an EntryTime is a TimeOfDay of
+// exactly six octets (IEC 61850-8-1 clause 8.1.3.8); times before the
+// 1984 epoch are clamped to it (MMS-PDU-29).
+func TestSpec_8_1_8_1_3_8_EntryTimeSixOctets(t *testing.T) {
+	for _, tm := range []time.Time{time.Unix(0, 0), time.Unix(1000, 0), epoch1984, time.Date(2024, 5, 6, 7, 8, 9, 0, time.UTC)} {
+		b, err := EncodeEntryTime(tm)
+		if err != nil || len(b) != 6 {
+			t.Fatalf("EncodeEntryTime(%v) = %x, %v; want 6 octets", tm, b, err)
+		}
+	}
+	if b, _ := EncodeEntryTime(time.Unix(0, 0)); !bytes.Equal(b, make([]byte, 6)) {
+		t.Errorf("Unix epoch = %x, want the 1984 epoch 000000000000", b)
+	}
+	req, err := MarshalReadJournalTimeRange(1, "D", "J", time.Unix(0, 0), time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(req, hx(t, "a1088006000000000000")) {
+		t.Errorf("startingTime not 6 octets: %x", req)
+	}
+	req, err = MarshalReadJournalStartAfter(1, "D", "J", time.Unix(5, 0), []byte{1})
+	if err != nil || !bytes.Contains(req, hx(t, "8006000000000000")) {
+		t.Errorf("timeSpecification not 6 octets: %x, %v", req, err)
+	}
+	if _, err := marshalJournalEntry(JournalEntryWire{EntryID: []byte{1}, OccurrenceTime: time.Unix(0, 0)}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestSpec_9506_2_23_8_1_JournalAnnotation: entryForm is a CHOICE of
+// data [2] and annotation [3] MMSString, explicitly tagged (ISO 9506-2
+// clause 23.8.1); IEC 61850-8-1 Table 125 makes annotation mandatory for
+// a client (MMS-PDU-13).
+func TestSpec_9506_2_23_8_1_JournalAnnotation(t *testing.T) {
+	entry := func(content string) []byte {
+		c := hx(t, "8006000000000000"+content)
+		inner := append(hx(t, "800101a1023000"), append([]byte{0xa2, byte(len(c))}, c...)...)
+		list := append([]byte{0x30, byte(len(inner))}, inner...)
+		return append([]byte{0xa0, byte(len(list))}, list...)
+	}
+	for _, s := range []string{"a3051a03616263", "a3050c03616263"} {
+		got, _, err := UnmarshalReadJournalResponse(entry(s))
+		if err != nil || len(got) != 1 || !got[0].HasAnnotation || got[0].Annotation != "abc" || len(got[0].Variables) != 0 {
+			t.Errorf("%s = %+v, %v", s, got, err)
+		}
+	}
+	for _, s := range []string{
+		"",                   // no entryForm
+		"a200a3051a03616263", // data and annotation
+		"a3041a03616263",     // inner string overruns [3]
+		"a3058003616263",     // not an MMSString
+	} {
+		if _, _, err := UnmarshalReadJournalResponse(entry(s)); err == nil {
+			t.Errorf("entry content %q accepted", s)
+		}
+	}
+	wire, err := MarshalReadJournalResponse([]JournalEntryWire{{EntryID: []byte{1}, OccurrenceTime: epoch1984, HasAnnotation: true, Annotation: "abc"}}, false)
+	if err != nil || !bytes.Contains(wire, hx(t, "a3051a03616263")) {
+		t.Fatalf("annotation encode = %x, %v", wire, err)
+	}
+	got, _, err := UnmarshalReadJournalResponse(wire)
+	if err != nil || !got[0].HasAnnotation || got[0].Annotation != "abc" {
+		t.Fatalf("round trip = %+v, %v", got, err)
+	}
+	if _, err := MarshalReadJournalResponse([]JournalEntryWire{{EntryID: []byte{1}, OccurrenceTime: epoch1984, HasAnnotation: true,
+		Variables: []JournalVariableWire{{Tag: "x", Value: &DataValue{Tag: TagDataBoolean, Bool: true}}}}}, false); err == nil {
+		t.Error("data and annotation encoded together")
 	}
 }

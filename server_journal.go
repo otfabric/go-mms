@@ -270,6 +270,8 @@ func journalEntriesToWire(entries []JournalEntry) ([]pdu.JournalEntryWire, error
 			EntryID:        e.EntryID,
 			OccurrenceTime: e.OccurrenceTime,
 			Variables:      vars,
+			HasAnnotation:  e.HasAnnotation,
+			Annotation:     e.Annotation,
 		}
 	}
 	return wire, nil

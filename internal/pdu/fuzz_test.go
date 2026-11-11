@@ -339,6 +339,7 @@ func FuzzUnmarshalReadJournalResponse(f *testing.F) {
 				{Tag: "v1", Value: &DataValue{Tag: TagDataInteger, Int: 42}},
 			},
 		},
+		{EntryID: []byte{0x02}, OccurrenceTime: time.Date(2024, 1, 1, 12, 0, 1, 0, time.UTC), HasAnnotation: true, Annotation: "note"},
 	}, false)
 	f.Add(seed)
 	f.Add([]byte{})

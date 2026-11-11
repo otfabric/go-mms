@@ -19,6 +19,26 @@ type JournalEntryWire struct {
 	EntryID        []byte
 	OccurrenceTime time.Time
 	Variables      []JournalVariableWire
+
+	// Annotation is the entryForm annotation [3] MMSString alternative
+	// (ISO 9506-2 clause 23.8.1 EntryContent); HasAnnotation selects it
+	// instead of data [2]. The two forms are exclusive.
+	HasAnnotation bool
+	Annotation    string
+}
+
+// EncodeEntryTime encodes t as an IEC 61850-8-1 EntryTime: a TimeOfDay
+// of exactly six octets (8-1 clause 8.1.3.8, "The size … shall be six (6)
+// octets"). The generic TimeOfDay encoder emits the four-octet form for
+// times below 2^28 ms after the Unix epoch, which a 61850 peer rejects;
+// times before the 1984-01-01 epoch of the six-octet form are clamped to
+// it, so time.Unix(0, 0) keeps meaning "from the oldest entry".
+func EncodeEntryTime(t time.Time) ([]byte, error) {
+	ms := t.UnixMilli()
+	if ms < binaryTimeMinMs {
+		ms = binaryTimeMinMs
+	}
+	return encodeBinaryTimeChecked(ms)
 }
 
 // JournalVariableWire is a single variable inside a journal entry.
@@ -47,11 +67,11 @@ func MarshalReadJournalTimeRange(invokeID codec.InvokeID, domain, journal string
 		return nil, err
 	}
 
-	startBin, err := encodeBinaryTimeChecked(start.UnixMilli())
+	startBin, err := EncodeEntryTime(start)
 	if err != nil {
 		return nil, fmt.Errorf("start time: %w", err)
 	}
-	stopBin, err := encodeBinaryTimeChecked(stop.UnixMilli())
+	stopBin, err := EncodeEntryTime(stop)
 	if err != nil {
 		return nil, fmt.Errorf("stop time: %w", err)
 	}
@@ -82,7 +102,7 @@ func MarshalReadJournalStartAfter(invokeID codec.InvokeID, domain, journal strin
 		return nil, err
 	}
 
-	afterBin, err := encodeBinaryTimeChecked(afterTime.UnixMilli())
+	afterBin, err := EncodeEntryTime(afterTime)
 	if err != nil {
 		return nil, fmt.Errorf("after time: %w", err)
 	}
@@ -358,23 +378,33 @@ var emptyOriginatingApplication = []byte{0xa1, 0x02, 0x30, 0x00}
 func marshalJournalEntry(e JournalEntryWire) ([]byte, error) {
 	entryIDBytes := berutil.EncodeTLV(0x80, e.EntryID)
 
-	occurrenceBin, err := encodeBinaryTimeChecked(e.OccurrenceTime.UnixMilli())
+	occurrenceBin, err := EncodeEntryTime(e.OccurrenceTime)
 	if err != nil {
 		return nil, fmt.Errorf("occurrence time: %w", err)
 	}
 	occurrenceTimeBytes := berutil.EncodeTLV(0x80, occurrenceBin)
 
-	var varBytes []byte
-	for _, v := range e.Variables {
-		vb, err := marshalJournalVariable(v)
-		if err != nil {
-			return nil, err
+	var form []byte
+	if e.HasAnnotation {
+		// entryForm annotation [3] MMSString (ISO 9506-2 clause 23.8.1),
+		// an explicit tag; MMSString is VisibleString unless the char
+		// CBB is negotiated (clause 7.5.6), which go-mms never proposes.
+		if len(e.Variables) > 0 {
+			return nil, fmt.Errorf("pdu: journal entry: data and annotation are exclusive entryForm alternatives")
 		}
-		varBytes = append(varBytes, vb...)
+		form = berutil.EncodeTLV(0xa3, berutil.EncodeTLV(0x1a, []byte(e.Annotation)))
+	} else {
+		var varBytes []byte
+		for _, v := range e.Variables {
+			vb, err := marshalJournalVariable(v)
+			if err != nil {
+				return nil, err
+			}
+			varBytes = append(varBytes, vb...)
+		}
+		form = berutil.EncodeTLV(0xa2, berutil.EncodeTLV(0xa1, varBytes))
 	}
-	journalVars := berutil.EncodeTLV(0xa1, varBytes)
-	dataBody := berutil.EncodeTLV(0xa2, journalVars)
-	entryContent := berutil.EncodeTLV(0xa2, append(occurrenceTimeBytes, dataBody...))
+	entryContent := berutil.EncodeTLV(0xa2, append(occurrenceTimeBytes, form...))
 
 	entryInner := make([]byte, 0, len(entryIDBytes)+len(emptyOriginatingApplication)+len(entryContent))
 	entryInner = append(entryInner, entryIDBytes...)
@@ -482,7 +512,7 @@ func parseJournalEntry(data []byte) (JournalEntryWire, error) {
 
 func parseEntryContent(data []byte, e *JournalEntryWire) error {
 	hasTime := false
-	hasData := false
+	forms := 0
 	offset := 0
 	for offset < len(data) {
 		tag, inner, n, err := berutil.DecodeTLVAt(data, offset)
@@ -504,7 +534,14 @@ func parseEntryContent(data []byte, e *JournalEntryWire) error {
 				return vErr
 			}
 			e.Variables = vars
-			hasData = true
+			forms++
+		case 0xa3: // annotation [3] MMSString
+			text, aErr := decodeAnnotation(inner)
+			if aErr != nil {
+				return aErr
+			}
+			e.Annotation, e.HasAnnotation = text, true
+			forms++
 		default:
 			return fmt.Errorf("pdu: unexpected tag 0x%02x in parseEntryContent", tag)
 		}
@@ -512,10 +549,27 @@ func parseEntryContent(data []byte, e *JournalEntryWire) error {
 	if !hasTime {
 		return fmt.Errorf("pdu: journal entry: missing occurrenceTime")
 	}
-	if !hasData {
-		return fmt.Errorf("pdu: journal entry: missing data block")
+	// entryForm is a CHOICE of data [2] and annotation [3]: exactly one.
+	if forms != 1 {
+		return fmt.Errorf("pdu: journal entry: want exactly one entryForm (data or annotation), got %d", forms)
 	}
 	return nil
+}
+
+// decodeAnnotation decodes the annotation [3] alternative of entryForm:
+// an explicit tag around MMSString, which is VisibleString (0x1a), or
+// UTF8String (0x0c) when the char CBB is in use (ISO 9506-2 clauses 7.5.6
+// and 23.8.1).
+func decodeAnnotation(data []byte) (string, error) {
+	tag, inner, err := berutil.DecodeTLVExact(data)
+	if err != nil {
+		return "", fmt.Errorf("pdu: journal annotation: %w", err)
+	}
+	switch tag {
+	case 0x1a, 0x0c:
+		return string(inner), nil
+	}
+	return "", fmt.Errorf("pdu: journal annotation: unexpected tag 0x%02x", tag)
 }
 
 func parseJournalData(data []byte) ([]JournalVariableWire, error) {
