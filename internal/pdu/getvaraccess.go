@@ -78,10 +78,12 @@ type GetVarAccessResult struct {
 
 // UnmarshalGetVarAccessResponse parses a GetVariableAccessAttributes response.
 //
-//	GetVariableAccessAttributesResponse ::= SEQUENCE {
-//	  mmsDeletable     [0] IMPLICIT BOOLEAN
-//	  address          [1] EXPLICIT Address  -- OPTIONAL
-//	  typeSpecification [2] EXPLICIT TypeSpecification
+//	GetVariableAccessAttributes-Response ::= SEQUENCE {
+//	  mmsDeletable      [0] IMPLICIT BOOLEAN,
+//	  address           [1] Address OPTIONAL,
+//	  typeDescription   [2] TypeDescription,
+//	  accessControlList [3] IMPLICIT Identifier OPTIONAL,
+//	  meaning           [4] IMPLICIT VisibleString OPTIONAL
 //	}
 func UnmarshalGetVarAccessResponse(serviceData asn1.RawValue) (*GetVarAccessResult, error) {
 	content := serviceData.Bytes
@@ -133,6 +135,19 @@ func UnmarshalGetVarAccessResponse(serviceData asn1.RawValue) (*GetVarAccessResu
 		return nil, fmt.Errorf("pdu: getvaraccess response: %w", err)
 	}
 
+	// accessControlList [3] IMPLICIT Identifier OPTIONAL and meaning [4]
+	// IMPLICIT VisibleString OPTIONAL follow typeDescription (ISO 9506-2
+	// clause 14.9, CBBs aco and sem); they are skipped, in order.
+	for _, opt := range []byte{0x83, 0x84} {
+		if offset < len(content) && content[offset] == opt {
+			_, _, n, err := berutil.DecodeTLVAt(content, offset)
+			if err != nil {
+				return nil, fmt.Errorf("pdu: getvaraccess response: [%d]: %w", opt&0x1f, err)
+			}
+			offset += n
+		}
+	}
+
 	if offset != len(content) {
 		return nil, fmt.Errorf("pdu: getvaraccess response: %d trailing bytes", len(content)-offset)
 	}
@@ -149,16 +164,37 @@ func decodeTypeSpecWithDepth(data []byte, depth int) (TypeSpecWire, error) {
 	if depth > maxTypeSpecNestingDepth {
 		return TypeSpecWire{}, fmt.Errorf("pdu: typespec nesting depth %d exceeds maximum %d", depth, maxTypeSpecNestingDepth)
 	}
-	tag, content, err := berutil.DecodeTLV(data)
+	tag, content, err := berutil.DecodeTLVExact(data)
 	if err != nil {
 		return TypeSpecWire{}, fmt.Errorf("typespec: %w", err)
 	}
 	return decodeTypeSpecFromTLVWithDepth(tag, content, depth)
 }
 
+// typeSpecConstructed reports, per TypeSpecification alternative, whether
+// its encoding is constructed (ISO 9506-2 clause 14.2.1): typeName [0]
+// (explicit ObjectName), array [1], structure [2] and floating-point [7]
+// (IMPLICIT SEQUENCE) are; every other alternative is a primitive
+// IMPLICIT NULL, INTEGER or BOOLEAN.
+func typeSpecConstructed(tagNum int) bool {
+	switch tagNum {
+	case tsTagTypeName, tsTagArray, tsTagStructure, tsTagFloat:
+		return true
+	}
+	return false
+}
+
 func decodeTypeSpecFromTLVWithDepth(tag byte, content []byte, depth int) (TypeSpecWire, error) {
 	tagNum := int(tag & 0x1f)
 	isConstructed := tag&0x20 != 0
+	// Every alternative is context-specific with a fixed primitive or
+	// constructed form: 30 01 02 is not mMSString [16].
+	if tag&0xc0 != 0x80 {
+		return TypeSpecWire{}, fmt.Errorf("typespec: tag 0x%02x is not context-specific", tag)
+	}
+	if isConstructed != typeSpecConstructed(tagNum) {
+		return TypeSpecWire{}, fmt.Errorf("typespec: tag 0x%02x has the wrong primitive/constructed form for [%d]", tag, tagNum)
+	}
 
 	switch tagNum {
 	case tsTagBoolean: // [3] NULL

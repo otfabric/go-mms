@@ -710,11 +710,32 @@ func (c *Client) handleConfirmedError(expectedID codec.InvokeID, content []byte)
 			Message: fmt.Sprintf("confirmed error invoke ID mismatch: sent %d, received %d", expectedID, ce.InvokeID),
 		}
 	}
-	return &ServiceError{
-		Class:    ErrorClass(ce.ErrorClass),
-		Code:     ce.ErrorCode,
-		InvokeID: InvokeID(ce.InvokeID),
+	se := serviceErrorFromWire(ce.Detail, InvokeID(ce.InvokeID))
+	se.ModifierPosition = ce.ModifierPosition
+	return se
+}
+
+// serviceErrorFromWire converts a decoded ServiceError (ISO 9506-2
+// clause 7.4.1) to the public error.
+func serviceErrorFromWire(w pdu.ServiceErrorWire, invokeID InvokeID) *ServiceError {
+	se := &ServiceError{
+		Class:          ErrorClass(w.ErrorClass),
+		Code:           w.ErrorCode,
+		InvokeID:       invokeID,
+		AdditionalCode: w.AdditionalCode,
 	}
+	if w.AdditionalDescription != nil {
+		se.AdditionalDescription = *w.AdditionalDescription
+	}
+	if w.ServiceSpecific != nil {
+		se.ServiceSpecific = &ServiceSpecificInfo{
+			Kind:     w.ServiceSpecific.Kind,
+			Raw:      w.ServiceSpecific.Raw,
+			HasValue: w.ServiceSpecific.HasValue,
+			Value:    w.ServiceSpecific.Value,
+		}
+	}
+	return se
 }
 
 func (c *Client) handleReject(expectedID codec.InvokeID, content []byte) error {
@@ -830,6 +851,9 @@ func (c *Client) readerLoop(ctx context.Context) {
 
 		kind, content, err := pdu.DecodePdu(mmsPayload)
 		if err != nil {
+			if c.rejectMalformed(ctx, mmsPayload, err) {
+				continue
+			}
 			c.logger.Debug("mms: reader loop PDU error", "error", err)
 			c.stopReader(classify(decodeErrorf("mms: decode PDU: %w", err), ErrClosed))
 			return
@@ -856,9 +880,12 @@ func (c *Client) readerLoop(ctx context.Context) {
 			return
 
 		case pdu.PduConcludeError:
-			c.logger.Warn("mms: server rejected conclude")
+			// Conclude-ErrorPDU ::= ServiceError (ISO 9506-2 clause
+			// 8.4.3); Close reports it as a *ServiceError.
+			concludeErr := c.concludeError(content)
+			c.logger.Warn("mms: server rejected conclude", "error", concludeErr)
 			select {
-			case c.concludeCh <- c.concludeError(content):
+			case c.concludeCh <- concludeErr:
 			default:
 			}
 			return
@@ -870,9 +897,9 @@ func (c *Client) readerLoop(ctx context.Context) {
 }
 
 func (c *Client) dispatchConfirmed(kind pdu.PduKind, content []byte) {
-	invokeID, err := pdu.ExtractInvokeID(content)
+	invokeID, err := pdu.ExtractInvokeIDFor(kind, content)
 	if err != nil {
-		c.logger.Warn("mms: reader cannot extract invoke ID", "error", err)
+		c.dispatchWithoutInvokeID(kind, content, err)
 		return
 	}
 
@@ -893,6 +920,70 @@ func (c *Client) dispatchConfirmed(kind pdu.PduKind, content []byte) {
 		}
 	}
 }
+
+// dispatchWithoutInvokeID handles a confirmed-service PDU without a
+// usable invoke ID. ISO 9506-2 clause 8.6 makes originalInvokeID of a
+// RejectPDU OPTIONAL: such a Reject is delivered to the only outstanding
+// request, or fails all outstanding requests when several are pending,
+// rather than leaving them to time out (MMS-PDU-07). A response or error
+// whose invoke ID cannot be read fails the only outstanding request with a
+// decode error.
+func (c *Client) dispatchWithoutInvokeID(kind pdu.PduKind, content []byte, extractErr error) {
+	if kind == pdu.PduReject {
+		if rj, err := pdu.DecodeRejectPDU(content); err == nil && !rj.HasInvokeID {
+			if id, ok := c.tracker.Sole(); ok {
+				c.tracker.Complete(id, invoke.Response{Kind: int(kind), Data: content})
+				return
+			}
+			rejErr := &RejectError{Type: RejectType(rj.RejectType), Reason: rj.RejectReason}
+			c.logger.Warn("mms: reject without invoke ID", "error", rejErr)
+			c.tracker.CancelAll(rejErr)
+			return
+		}
+	}
+	c.logger.Warn("mms: reader cannot extract invoke ID", "kind", kind, "error", extractErr)
+	if id, ok := c.tracker.Sole(); ok {
+		c.tracker.Cancel(id, decodeErrorf("mms: %s without a valid invoke ID: %w", kind, extractErr))
+	}
+}
+
+// rejectMalformed handles an MMS PDU that does not decode but whose
+// invoke ID can be read: the request it answers fails with a decode
+// error, the PDU is rejected (ISO 9506-2 clause 8.6; IEC 61850-8-1
+// clause 8.1.3.4.1 leaves the content of a Reject for a mal-formed PDU a
+// local issue) and the association continues. It reports false when the
+// invoke ID cannot be recovered.
+func (c *Client) rejectMalformed(ctx context.Context, mmsPayload []byte, decodeErr error) bool {
+	kind, id, ok := pdu.RecoverInvokeID(mmsPayload)
+	if !ok {
+		return false
+	}
+	c.logger.Warn("mms: rejecting malformed PDU", "kind", kind, "invoke_id", id, "error", decodeErr)
+	c.tracker.Cancel(id, decodeErrorf("mms: decode %s: %w", kind, decodeErr))
+	rejectType := 0
+	switch kind {
+	case pdu.PduConfirmedResponse:
+		rejectType = int(RejectConfirmedResponse)
+	case pdu.PduConfirmedError:
+		rejectType = int(RejectConfirmedError)
+	default:
+		return true // a RejectPDU is not rejected
+	}
+	c.sendReject(ctx, codec.MarshalRejectPDU(id, rejectType, 0))
+	return true
+}
+
+// sendReject sends a RejectPDU best-effort, bounded by rejectSendTimeout.
+func (c *Client) sendReject(ctx context.Context, rejectPDU []byte) {
+	sctx, cancel := context.WithTimeout(ctx, rejectSendTimeout)
+	defer cancel()
+	if err := c.send(sctx, isostack.EncodeDataRequest(rejectPDU)); err != nil {
+		c.logger.Debug("mms: send reject", "error", err)
+	}
+}
+
+// rejectSendTimeout bounds how long the reader waits to queue a Reject.
+const rejectSendTimeout = 5 * time.Second
 
 func (c *Client) dispatchUnconfirmed(content []byte) {
 	report, err := pdu.UnmarshalInformationReport(content)
@@ -2192,6 +2283,9 @@ func validateObjectName(n ObjectName) error {
 	if n.ItemID == "" {
 		return invalidArgf("empty ItemID")
 	}
+	if err := validateIdentifier("ItemID", string(n.ItemID)); err != nil {
+		return err
+	}
 	switch n.Scope {
 	case ObjectScopeVMD, ObjectScopeAssociation:
 		// valid
@@ -2199,8 +2293,42 @@ func validateObjectName(n ObjectName) error {
 		if n.Domain == "" {
 			return invalidArgf("domain scope requires non-empty Domain")
 		}
+		if err := validateIdentifier("Domain", string(n.Domain)); err != nil {
+			return err
+		}
 	default:
 		return invalidArgf("unknown scope %d", int(n.Scope))
+	}
+	return nil
+}
+
+// MaxIdentifierLength is maxIdentifier of the IEC 61850-8-1 MMS profile
+// (8-1 Annex F.3.2): an Identifier has 1 to 64 characters.
+const MaxIdentifierLength = 64
+
+// isIdentifierChar reports whether c is in the Identifier character set
+// A-Z a-z 0-9 $ _ (ISO 9506-2 clause 7.5.2).
+func isIdentifierChar(c byte) bool {
+	switch {
+	case 'A' <= c && c <= 'Z', 'a' <= c && c <= 'z', '0' <= c && c <= '9', c == '$', c == '_':
+		return true
+	}
+	return false
+}
+
+// validateIdentifier checks an outbound or registered Identifier
+// (ISO 9506-2 clause 7.5.2): Identifier ::= VisibleString
+// (FROM ("A".."Z" | "a".."z" | "0".."9" | "$" | "_")) (SIZE
+// (1..maxIdentifier)), with maxIdentifier 64 (IEC 61850-8-1 Annex F.3.2
+// and clause 24.2.2.1). Names decoded from a peer are not checked.
+func validateIdentifier(what, s string) error {
+	if s == "" || len(s) > MaxIdentifierLength {
+		return invalidArgf("%s %q: an Identifier has 1..%d characters (ISO 9506-2 clause 7.5.2)", what, s, MaxIdentifierLength)
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; !isIdentifierChar(c) {
+			return invalidArgf("%s %q: character %q is outside the Identifier character set A-Z a-z 0-9 $ _ (ISO 9506-2 clause 7.5.2)", what, s, c)
+		}
 	}
 	return nil
 }
@@ -2359,8 +2487,9 @@ func valueToDataValue(v *Value) (*pdu.DataValue, error) {
 	case ValueTypeUnsigned:
 		return &pdu.DataValue{Tag: pdu.TagDataUnsigned, Uint: v.uintVal}, nil
 	case ValueTypeFloat:
-		wide := float64(float32(v.floatVal)) != v.floatVal
-		return &pdu.DataValue{Tag: pdu.TagDataFloat, Float: v.floatVal, FloatWide: wide}, nil
+		// The width is the declared one (MMS-PDU-16); an undeclared
+		// width is single precision (IEC 61850 FLOAT32).
+		return &pdu.DataValue{Tag: pdu.TagDataFloat, Float: v.floatVal, FloatWide: v.floatWidth == 64}, nil
 	case ValueTypeBitString:
 		return &pdu.DataValue{Tag: pdu.TagDataBitString, Bytes: copyBytes(v.bytesVal), BitLen: v.bitLen}, nil
 	case ValueTypeOctetString:
@@ -2425,7 +2554,11 @@ func dataValueToValue(dv *pdu.DataValue) (*Value, error) {
 	case pdu.TagDataUnsigned:
 		return &Value{typ: ValueTypeUnsigned, uintVal: dv.Uint}, nil
 	case pdu.TagDataFloat:
-		return &Value{typ: ValueTypeFloat, floatVal: dv.Float}, nil
+		width := uint8(32)
+		if dv.FloatWide {
+			width = 64
+		}
+		return &Value{typ: ValueTypeFloat, floatVal: dv.Float, floatWidth: width}, nil
 	case pdu.TagDataBitString:
 		return &Value{typ: ValueTypeBitString, bytesVal: copyBytes(dv.Bytes), bitLen: dv.BitLen}, nil
 	case pdu.TagDataOctetString:

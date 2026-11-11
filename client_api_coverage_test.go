@@ -249,7 +249,7 @@ func TestReaderLoop_Edges(t *testing.T) {
 		loopCtx, loopCancel = context.WithCancel(context.Background())
 		defer loopCancel()
 		go c.readerLoop(loopCtx)
-		mt.sendToClient(isostack.EncodeDataRequest([]byte{asn1util.TagConcludeError, 0x00}))
+		mt.sendToClient(isostack.EncodeDataRequest([]byte{asn1util.TagConcludeError, 0x05, 0xa0, 0x03, 0x89, 0x01, 0x01}))
 		select {
 		case <-c.readerDone:
 		case <-time.After(2 * time.Second):

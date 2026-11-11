@@ -22,9 +22,9 @@ func TestSpec_9506_InitiateErrorEncoding(t *testing.T) {
 	if err != nil || kind != PduInitiateError {
 		t.Fatalf("kind %s err %v", kind, err)
 	}
-	class, code, err := DecodeServiceError(content)
-	if err != nil || class != ErrorClassInitiate || code != 1 {
-		t.Fatalf("decoded %d/%d %v", class, code, err)
+	se, err := DecodeServiceError(content)
+	if err != nil || se.ErrorClass != ErrorClassInitiate || se.ErrorCode != 1 {
+		t.Fatalf("decoded %+v %v", se, err)
 	}
 }
 
@@ -41,9 +41,9 @@ func TestDecodeServiceError_Edges(t *testing.T) {
 		{[]byte{0xa0, 0x04, 0x89, 0x01, 0x01, 0x00}, false, 0, 0},            // trailing in class
 		{nil, false, 0, 0},
 	} {
-		c, v, err := DecodeServiceError(tc.in)
-		if (err == nil) != tc.ok || (tc.ok && (c != tc.c || v != tc.v)) {
-			t.Errorf("%x: %d/%d %v", tc.in, c, v, err)
+		se, err := DecodeServiceError(tc.in)
+		if (err == nil) != tc.ok || (tc.ok && (se.ErrorClass != tc.c || se.ErrorCode != tc.v)) {
+			t.Errorf("%x: %+v %v", tc.in, se, err)
 		}
 	}
 }
@@ -70,12 +70,11 @@ func TestSpec_9506_InitiatePresence(t *testing.T) {
 	}
 }
 
-func FuzzDecodeServiceError(f *testing.F) {
+func FuzzInitiatePresence(f *testing.F) {
 	f.Add([]byte{0xa0, 0x03, 0x87, 0x01, 0x03})
-	f.Add([]byte{0xa0, 0x03, 0x89, 0x01, 0x01, 0x81, 0x01, 0x05})
+	f.Add([]byte{0x80, 0x01, 0x01, 0xff})
 	f.Add([]byte{})
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _, _ = DecodeServiceError(data)
 		_, _ = InitiatePresence(data)
 	})
 }

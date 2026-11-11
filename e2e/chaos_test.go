@@ -374,3 +374,75 @@ func TestChaos_LargeAssociationChurn(t *testing.T) {
 	}
 	t.Logf("%d associations accepted, %d refused", accepted.Load(), refused.Load())
 }
+
+// Requests the server refuses with a RejectPDU (a service it does not
+// serve: ISO 9506-2 clause 8.6, IEC 61850-8-1 clause 8.1.3.4.1) or with a
+// ServiceError (a GetNameList that conflicts with IEC 61850-8-1 Table 15)
+// do not tear the association down, also when the PDUs are fragmented
+// and delayed: each refusal reaches only the request it answers and the
+// next request on the same association succeeds (MMS-PDU-02, MMS-PDU-08).
+func TestChaos_RejectsKeepAssociation(t *testing.T) {
+	cfg := chaos.Config{Seed: chaosSeed(t), ChunkReads: true, ChunkWrites: true, MaxDelay: 200 * time.Microsecond}
+	cs := startChaosServer(t, cfg, mms.ServerOptions{}) // no JournalProvider: ReadJournal is unrecognized
+	ctx, cancel := context.WithTimeout(context.Background(), chaosDuration())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	var rejects, refusals, oks atomic.Int64
+	for id := range 4 {
+		wg.Go(func() {
+			c, err := iso.Dial(timeout(t), cs.addr, iso.WithDialer(chaos.Dialer(cfg)))
+			if err != nil {
+				t.Errorf("client %d: Dial: %v", id, err)
+				return
+			}
+			defer func() { _ = c.Close(timeout(t)) }()
+			for i := 0; ctx.Err() == nil; i++ {
+				reqCtx, cancelReq := context.WithTimeout(ctx, 2*time.Second)
+				switch i % 3 {
+				case 0:
+					_, err = c.ReadJournalTimeRange(reqCtx, dom, "j", time.Unix(0, 0), time.Now())
+					if ctx.Err() != nil {
+						break // the run ended during the request
+					}
+					var re *mms.RejectError
+					if !errors.As(err, &re) || re.Type != mms.RejectConfirmedRequest || re.Reason != 1 {
+						t.Errorf("client %d: ReadJournal = %v, want Reject unrecognized-service", id, err)
+					}
+					rejects.Add(1)
+				case 1:
+					_, err = c.GetNameList(reqCtx, mms.NameListRequest{ObjectClass: mms.ObjectClassJournal, Scope: mms.ObjectScopeAssociation})
+					if ctx.Err() != nil {
+						break
+					}
+					var se *mms.ServiceError
+					if !errors.As(err, &se) || se.Class != mms.ErrorClassService {
+						t.Errorf("client %d: GetNameList = %v, want a service-class ServiceError", id, err)
+					}
+					refusals.Add(1)
+				case 2:
+					if _, err = c.ReadObject(reqCtx, domName(fmt.Sprintf("v%d", id))); err != nil && ctx.Err() == nil {
+						t.Errorf("client %d: Read after a refusal: %v", id, err)
+					}
+					oks.Add(1)
+				}
+				cancelReq()
+				if ctx.Err() != nil {
+					return
+				}
+				if c.Err() != nil {
+					t.Errorf("client %d: association lost: %v", id, c.Err())
+					return
+				}
+				if t.Failed() {
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+	if rejects.Load() == 0 || refusals.Load() == 0 || oks.Load() == 0 {
+		t.Errorf("rejects=%d refusals=%d reads=%d, want all > 0", rejects.Load(), refusals.Load(), oks.Load())
+	}
+	t.Logf("%d rejects, %d service errors, %d reads", rejects.Load(), refusals.Load(), oks.Load())
+}

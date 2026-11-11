@@ -193,8 +193,9 @@ func TestWriteObjectEndToEnd(t *testing.T) {
 	}
 
 	f, ok := result.Value.Float64()
-	if !ok || f != 99.9 {
-		t.Errorf("after write: got %v/%v, want 99.9", f, ok)
+	// NewFloat is sent single-precision (MMS-PDU-16).
+	if !ok || f != float64(float32(99.9)) {
+		t.Errorf("after write: got %v/%v, want float32(99.9)", f, ok)
 	}
 
 	_ = client.Close(ctx)

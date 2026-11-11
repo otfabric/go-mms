@@ -19,6 +19,12 @@ type JournalEntry struct {
 	EntryID        []byte
 	OccurrenceTime time.Time
 	Variables      []JournalVariable
+
+	// Annotation holds the text of an annotation entry (ISO 9506-2
+	// clause 23.8.1 entryForm annotation [3]) when HasAnnotation is set;
+	// such an entry has no Variables.
+	HasAnnotation bool
+	Annotation    string
 }
 
 // JournalVariable is one variable inside a journal entry.
@@ -92,6 +98,8 @@ func (c *Client) sendJournalRequest(ctx context.Context, invokeID codec.InvokeID
 			EntryID:        we.EntryID,
 			OccurrenceTime: we.OccurrenceTime,
 			Variables:      vars,
+			HasAnnotation:  we.HasAnnotation,
+			Annotation:     we.Annotation,
 		}
 	}
 

@@ -245,6 +245,18 @@ type JournalProvider interface {
     ReadStartAfter(ctx context.Context, domain, journal string,
         afterID []byte, afterTime time.Time, maxEntries int) (*JournalResult, error)
 }
+
+// Optional: receives every ReadJournal option (IEC 61850-8-1 Table 124).
+type JournalQueryProvider interface {
+    JournalProvider
+    ReadJournal(ctx context.Context, q JournalQuery) (*JournalResult, error)
+}
+
+// Optional: serves InitializeJournal (ISO 9506-2 clause 23.4); limit nil
+// deletes every entry.
+type JournalInitializer interface {
+    InitializeJournal(ctx context.Context, domain, journal string, limit *JournalLimit) (deleted uint32, err error)
+}
 ```
 
 ### Server connection context
@@ -276,7 +288,9 @@ func (sc *ServerConn) AuthToken() any
 func NewBoolean(v bool) *Value
 func NewInteger(v int64) *Value
 func NewUnsigned(v uint64) *Value
-func NewFloat(v float64) *Value
+func NewFloat(v float64) *Value   // single precision (format width 32)
+func NewFloat32(v float32) *Value
+func NewFloat64(v float64) *Value // double precision (format width 64)
 func NewReal(v float64) *Value
 func NewOctetString(v []byte) *Value
 func NewVisibleString(v string) *Value

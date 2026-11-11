@@ -41,7 +41,7 @@ func (c *capture) all() []capturedUnit {
 
 // TestDecodeTSDU_Association decodes every unit of a real association:
 // associate, Identify, Read (with alternate access), Write, GetNameList,
-// GetVariableAccessAttributes, named variable lists, a refused service,
+// GetVariableAccessAttributes, named variable lists, a rejected service,
 // an InformationReport and the release.
 func TestDecodeTSDU_Association(t *testing.T) {
 	srv, _ := allowedServicesServer(t)
@@ -173,8 +173,11 @@ func TestDecodeTSDU_Association(t *testing.T) {
 	if p := seen["confirmed-request DefineNamedVariableList"]; p == nil || len(p.Raw) == 0 {
 		t.Errorf("an unmodelled service keeps its content: %+v", p)
 	}
-	if p := seen["confirmed-error "]; p == nil || p.Error == nil {
-		t.Errorf("confirmed error = %+v", p)
+	// FileDelete without a FileProvider is an unsupported service:
+	// Reject confirmed-requestPDU unrecognized-service (IEC 61850-8-1
+	// clause 8.1.3.4.1; it used to be a confirmed error, MMS-PDU-02).
+	if p := seen["reject "]; p == nil || p.Reject == nil || p.Reject.Type != 1 || p.Reject.Reason != 1 || !p.HasInvokeID {
+		t.Errorf("reject = %+v", p)
 	}
 	if p := seen["unconfirmed InformationReport"]; p == nil || len(p.Variables) != 1 || len(p.Values) != 1 {
 		t.Errorf("information report = %+v", p)

@@ -19,6 +19,26 @@ type JournalEntryWire struct {
 	EntryID        []byte
 	OccurrenceTime time.Time
 	Variables      []JournalVariableWire
+
+	// Annotation is the entryForm annotation [3] MMSString alternative
+	// (ISO 9506-2 clause 23.8.1 EntryContent); HasAnnotation selects it
+	// instead of data [2]. The two forms are exclusive.
+	HasAnnotation bool
+	Annotation    string
+}
+
+// EncodeEntryTime encodes t as an IEC 61850-8-1 EntryTime: a TimeOfDay
+// of exactly six octets (8-1 clause 8.1.3.8, "The size … shall be six (6)
+// octets"). The generic TimeOfDay encoder emits the four-octet form for
+// times below 2^28 ms after the Unix epoch, which a 61850 peer rejects;
+// times before the 1984-01-01 epoch of the six-octet form are clamped to
+// it, so time.Unix(0, 0) keeps meaning "from the oldest entry".
+func EncodeEntryTime(t time.Time) ([]byte, error) {
+	ms := t.UnixMilli()
+	if ms < binaryTimeMinMs {
+		ms = binaryTimeMinMs
+	}
+	return encodeBinaryTimeChecked(ms)
 }
 
 // JournalVariableWire is a single variable inside a journal entry.
@@ -47,11 +67,11 @@ func MarshalReadJournalTimeRange(invokeID codec.InvokeID, domain, journal string
 		return nil, err
 	}
 
-	startBin, err := encodeBinaryTimeChecked(start.UnixMilli())
+	startBin, err := EncodeEntryTime(start)
 	if err != nil {
 		return nil, fmt.Errorf("start time: %w", err)
 	}
-	stopBin, err := encodeBinaryTimeChecked(stop.UnixMilli())
+	stopBin, err := EncodeEntryTime(stop)
 	if err != nil {
 		return nil, fmt.Errorf("stop time: %w", err)
 	}
@@ -82,7 +102,7 @@ func MarshalReadJournalStartAfter(invokeID codec.InvokeID, domain, journal strin
 		return nil, err
 	}
 
-	afterBin, err := encodeBinaryTimeChecked(afterTime.UnixMilli())
+	afterBin, err := EncodeEntryTime(afterTime)
 	if err != nil {
 		return nil, fmt.Errorf("after time: %w", err)
 	}
@@ -114,15 +134,38 @@ func encodeJournalName(domain, journal string) ([]byte, error) {
 
 // --- Server-side request unmarshalers ---
 
-// ReadJournalRequest holds the parsed ReadJournal request.
+// ReadJournalRequest holds the parsed ReadJournal request
+// (ISO 9506-2 clause 23.2):
+//
+//	ReadJournal-Request ::= SEQUENCE {
+//	  journalName             [0] ObjectName,
+//	  rangeStartSpecification [1] CHOICE { startingTime [0] IMPLICIT TimeOfDay,
+//	                                       startingEntry [1] IMPLICIT OCTET STRING } OPTIONAL,
+//	  rangeStopSpecification  [2] CHOICE { endingTime [0] IMPLICIT TimeOfDay,
+//	                                       numberOfEntries [1] IMPLICIT Integer32 } OPTIONAL,
+//	  listOfVariables         [4] IMPLICIT SEQUENCE OF VisibleString OPTIONAL,
+//	  entryToStartAfter       [5] IMPLICIT SEQUENCE { timeSpecification [0] IMPLICIT TimeOfDay,
+//	                                                  entrySpecification [1] IMPLICIT OCTET STRING } OPTIONAL
+//	}
+//
+// IEC 61850-8-1 Table 124 makes every option mandatory for a server; the
+// start and stop specifications are independent (MMS-PDU-12).
 type ReadJournalRequest struct {
 	Domain  string
 	Journal string
 
-	// Time range (both set when IsTimeRange is true)
+	// IsTimeRange is set when both startingTime and endingTime are present.
 	IsTimeRange bool
-	StartTime   time.Time
-	StopTime    time.Time
+	StartTime   time.Time // startingTime, valid when HasStartTime
+	StopTime    time.Time // endingTime, valid when HasStopTime
+
+	HasStartTime       bool
+	HasStartEntry      bool
+	StartEntry         []byte // startingEntry
+	HasStopTime        bool
+	HasNumberOfEntries bool
+	NumberOfEntries    int
+	ListOfVariables    []string // nil when absent
 
 	// Start-after (both set when IsStartAfter is true)
 	IsStartAfter bool
@@ -130,16 +173,24 @@ type ReadJournalRequest struct {
 	AfterID      []byte
 }
 
-// UnmarshalReadJournalRequest decodes a ReadJournal request body.
+// UnmarshalReadJournalRequest decodes a ReadJournal request body. The
+// components must appear in tag order, each at most once.
 func UnmarshalReadJournalRequest(data []byte) (*ReadJournalRequest, error) {
 	req := &ReadJournalRequest{}
 	offset := 0
+	next := 0
+	hasName := false
 	for offset < len(data) {
 		tag, inner, n, err := berutil.DecodeTLVAt(data, offset)
 		if err != nil {
 			return nil, fmt.Errorf("pdu: read-journal request: %w", err)
 		}
 		offset += n
+		num := int(tag & 0x1f)
+		if tag&0xe0 != 0xa0 || num < next || num == 3 || num > 5 {
+			return nil, fmt.Errorf("pdu: unexpected tag 0x%02x in UnmarshalReadJournalRequest", tag)
+		}
+		next = num + 1
 		switch tag {
 		case 0xa0: // journalName
 			name, nameErr := DecodeObjectName(inner)
@@ -148,66 +199,111 @@ func UnmarshalReadJournalRequest(data []byte) (*ReadJournalRequest, error) {
 			}
 			req.Domain = name.DomainID
 			req.Journal = name.ItemID
+			hasName = true
 		case 0xa1: // rangeStartSpecification
-			t, tErr := decodeTimeField(inner)
-			if tErr != nil {
-				return nil, fmt.Errorf("pdu: read-journal rangeStart: %w", tErr)
+			if err := decodeRangeStart(inner, req); err != nil {
+				return nil, fmt.Errorf("pdu: read-journal rangeStart: %w", err)
 			}
-			req.StartTime = t
-			req.IsTimeRange = true
 		case 0xa2: // rangeStopSpecification
-			t, tErr := decodeTimeField(inner)
-			if tErr != nil {
-				return nil, fmt.Errorf("pdu: read-journal rangeStop: %w", tErr)
+			if err := decodeRangeStop(inner, req); err != nil {
+				return nil, fmt.Errorf("pdu: read-journal rangeStop: %w", err)
 			}
-			req.StopTime = t
-		case 0xa5: // entryToStartAfter
+		case 0xa4: // listOfVariables
+			vars, err := decodeVisibleStringList(inner)
+			if err != nil {
+				return nil, fmt.Errorf("pdu: read-journal listOfVariables: %w", err)
+			}
+			req.ListOfVariables = vars
+		default: // 0xa5 entryToStartAfter
 			if err := decodeStartAfter(inner, req); err != nil {
 				return nil, fmt.Errorf("pdu: read-journal startAfter: %w", err)
 			}
 			req.IsStartAfter = true
-		default:
-			return nil, fmt.Errorf("pdu: unexpected tag 0x%02x in UnmarshalReadJournalRequest", tag)
 		}
 	}
-	if req.Journal == "" {
+	if !hasName || req.Journal == "" {
 		return nil, fmt.Errorf("pdu: read-journal request: missing journalName")
 	}
-
-	// Enforce exactly one valid mode.
-	switch {
-	case req.IsTimeRange && req.IsStartAfter:
-		return nil, fmt.Errorf("pdu: read-journal request: both time-range and start-after present")
-	case req.IsTimeRange:
-		if req.StartTime.IsZero() || req.StopTime.IsZero() {
-			return nil, fmt.Errorf("pdu: read-journal request: time-range requires both start and stop")
-		}
-	case req.IsStartAfter:
-		// decodeStartAfter already validates required fields
-	default:
-		return nil, fmt.Errorf("pdu: read-journal request: missing range specification")
-	}
-
+	req.IsTimeRange = req.HasStartTime && req.HasStopTime
 	return req, nil
 }
 
-func decodeTimeField(data []byte) (time.Time, error) {
-	offset := 0
-	for offset < len(data) {
-		tag, inner, n, err := berutil.DecodeTLVAt(data, offset)
-		if err != nil {
-			return time.Time{}, err
-		}
-		offset += n
-		if tag == 0x80 { // TimeOfDay
-			ms, msErr := decodeBinaryTime(inner)
-			if msErr != nil {
-				return time.Time{}, msErr
-			}
-			return time.UnixMilli(ms).UTC(), nil
-		}
+// decodeRangeStart decodes the rangeStartSpecification CHOICE.
+func decodeRangeStart(data []byte, req *ReadJournalRequest) error {
+	tag, inner, err := berutil.DecodeTLVExact(data)
+	if err != nil {
+		return err
 	}
-	return time.Time{}, fmt.Errorf("missing time value")
+	switch tag {
+	case 0x80: // startingTime
+		t, err := decodeJournalTime(inner)
+		if err != nil {
+			return err
+		}
+		req.StartTime, req.HasStartTime = t, true
+	case 0x81: // startingEntry
+		req.StartEntry, req.HasStartEntry = append([]byte{}, inner...), true
+	default:
+		return fmt.Errorf("unexpected tag 0x%02x", tag)
+	}
+	return nil
+}
+
+// decodeRangeStop decodes the rangeStopSpecification CHOICE.
+func decodeRangeStop(data []byte, req *ReadJournalRequest) error {
+	tag, inner, err := berutil.DecodeTLVExact(data)
+	if err != nil {
+		return err
+	}
+	switch tag {
+	case 0x80: // endingTime
+		t, err := decodeJournalTime(inner)
+		if err != nil {
+			return err
+		}
+		req.StopTime, req.HasStopTime = t, true
+	case 0x81: // numberOfEntries Integer32
+		n, err := berutil.DecodeInt32(inner)
+		if err != nil {
+			return err
+		}
+		if n < 0 {
+			return fmt.Errorf("negative numberOfEntries %d", n)
+		}
+		req.NumberOfEntries, req.HasNumberOfEntries = int(n), true
+	default:
+		return fmt.Errorf("unexpected tag 0x%02x", tag)
+	}
+	return nil
+}
+
+// decodeVisibleStringList decodes SEQUENCE OF VisibleString contents.
+func decodeVisibleStringList(data []byte) ([]string, error) {
+	out := []string{}
+	for off := 0; off < len(data); {
+		tag, inner, n, err := berutil.DecodeTLVAt(data, off)
+		if err != nil {
+			return nil, err
+		}
+		off += n
+		if tag != 0x1a {
+			return nil, fmt.Errorf("expected VisibleString (0x1a), got 0x%02x", tag)
+		}
+		v, err := decodeVisibleString(inner)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+func decodeJournalTime(inner []byte) (time.Time, error) {
+	ms, err := decodeBinaryTime(inner)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.UnixMilli(ms).UTC(), nil
 }
 
 func decodeStartAfter(data []byte, req *ReadJournalRequest) error {
@@ -282,23 +378,33 @@ var emptyOriginatingApplication = []byte{0xa1, 0x02, 0x30, 0x00}
 func marshalJournalEntry(e JournalEntryWire) ([]byte, error) {
 	entryIDBytes := berutil.EncodeTLV(0x80, e.EntryID)
 
-	occurrenceBin, err := encodeBinaryTimeChecked(e.OccurrenceTime.UnixMilli())
+	occurrenceBin, err := EncodeEntryTime(e.OccurrenceTime)
 	if err != nil {
 		return nil, fmt.Errorf("occurrence time: %w", err)
 	}
 	occurrenceTimeBytes := berutil.EncodeTLV(0x80, occurrenceBin)
 
-	var varBytes []byte
-	for _, v := range e.Variables {
-		vb, err := marshalJournalVariable(v)
-		if err != nil {
-			return nil, err
+	var form []byte
+	if e.HasAnnotation {
+		// entryForm annotation [3] MMSString (ISO 9506-2 clause 23.8.1),
+		// an explicit tag; MMSString is VisibleString unless the char
+		// CBB is negotiated (clause 7.5.6), which go-mms never proposes.
+		if len(e.Variables) > 0 {
+			return nil, fmt.Errorf("pdu: journal entry: data and annotation are exclusive entryForm alternatives")
 		}
-		varBytes = append(varBytes, vb...)
+		form = berutil.EncodeTLV(0xa3, berutil.EncodeTLV(0x1a, []byte(e.Annotation)))
+	} else {
+		var varBytes []byte
+		for _, v := range e.Variables {
+			vb, err := marshalJournalVariable(v)
+			if err != nil {
+				return nil, err
+			}
+			varBytes = append(varBytes, vb...)
+		}
+		form = berutil.EncodeTLV(0xa2, berutil.EncodeTLV(0xa1, varBytes))
 	}
-	journalVars := berutil.EncodeTLV(0xa1, varBytes)
-	dataBody := berutil.EncodeTLV(0xa2, journalVars)
-	entryContent := berutil.EncodeTLV(0xa2, append(occurrenceTimeBytes, dataBody...))
+	entryContent := berutil.EncodeTLV(0xa2, append(occurrenceTimeBytes, form...))
 
 	entryInner := make([]byte, 0, len(entryIDBytes)+len(emptyOriginatingApplication)+len(entryContent))
 	entryInner = append(entryInner, entryIDBytes...)
@@ -406,7 +512,7 @@ func parseJournalEntry(data []byte) (JournalEntryWire, error) {
 
 func parseEntryContent(data []byte, e *JournalEntryWire) error {
 	hasTime := false
-	hasData := false
+	forms := 0
 	offset := 0
 	for offset < len(data) {
 		tag, inner, n, err := berutil.DecodeTLVAt(data, offset)
@@ -428,7 +534,14 @@ func parseEntryContent(data []byte, e *JournalEntryWire) error {
 				return vErr
 			}
 			e.Variables = vars
-			hasData = true
+			forms++
+		case 0xa3: // annotation [3] MMSString
+			text, aErr := decodeAnnotation(inner)
+			if aErr != nil {
+				return aErr
+			}
+			e.Annotation, e.HasAnnotation = text, true
+			forms++
 		default:
 			return fmt.Errorf("pdu: unexpected tag 0x%02x in parseEntryContent", tag)
 		}
@@ -436,10 +549,27 @@ func parseEntryContent(data []byte, e *JournalEntryWire) error {
 	if !hasTime {
 		return fmt.Errorf("pdu: journal entry: missing occurrenceTime")
 	}
-	if !hasData {
-		return fmt.Errorf("pdu: journal entry: missing data block")
+	// entryForm is a CHOICE of data [2] and annotation [3]: exactly one.
+	if forms != 1 {
+		return fmt.Errorf("pdu: journal entry: want exactly one entryForm (data or annotation), got %d", forms)
 	}
 	return nil
+}
+
+// decodeAnnotation decodes the annotation [3] alternative of entryForm:
+// an explicit tag around MMSString, which is VisibleString (0x1a), or
+// UTF8String (0x0c) when the char CBB is in use (ISO 9506-2 clauses 7.5.6
+// and 23.8.1).
+func decodeAnnotation(data []byte) (string, error) {
+	tag, inner, err := berutil.DecodeTLVExact(data)
+	if err != nil {
+		return "", fmt.Errorf("pdu: journal annotation: %w", err)
+	}
+	switch tag {
+	case 0x1a, 0x0c:
+		return string(inner), nil
+	}
+	return "", fmt.Errorf("pdu: journal annotation: unexpected tag 0x%02x", tag)
 }
 
 func parseJournalData(data []byte) ([]JournalVariableWire, error) {

@@ -102,8 +102,8 @@ func rejectionError(r *isostack.Rejection) *RejectionError {
 func initiateError(mmsPayload []byte) *ServiceError {
 	kind, content, err := pdu.DecodePdu(mmsPayload)
 	if err == nil && kind == pdu.PduInitiateError {
-		if class, code, derr := pdu.DecodeServiceError(content); derr == nil {
-			return &ServiceError{Class: ErrorClass(class), Code: code}
+		if se, derr := pdu.DecodeServiceError(content); derr == nil {
+			return serviceErrorFromWire(se, 0)
 		}
 	}
 	return nil
@@ -251,11 +251,12 @@ func (c *Client) release(ctx context.Context) error {
 // the association (ISO 9506-2 24.3: a failed Conclude leads to
 // M-U-ABORT). content is the ServiceError.
 func (c *Client) concludeError(content []byte) error {
-	class, code, err := pdu.DecodeServiceError(content)
+	// Conclude-ErrorPDU ::= ServiceError (ISO 9506-2 clause 8.4.3).
+	se, err := pdu.DecodeConcludeError(content)
 	if err != nil {
 		return &ProtocolError{Phase: PhaseMMS, Message: "undecodable Conclude-ErrorPDU: " + err.Error()}
 	}
-	return fmt.Errorf("mms: conclude refused: %w", &ServiceError{Class: ErrorClass(class), Code: code})
+	return fmt.Errorf("mms: conclude refused: %w", serviceErrorFromWire(se, 0))
 }
 
 func (c *Client) abortAfterConclude(ctx context.Context) {

@@ -3,7 +3,6 @@
 package pdu
 
 import (
-	"fmt"
 
 	"github.com/otfabric/go-mms/internal/asn1util"
 	"github.com/otfabric/go-mms/internal/berutil"
@@ -38,37 +37,6 @@ const (
 func MarshalInitiateError(errorClass, errorCode int) []byte {
 	code := asn1util.WrapPrimitive(errorClass, berutil.EncodeInt(errorCode))
 	return berutil.EncodeTLV(asn1util.TagInitiateError, berutil.EncodeTLV(0xa0, code))
-}
-
-// DecodeServiceError decodes the content of a ServiceError (the body of
-// an Initiate-ErrorPDU or Conclude-ErrorPDU after its outer tag):
-// errorClass [0] is required; additionalCode [1], additionalDescription
-// [2] and serviceSpecificInfo [3] are skipped.
-func DecodeServiceError(content []byte) (errorClass, errorCode int, err error) {
-	offset := 0
-	found := false
-	for offset < len(content) {
-		tag, inner, n, derr := berutil.DecodeTLVAt(content, offset)
-		if derr != nil {
-			return 0, 0, fmt.Errorf("pdu: service error field: %w", derr)
-		}
-		offset += n
-		if tag != 0xa0 || found {
-			continue
-		}
-		var ce ConfirmedError
-		if perr := parseErrorClass(inner, &ce); perr != nil {
-			return 0, 0, perr
-		}
-		if len(inner) == 0 {
-			return 0, 0, fmt.Errorf("pdu: service error: empty errorClass")
-		}
-		errorClass, errorCode, found = ce.ErrorClass, ce.ErrorCode, true
-	}
-	if !found {
-		return 0, 0, fmt.Errorf("pdu: service error: missing errorClass")
-	}
-	return errorClass, errorCode, nil
 }
 
 // InitiatePresence reports which OPTIONAL fields of an Initiate-Request

@@ -666,8 +666,14 @@ func TestEncodeData_BinaryTimeRange(t *testing.T) {
 			t.Errorf("round trip %d ms = %d", ms, dv.BinTimeMs)
 		}
 	}
-	if _, err := MarshalReadJournalTimeRange(1, "d", "j", time.Time{}, time.Now()); err == nil {
-		t.Error("ReadJournal with zero start time: expected error")
+	// An EntryTime before 1984 is clamped to the epoch of the six-octet
+	// form (IEC 61850-8-1 clause 8.1.3.8, MMS-PDU-29); one beyond its
+	// range is still an error.
+	if _, err := MarshalReadJournalTimeRange(1, "d", "j", time.Time{}, time.Now()); err != nil {
+		t.Errorf("ReadJournal with zero start time: %v", err)
+	}
+	if _, err := MarshalReadJournalTimeRange(1, "d", "j", time.Now(), time.Date(2200, 1, 1, 0, 0, 0, 0, time.UTC)); err == nil {
+		t.Error("ReadJournal with stop time in 2200: expected error")
 	}
 }
 

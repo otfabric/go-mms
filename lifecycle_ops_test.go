@@ -283,7 +283,7 @@ func TestToWireServiceError(t *testing.T) {
 	if toWireServiceError(plain) != plain {
 		t.Error("plain error changed")
 	}
-	if toWireServiceError(errResourceOther) != errResourceOther {
+	if toWireServiceError(errPDUSize) != errPDUSize {
 		t.Error("wire error changed")
 	}
 }

@@ -459,8 +459,9 @@ func TestServerWrite(t *testing.T) {
 	if !ok {
 		t.Fatal("expected float value after write")
 	}
-	if f != 99.9 {
-		t.Errorf("value after write = %f, want 99.9", f)
+	// NewFloat is sent single-precision (MMS-PDU-16).
+	if f != float64(float32(99.9)) {
+		t.Errorf("value after write = %f, want float32(99.9)", f)
 	}
 }
 
@@ -636,7 +637,12 @@ func TestServerWriteReadOnly(t *testing.T) {
 
 // --- Negative interop tests ---
 
-func TestServerGetNameListUnsupportedObjectClass(t *testing.T) {
+// TestSpec_8_1_8_1_3_4_2_4_GetNameListNoMatchIsEmpty: a well-formed
+// GetNameList that is not a Table 15 conflict and matches no objects is
+// answered with an empty list and moreFollows FALSE, not an error
+// (IEC 61850-8-1 clause 8.1.3.4.2.4; MMS-PDU-08 — this test used to expect
+// an error for journal + vmdSpecific).
+func TestSpec_8_1_8_1_3_4_2_4_GetNameListNoMatchIsEmpty(t *testing.T) {
 	srv := testServer(t)
 	client := connectClientServer(t, srv)
 	defer func() { _ = client.Close(context.Background()) }()
@@ -644,14 +650,16 @@ func TestServerGetNameListUnsupportedObjectClass(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := client.GetNameList(ctx, NameListRequest{
+	res, err := client.GetNameList(ctx, NameListRequest{
 		ObjectClass: ObjectClassJournal,
 		Scope:       ObjectScopeVMD,
 	})
-	if err == nil {
-		t.Fatal("expected error for unsupported journal object class")
+	if err != nil {
+		t.Fatalf("GetNameList(journal, vmd): %v", err)
 	}
-	t.Logf("Unsupported ObjectClassJournal: %v", err)
+	if len(res.Names) != 0 || res.MoreFollows {
+		t.Fatalf("result = %+v, want empty list and moreFollows FALSE", res)
+	}
 }
 
 func TestServerGetNameListDomainScopeForDomains(t *testing.T) {

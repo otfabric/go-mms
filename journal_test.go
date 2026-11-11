@@ -531,3 +531,13 @@ func TestJournalGetNameListContinueAfterInvalid(t *testing.T) {
 		t.Fatal("expected error for invalid continueAfter")
 	}
 }
+
+// TestJournalAnnotation_ServerToWire: an annotation entry from a
+// JournalProvider is sent as entryForm annotation [3] (ISO 9506-2 clause
+// 23.8.1, MMS-PDU-13).
+func TestJournalAnnotation_ServerToWire(t *testing.T) {
+	wire, err := journalEntriesToWire([]JournalEntry{{EntryID: []byte{1}, OccurrenceTime: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), HasAnnotation: true, Annotation: "abc"}})
+	if err != nil || len(wire) != 1 || !wire[0].HasAnnotation || wire[0].Annotation != "abc" {
+		t.Fatalf("journalEntriesToWire = %+v, %v", wire, err)
+	}
+}

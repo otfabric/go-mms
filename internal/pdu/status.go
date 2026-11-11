@@ -48,6 +48,7 @@ func MarshalStatusResponse(logical, physical int) ([]byte, error) {
 // raw.Bytes contains the SEQUENCE fields directly without a 0x30 header.
 func UnmarshalStatusResponse(serviceData asn1.RawValue) (*StatusResponse, error) {
 	var resp statusResponseASN1
+	serviceData.Bytes = normalizeFields(serviceData.Bytes, statusRules, nil)
 	if err := codec.UnmarshalImplicitSequence(serviceData, &resp); err != nil {
 		return nil, fmt.Errorf("pdu: unmarshal status response: %w", err)
 	}

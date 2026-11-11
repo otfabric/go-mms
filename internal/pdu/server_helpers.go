@@ -3,6 +3,7 @@
 package pdu
 
 import (
+	"errors"
 	"fmt"
 	"math"
 
@@ -551,12 +552,20 @@ func MarshalWriteResponse(results []WriteResult) ([]byte, error) {
 
 // MarshalGetVarAccessResponse encodes a GetVariableAccessAttributes response body.
 //
-//	GetVariableAccessAttributesResponse ::= SEQUENCE {
-//	  mmsDeletable      [0] IMPLICIT BOOLEAN
-//	  address           [1] EXPLICIT Address OPTIONAL  -- omitted
-//	  typeSpecification [2] EXPLICIT TypeSpecification
+//	GetVariableAccessAttributes-Response ::= SEQUENCE {
+//	  mmsDeletable    [0] IMPLICIT BOOLEAN,
+//	  address         [1] Address OPTIONAL,  -- omitted
+//	  typeDescription [2] TypeDescription
 //	}
+//
+// In ISO 9506-2:2003 (clause 14.9.2) the [2] component is a
+// TypeDescription, which has no typeName alternative: a top-level
+// typeName [0] is refused. Nested component types are TypeSpecifications
+// and may still be named.
 func MarshalGetVarAccessResponse(deletable bool, ts TypeSpecWire) ([]byte, error) {
+	if ts.Tag == tsTagTypeName {
+		return nil, ErrTypeNameNotDescription
+	}
 	delByte := byte(0x00)
 	if deletable {
 		delByte = 0xff
@@ -574,6 +583,10 @@ func MarshalGetVarAccessResponse(deletable bool, ts TypeSpecWire) ([]byte, error
 	result = append(result, tsTLV...)
 	return result, nil
 }
+
+// ErrTypeNameNotDescription reports a typeName where ISO 9506-2 clause
+// 14.9.2 requires a TypeDescription.
+var ErrTypeNameNotDescription = errors.New("pdu: getvaraccess response: typeDescription cannot be a typeName (ISO 9506-2 clause 14.9.2)")
 
 // EncodeTypeSpec encodes a TypeSpecWire into BER format.
 func EncodeTypeSpec(ts TypeSpecWire) ([]byte, error) {
@@ -784,66 +797,63 @@ type DeleteNVLRequest struct {
 	DomainName    string
 }
 
-// UnmarshalDeleteNVLRequest parses the service body of a DeleteNamedVariableList request.
+// UnmarshalDeleteNVLRequest parses the service body of a
+// DeleteNamedVariableList request (ISO 9506-2 clause 14.4.8 / 11.5):
+//
+//	DeleteNamedVariableList-Request ::= SEQUENCE {
+//	  scopeOfDelete          [0] IMPLICIT INTEGER { specific(0), aa-specific(1), domain(2), vmd(3) } DEFAULT specific,
+//	  listOfVariableListName [1] IMPLICIT SEQUENCE OF ObjectName OPTIONAL,
+//	  domainName             [2] IMPLICIT Identifier OPTIONAL
+//	}
+//
+// Every component is optional and they appear in tag order. scopeOfDelete
+// outside 0..3 is rejected, and domainName is required for the domain
+// scope (MMS-PDU-09).
 func UnmarshalDeleteNVLRequest(data []byte) (*DeleteNVLRequest, error) {
-	offset := 0
 	req := &DeleteNVLRequest{ScopeOfDelete: 0}
-
-	// scopeOfDelete [0] IMPLICIT INTEGER OPTIONAL (default 0)
-	if offset < len(data) {
+	next := 0 // lowest component tag still allowed
+	for offset := 0; offset < len(data); {
 		tag, content, n, err := berutil.DecodeTLVAt(data, offset)
 		if err != nil {
 			return nil, fmt.Errorf("delete-nvl request: %w", err)
 		}
-		if tag == 0x80 {
+		offset += n
+		num := int(tag & 0x1f)
+		if tag&0xc0 != 0x80 || num > 2 || num < next {
+			return nil, fmt.Errorf("delete-nvl request: unexpected tag 0x%02x", tag)
+		}
+		next = num + 1
+		switch tag {
+		case 0x80:
 			scope, err := berutil.DecodeInteger(content)
 			if err != nil {
 				return nil, fmt.Errorf("delete-nvl request: scopeOfDelete: %w", err)
 			}
+			if scope < 0 || scope > 3 {
+				return nil, fmt.Errorf("delete-nvl request: scopeOfDelete %d not in 0..3", scope)
+			}
 			req.ScopeOfDelete = scope
-			offset += n
-		}
-	}
-
-	// listOfVariableListName [1] IMPLICIT SEQUENCE OF ObjectName
-	if offset >= len(data) {
-		return nil, fmt.Errorf("delete-nvl request: missing listOfVariableListName")
-	}
-	tag, content, n, err := berutil.DecodeTLVAt(data, offset)
-	if err != nil {
-		return nil, fmt.Errorf("delete-nvl request: listOfNames: %w", err)
-	}
-	offset += n
-	if tag != 0xa1 {
-		return nil, fmt.Errorf("delete-nvl request: expected [1] (0xa1), got 0x%02x", tag)
-	}
-
-	nameOff := 0
-	for nameOff < len(content) {
-		name, consumed, err := DecodeObjectNameAt(content, nameOff)
-		if err != nil {
-			return nil, fmt.Errorf("delete-nvl request: name [%d]: %w", len(req.ListNames), err)
-		}
-		nameOff += consumed
-		req.ListNames = append(req.ListNames, name)
-	}
-
-	// domainName [2] IMPLICIT Identifier OPTIONAL
-	if offset < len(data) {
-		tag, content, n, err = berutil.DecodeTLVAt(data, offset)
-		if err != nil {
-			return nil, fmt.Errorf("delete-nvl request: domainName: %w", err)
-		}
-		if tag == 0x82 {
+		case 0xa1:
+			for nameOff := 0; nameOff < len(content); {
+				name, consumed, err := DecodeObjectNameAt(content, nameOff)
+				if err != nil {
+					return nil, fmt.Errorf("delete-nvl request: name [%d]: %w", len(req.ListNames), err)
+				}
+				nameOff += consumed
+				req.ListNames = append(req.ListNames, name)
+			}
+		case 0x82:
+			if len(content) == 0 {
+				return nil, fmt.Errorf("delete-nvl request: empty domainName")
+			}
 			req.DomainName = string(content)
-			offset += n
+		default:
+			return nil, fmt.Errorf("delete-nvl request: tag 0x%02x has the wrong form", tag)
 		}
 	}
-
-	if offset != len(data) {
-		return nil, fmt.Errorf("delete-nvl request: %d trailing bytes", len(data)-offset)
+	if req.ScopeOfDelete == 2 && req.DomainName == "" {
+		return nil, fmt.Errorf("delete-nvl request: domain scope without domainName")
 	}
-
 	return req, nil
 }
 

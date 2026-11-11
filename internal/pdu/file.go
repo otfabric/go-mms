@@ -5,6 +5,7 @@ package pdu
 import (
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/otfabric/go-mms/internal/asn1util"
@@ -14,7 +15,9 @@ import (
 
 // Defensive limits for file-related decoders.
 const (
-	maxFileNameLength   = 1024
+	// maxFileNameLength is the IEC 61850-8-1 bound on an MMS FileName:
+	// "no larger than 255 octets" (8-1 clause 23.1).
+	maxFileNameLength   = 255
 	maxDirectoryEntries = 10000
 )
 
@@ -48,6 +51,9 @@ type FileDirectoryRequest struct {
 //	    initialPosition [1] IMPLICIT Unsigned32
 //	}
 func MarshalFileOpenRequest(invokeID codec.InvokeID, fileName string, initialPosition uint32) ([]byte, error) {
+	if err := checkFileName(fileName); err != nil {
+		return nil, err
+	}
 	nameBytes := encodeFileName(fileName)
 	posBytes := berutil.EncodeTLV(0x81, berutil.EncodeUint32(initialPosition))
 
@@ -77,6 +83,9 @@ func MarshalFileCloseRequest(invokeID codec.InvokeID, frsmID int32) ([]byte, err
 //
 // The GraphicStrings of the FileName are the direct content of [76].
 func MarshalFileDeleteRequest(invokeID codec.InvokeID, fileName string) ([]byte, error) {
+	if err := checkFileName(fileName); err != nil {
+		return nil, err
+	}
 	payload := encodeFileNameInner(fileName)
 	return MarshalConfirmedRequest(invokeID, asn1util.TagNumFileDelete, true, payload)
 }
@@ -88,6 +97,9 @@ func MarshalFileDeleteRequest(invokeID codec.InvokeID, fileName string) ([]byte,
 //	    continueAfter     [1] IMPLICIT FileName OPTIONAL
 //	}
 func MarshalFileDirectoryRequest(invokeID codec.InvokeID, fileSpec string, continueAfter string) ([]byte, error) {
+	if err := checkFileName(fileSpec, continueAfter); err != nil {
+		return nil, err
+	}
 	var payload []byte
 	if fileSpec != "" {
 		payload = append(payload, encodeFileNameTag(0xa0, fileSpec)...)
@@ -105,6 +117,9 @@ func MarshalFileDirectoryRequest(invokeID codec.InvokeID, fileSpec string, conti
 //	    newFileName     [1] IMPLICIT FileName
 //	}
 func MarshalFileRenameRequest(invokeID codec.InvokeID, currentName, newName string) ([]byte, error) {
+	if err := checkFileName(currentName, newName); err != nil {
+		return nil, err
+	}
 	cur := encodeFileNameTag(0xa0, currentName)
 	new_ := encodeFileNameTag(0xa1, newName)
 
@@ -122,6 +137,9 @@ func MarshalFileRenameRequest(invokeID codec.InvokeID, currentName, newName stri
 //	    destinationFileName [2] IMPLICIT FileName
 //	}
 func MarshalObtainFileRequest(invokeID codec.InvokeID, sourceFile, destFile string) ([]byte, error) {
+	if err := checkFileName(sourceFile, destFile); err != nil {
+		return nil, err
+	}
 	src := encodeFileNameTag(0xa1, sourceFile)
 	dst := encodeFileNameTag(0xa2, destFile)
 
@@ -457,7 +475,7 @@ func parseFileAttributes(data []byte, r *FileOpenResult) (hasSize bool, _ error)
 			r.Size = int64(v)
 			hasSize = true
 		case 0x81: // lastModified
-			t, err := time.Parse("20060102150405Z", string(inner))
+			t, err := ParseGeneralizedTime(string(inner))
 			if err != nil {
 				return false, fmt.Errorf("pdu: file lastModified: %w", err)
 			}
@@ -623,11 +641,12 @@ func encodeFileNameInner(name string) []byte {
 	return berutil.EncodeTLV(0x19, []byte(name))
 }
 
-// decodeFileName decodes a FileName from BER data. Accepts both the
-// spec-faithful wrapped form and a bare GraphicString for compatibility:
-//
-//   - [ctx] { 0x19 len string }  — IMPLICIT SEQUENCE OF GraphicString
-//   - 0x19 len string            — bare GraphicString (lenient)
+// decodeFileName decodes the contents of a FileName, which is a SEQUENCE
+// OF GraphicString (ISO 9506-2 clause 7.5.7): IEC 61850-8-1
+// clause 23.1 lets it carry a sequence of file paths and a name of a
+// file. The elements are joined with "/". For interop tolerance a
+// FileName wrapped in one more constructed element is accepted too. The
+// joined name is at most 255 octets (8-1 clause 23.1).
 func decodeFileName(data []byte) (string, error) {
 	if len(data) == 0 {
 		return "", fmt.Errorf("pdu: empty FileName")
@@ -636,36 +655,48 @@ func decodeFileName(data []byte) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("pdu: decode FileName: %w", err)
 	}
-
-	if tag == 0x19 {
-		if n != len(data) {
-			return "", fmt.Errorf("pdu: FileName: %d trailing bytes after GraphicString", len(data)-n)
+	if tag != 0x19 {
+		if tag&0x20 == 0 {
+			return "", fmt.Errorf("pdu: FileName: unexpected tag 0x%02x", tag)
 		}
-		if len(inner) > maxFileNameLength {
-			return "", fmt.Errorf("pdu: file name length %d exceeds maximum %d", len(inner), maxFileNameLength)
-		}
-		return string(inner), nil
-	}
-
-	if tag&0x20 != 0 { // constructed
 		if n != len(data) {
 			return "", fmt.Errorf("pdu: FileName: %d trailing bytes after wrapper", len(data)-n)
 		}
-		itag, iinner, in, ierr := berutil.DecodeTLVAt(inner, 0)
-		if ierr != nil {
-			return "", fmt.Errorf("pdu: decode FileName inner: %w", ierr)
+		if len(inner) == 0 {
+			return "", fmt.Errorf("pdu: empty FileName")
 		}
-		if in != len(inner) {
-			return "", fmt.Errorf("pdu: FileName: %d trailing bytes inside wrapper", len(inner)-in)
-		}
-		if itag == 0x19 {
-			if len(iinner) > maxFileNameLength {
-				return "", fmt.Errorf("pdu: file name length %d exceeds maximum %d", len(iinner), maxFileNameLength)
-			}
-			return string(iinner), nil
-		}
-		return "", fmt.Errorf("pdu: FileName: expected GraphicString (0x19) inside wrapper, got 0x%02x", itag)
+		data = inner
 	}
+	var parts []string
+	total := 0
+	for offset := 0; offset < len(data); {
+		itag, part, in, ierr := berutil.DecodeTLVAt(data, offset)
+		if ierr != nil {
+			return "", fmt.Errorf("pdu: decode FileName element: %w", ierr)
+		}
+		if itag != 0x19 {
+			return "", fmt.Errorf("pdu: FileName: expected GraphicString (0x19), got 0x%02x", itag)
+		}
+		offset += in
+		if len(parts) > 0 {
+			total++ // the "/" separator
+		}
+		total += len(part)
+		if total > maxFileNameLength {
+			return "", fmt.Errorf("pdu: file name length exceeds maximum %d", maxFileNameLength)
+		}
+		parts = append(parts, string(part))
+	}
+	return strings.Join(parts, "/"), nil
+}
 
-	return "", fmt.Errorf("pdu: FileName: unexpected tag 0x%02x", tag)
+// checkFileName enforces the 255-octet FileName bound of IEC 61850-8-1
+// clause 23.1 on an outbound name.
+func checkFileName(names ...string) error {
+	for _, name := range names {
+		if len(name) > maxFileNameLength {
+			return fmt.Errorf("pdu: file name length %d exceeds maximum %d (IEC 61850-8-1 clause 23.1)", len(name), maxFileNameLength)
+		}
+	}
+	return nil
 }

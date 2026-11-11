@@ -439,9 +439,13 @@ func TestServe_ConcludeSendError(t *testing.T) {
 	}
 }
 
-// TestServe_SkipsBadFramesThenConcludes feeds every frame kind that Serve
-// must log and skip, then a conclude. Only the conclude may be answered.
-func TestServe_SkipsBadFramesThenConcludes(t *testing.T) {
+// TestServe_RejectsBadFramesThenConcludes feeds every frame kind Serve
+// cannot process, then a conclude. A PDU that cannot be processed is
+// answered with a RejectPDU (ISO 9506-2 clause 8.6; IEC 61850-8-1
+// 8.1.3.4.1 and 8.1.3.4.3.3 for the oversized request), unexpected but
+// well-formed PDUs are logged only, and the association continues
+// (MMS-PDU-11, MMS-PDU-25; this test used to expect silent drops).
+func TestServe_RejectsBadFramesThenConcludes(t *testing.T) {
 	opts := defaultOpts()
 	opts.MaxPDUSize = minPDUSize
 	handlerCalled := false
@@ -453,7 +457,8 @@ func TestServe_SkipsBadFramesThenConcludes(t *testing.T) {
 	oversized := mustConfirmedReq(t, 1, 4, make([]byte, minPDUSize+1))
 	tr := &scriptTransport{in: [][]byte{
 		dataFrame(oversized),                                                       // larger than negotiated size
-		dataFrame([]byte{0x1f, 0xff, 0xff, 0xff}),                                  // malformed MMS PDU
+		dataFrame([]byte{0x1f, 0xff, 0xff, 0xff}),                                  // not an MMSpdu
+		dataFrame([]byte{0xa0, 0x05, 0x02, 0x01}),                                  // truncated MMS PDU
 		dataFrame(codec.MarshalRejectPDU(0, 1, 0)),                                 // unexpected kind (Reject)
 		dataFrame(codec.MarshalConcludeResponse()),                                 // unexpected kind (ConcludeResponse)
 		dataFrame(asn1util.WrapPrimitive(5, []byte{0xff, 0xff, 0xff, 0xff, 0xff})), // malformed cancel
@@ -467,10 +472,22 @@ func TestServe_SkipsBadFramesThenConcludes(t *testing.T) {
 		t.Fatal("handler called for an oversized request")
 	}
 	sent := tr.sentFrames()
-	if len(sent) != 1 {
-		t.Fatalf("sent %d frames, want 1 (conclude response)", len(sent))
+	want := [][]byte{
+		{0xa4, 0x06, 0x80, 0x01, 0x01, 0x81, 0x01, 0x09}, // oversized: value-out-of-range
+		{0xa4, 0x03, 0x85, 0x01, 0x00},                   // 0x1f is no MMSpdu tag: pdu-error unknown-pdu-type
+		{0xa4, 0x03, 0x85, 0x01, 0x01},                   // truncated: pdu-error invalid-pdu
+		{0xa4, 0x03, 0x86, 0x01, 0x00},                   // malformed cancel: cancel-requestPDU other
 	}
-	expectConcludeResponse(t, sent[0])
+	if len(sent) != len(want)+1 {
+		t.Fatalf("sent %d frames, want %d", len(sent), len(want)+1)
+	}
+	for i, w := range want {
+		mms, err := isostack.DecodeDataResponse(sent[i])
+		if err != nil || !bytes.Equal(mms, w) {
+			t.Errorf("frame %d = %x, %v; want %x", i, mms, err, w)
+		}
+	}
+	expectConcludeResponse(t, sent[len(want)])
 }
 
 func TestServe_CancelRequestRepliesCancelError(t *testing.T) {
@@ -585,8 +602,11 @@ func TestServe_ConfirmedRequestMalformedSendsReject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeRejectPDU: %v", err)
 	}
-	if rej.RejectType != 1 || rej.RejectReason != 0 || rej.InvokeID != 0 {
-		t.Fatalf("reject = %+v, want type=1 reason=0 invokeID=0", *rej)
+	// The invokeID is unreadable, so originalInvokeID is omitted
+	// (ISO 9506-2 clause 8.6, OPTIONAL) and the reason is pdu-error
+	// invalid-pdu (MMS-PDU-11; this used to send invokeID 0).
+	if rej.RejectType != 5 || rej.RejectReason != 1 || rej.HasInvokeID {
+		t.Fatalf("reject = %+v, want pdu-error invalid-pdu without invokeID", *rej)
 	}
 	expectConcludeResponse(t, sent[1])
 }
@@ -643,7 +663,8 @@ func TestServe_ConfirmedResponseTooLarge(t *testing.T) {
 	if len(sent) != 2 {
 		t.Fatalf("sent %d frames, want 2", len(sent))
 	}
-	expectConfirmedError(t, sent[0], 3, errorClassResource, errorCodeOther)
+	// IEC 61850-8-1 Table 17: service / pdu-size (MMS-PDU-11).
+	expectConfirmedError(t, sent[0], 3, ErrorClassService, ErrorCodePDUSize)
 	expectConcludeResponse(t, sent[1])
 }
 

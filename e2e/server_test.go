@@ -29,7 +29,7 @@ func TestServer_ListenAndServe(t *testing.T) {
 
 	c := dial(t, ln.Addr().String())
 	if _, err := c.Identify(timeout(t)); err == nil {
-		t.Error("Identify without a handler: expected service error")
+		t.Error("Identify without a handler: expected Reject")
 	}
 
 	cancel()
@@ -198,11 +198,17 @@ func TestServer_HandleIdentify_HandleStatus(t *testing.T) {
 	srv := mms.NewServer(mms.ServerOptions{})
 	c := dial(t, serve(t, srv))
 	ctx := timeout(t)
-	if _, err := c.Identify(ctx); !errors.Is(err, mms.ErrServiceRejected) {
-		t.Errorf("Identify without handler = %v, want service error", err)
-	}
-	if _, err := c.Status(ctx); !errors.Is(err, mms.ErrServiceRejected) {
-		t.Errorf("Status without handler = %v, want service error", err)
+	// Without a handler the service is not supported: Reject
+	// confirmed-requestPDU unrecognized-service (IEC 61850-8-1 clause
+	// 8.1.3.4.1, MMS-PDU-02).
+	for name, call := range map[string]func() error{
+		"Identify": func() error { _, err := c.Identify(ctx); return err },
+		"Status":   func() error { _, err := c.Status(ctx); return err },
+	} {
+		var rj *mms.RejectError
+		if err := call(); !errors.As(err, &rj) || rj.Type != mms.RejectConfirmedRequest || rj.Reason != 1 || !rj.HasInvokeID {
+			t.Errorf("%s without handler = %v, want Reject unrecognized-service", name, err)
+		}
 	}
 
 	srv.HandleIdentify(func(context.Context, mms.IdentifyRequest) (*mms.ServerIdentity, error) {
@@ -422,8 +428,9 @@ func TestServerConn_SendUnsolicitedStatus(t *testing.T) {
 // PDU size enforcement
 // ---------------------------------------------------------------------------
 
-// A single value larger than the negotiated PDU is answered with a
-// resource ServiceError instead of an oversize PDU.
+// A single value larger than the negotiated PDU is answered with
+// ServiceError service/pdu-size instead of an oversize PDU (IEC 61850-8-1
+// Table 17; it used to be resource/other, MMS-PDU-11).
 func TestServer_ResponseTooLarge(t *testing.T) {
 	m := startModel(t)
 	big := mms.NewOctetString(bytes.Repeat([]byte{0xaa}, 4000))
@@ -431,8 +438,8 @@ func TestServer_ResponseTooLarge(t *testing.T) {
 	c := dial(t, m.addr, mms.DialOptions{MMS: mms.MMSOptions{MaxPDUSize: 1024}})
 	ctx := timeout(t)
 	_, err := c.Read(ctx, mms.ReadRequest{DomainID: dom, ItemID: "big"})
-	if se := serviceError(t, err); se.Class != mms.ErrorClassResource {
-		t.Errorf("oversize read = %v, want resource class", se)
+	if se := serviceError(t, err); se.Class != mms.ErrorClassService || se.Code != 3 {
+		t.Errorf("oversize read = %v, want service/pdu-size", se)
 	}
 	if _, err := c.Identify(ctx); err != nil {
 		t.Errorf("association unusable after oversize response: %v", err)

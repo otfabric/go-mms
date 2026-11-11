@@ -79,8 +79,17 @@ func checkEnvelopeRoundTrip(t *testing.T, data []byte, id InvokeID, svc asn1.Raw
 	if err != nil {
 		t.Fatalf("decode(encode(x)) failed: %v\noriginal %x\nre-encoded %x", err, data, content)
 	}
+	// UnwrapPdu rewrites received BER to minimal definite lengths (X.690
+	// clause 8.1.3.5 NOTE 2), so a constructed service compares in that
+	// form.
+	want := svc.Bytes
+	if svc.IsCompound {
+		if c, _, err := berutil.Canonicalize(want); err == nil {
+			want = c
+		}
+	}
 	if id2 != id || svc2.Tag != svc.Tag || svc2.IsCompound != svc.IsCompound ||
-		svc2.Class != asn1.ClassContextSpecific || !bytes.Equal(svc2.Bytes, svc.Bytes) {
+		svc2.Class != asn1.ClassContextSpecific || !bytes.Equal(svc2.Bytes, want) {
 		t.Fatalf("round-trip mismatch:\n got id=%d tag=%d compound=%v class=%d bytes=%x\nwant id=%d tag=%d compound=%v bytes=%x",
 			id2, svc2.Tag, svc2.IsCompound, svc2.Class, svc2.Bytes, id, svc.Tag, svc.IsCompound, svc.Bytes)
 	}
@@ -142,15 +151,13 @@ func FuzzUnwrapPdu(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if data[0]&0x1f == 0x1f {
-			// UnwrapPdu rejects tag numbers above 30, and encoding/asn1
-			// rejects non-minimal long-form encodings of smaller ones.
-			t.Fatalf("UnwrapPdu accepted long-form tag %x", data)
-		}
-		// encoding/asn1 only accepts minimal definite lengths, so the
-		// single-byte-tag re-encoding must reproduce the input exactly.
-		if enc := berutil.EncodeTLV(tag, content); !bytes.Equal(enc, data) {
-			t.Fatalf("re-encoding mismatch: %x != %x", enc, data)
+		// UnwrapPdu accepts BER lengths (non-minimal, indefinite) and
+		// returns minimal definite content, so re-wrapping it in the
+		// minimal form must decode to the same tag and content (idempotent).
+		enc := berutil.EncodeTLV(tag, content)
+		tag2, content2, err := UnwrapPdu(enc)
+		if err != nil || tag2 != tag || !bytes.Equal(content2, content) {
+			t.Fatalf("UnwrapPdu not idempotent on %x: %x/%x, %v", enc, tag2, content2, err)
 		}
 	})
 }
