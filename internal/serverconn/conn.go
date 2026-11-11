@@ -7,14 +7,14 @@ package serverconn
 
 import (
 	"context"
+	"encoding/asn1"
 	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 
-	"github.com/otfabric/go-mms/internal/acse"
-	"github.com/otfabric/go-mms/internal/asn1util"
 	"github.com/otfabric/go-mms/internal/berutil"
 	"github.com/otfabric/go-mms/internal/codec"
 	"github.com/otfabric/go-mms/internal/isostack"
@@ -46,12 +46,17 @@ func (e *ServiceError) Error() string {
 
 // Conn manages one MMS association.
 type Conn struct {
-	sendMu         sync.Mutex
-	transport      Transport
-	logger         *slog.Logger
-	handler        ServiceHandler
-	mmsOpts        MMSOptions
-	pendingInitReq *pdu.InitiateRequest
+	sendMu    sync.Mutex
+	transport Transport
+	logger    *slog.Logger
+	handler   ServiceHandler
+	mmsOpts   MMSOptions
+	contexts  isostack.Contexts
+
+	pendingReq        *isostack.AssociateRequest
+	pendingInitReq    *pdu.InitiateRequest
+	pendingNegotiated MMSOptions
+	pendingNesting    bool
 }
 
 // MMSOptions are the negotiated MMS parameters for this connection.
@@ -60,6 +65,25 @@ type MMSOptions struct {
 	MaxOutstandingCalling     int
 	MaxOutstandingCalled      int
 	DataStructureNestingLevel int
+
+	// ServicesSupportedCalled is the server's servicesSupportedCalled
+	// (IEC 61850-8-1 Table 111). Empty means the Table 111 mandatory
+	// services only.
+	ServicesSupportedCalled asn1.BitString
+	// ParameterCBB is the parameter CBB the server supports; the answer
+	// is the proposal AND this (Table 112). Empty means
+	// DefaultParameterCBB.
+	ParameterCBB asn1.BitString
+
+	// ReleaseTimeout bounds the wait for the client's A-RELEASE (FINISH)
+	// after a Conclude-Response. Zero means DefaultReleaseTimeout; a
+	// negative value does not wait.
+	ReleaseTimeout time.Duration
+
+	// RespondingAPTitle / RespondingAEQualifier are sent in the AARE
+	// when the AP-title is non-empty (ISO 8650-1).
+	RespondingAPTitle     []int
+	RespondingAEQualifier int
 }
 
 // New creates a new server connection.
@@ -69,118 +93,8 @@ func New(t Transport, logger *slog.Logger, handler ServiceHandler, opts MMSOptio
 		logger:    logger,
 		handler:   handler,
 		mmsOpts:   opts,
+		contexts:  isostack.DefaultContexts,
 	}
-}
-
-// ReceiveAssociation reads the client's CONNECT, validates the MMS
-// Initiate Request, and returns the ACSE authentication info. It does
-// NOT send the AARE — the caller must subsequently call AcceptAssociation
-// or RejectAssociation.
-func (c *Conn) ReceiveAssociation(ctx context.Context) (acse.AuthInfo, error) {
-	var noAuth acse.AuthInfo
-
-	data, err := c.transport.Receive(ctx)
-	if err != nil {
-		return noAuth, fmt.Errorf("serverconn: receive association: %w", err)
-	}
-
-	assocReq, err := isostack.DecodeAssociateRequest(data)
-	if err != nil {
-		return noAuth, fmt.Errorf("serverconn: %w", err)
-	}
-
-	kind, initContent, err := pdu.DecodePdu(assocReq.MmsPayload)
-	if err != nil {
-		return noAuth, fmt.Errorf("serverconn: decode MMS initiate: %w", err)
-	}
-	if kind != pdu.PduInitiateRequest {
-		return noAuth, fmt.Errorf("serverconn: expected InitiateRequest, got %s", kind)
-	}
-
-	initReq, err := pdu.UnmarshalInitiateRequest(initContent)
-	if err != nil {
-		return noAuth, fmt.Errorf("serverconn: %w", err)
-	}
-
-	c.pendingInitReq = initReq
-	return assocReq.Auth, nil
-}
-
-// AcceptAssociation sends the AARE with result=accepted and the negotiated
-// MMS parameters. Must be called after ReceiveAssociation.
-func (c *Conn) AcceptAssociation(ctx context.Context) error {
-	if c.pendingInitReq == nil {
-		return fmt.Errorf("serverconn: no pending association to accept")
-	}
-	initReq := c.pendingInitReq
-	c.pendingInitReq = nil
-
-	negotiated := c.negotiate(*initReq)
-
-	initResp := pdu.InitiateResponse{
-		LocalDetailCalled:                  negotiated.MaxPDUSize,
-		NegotiatedMaxServOutstandingCall:   negotiated.MaxOutstandingCalling,
-		NegotiatedMaxServOutstandingCalled: negotiated.MaxOutstandingCalled,
-		NegotiatedDataStructureNesting:     negotiated.DataStructureNestingLevel,
-		InitResponseDetail: pdu.InitResponseDetail{
-			NegotiatedVersion:       1,
-			NegotiatedParamCBB:      initReq.InitRequestDetail.ProposedParamCBB,
-			ServicesSupportedCalled: initReq.InitRequestDetail.ServicesSupportedCalling,
-		},
-	}
-
-	initRespBytes, err := codec.MarshalMmsPduBareSequence(asn1util.TagInitiateResponse, initResp)
-	if err != nil {
-		return fmt.Errorf("serverconn: marshal initiate response: %w", err)
-	}
-
-	resp, err := isostack.EncodeAssociateResponse(initRespBytes)
-	if err != nil {
-		return fmt.Errorf("serverconn: %w", err)
-	}
-	if err := c.transport.Send(ctx, resp); err != nil {
-		return fmt.Errorf("serverconn: send association response: %w", err)
-	}
-
-	c.mmsOpts = negotiated
-
-	c.logger.Info("mms: association accepted",
-		"max_pdu_size", negotiated.MaxPDUSize,
-		"max_outstanding_calling", negotiated.MaxOutstandingCalling,
-	)
-
-	return nil
-}
-
-// RejectAssociation sends an AARE with result=rejected-permanent.
-func (c *Conn) RejectAssociation(ctx context.Context) error {
-	c.pendingInitReq = nil
-	resp := isostack.EncodeAssociateReject()
-	return c.transport.Send(ctx, resp)
-}
-
-// Minimum acceptable negotiation values. If the peer proposes less than
-// these, we clamp upward to keep the association usable.
-const (
-	minPDUSize      = 128
-	minOutstanding  = 1
-	minNestingLevel = 1
-)
-
-func (c *Conn) negotiate(req pdu.InitiateRequest) MMSOptions {
-	return MMSOptions{
-		MaxPDUSize:                clampMin(min(c.mmsOpts.MaxPDUSize, req.LocalDetailCalling), minPDUSize),
-		MaxOutstandingCalling:     clampMin(min(c.mmsOpts.MaxOutstandingCalling, req.ProposedMaxServOutstandingCall), minOutstanding),
-		MaxOutstandingCalled:      clampMin(min(c.mmsOpts.MaxOutstandingCalled, req.ProposedMaxServOutstandingCalled), minOutstanding),
-		DataStructureNestingLevel: clampMin(min(c.mmsOpts.DataStructureNestingLevel, req.ProposedDataStructureNesting), minNestingLevel),
-	}
-}
-
-func clampMin(val, minimum int) int {
-	if val < minimum {
-		return minimum
-	}
-	return val
 }
 
 // Serve runs the request/response loop until the client disconnects
@@ -192,11 +106,10 @@ func (c *Conn) Serve(ctx context.Context) error {
 			return fmt.Errorf("serverconn: receive: %w", err)
 		}
 
-		mmsPayload, err := isostack.DecodeDataResponse(data)
+		mmsPayload, err := isostack.DecodeData(c.contexts, data)
 		if err != nil {
-			// Could be FINISH/ABORT
-			if rerr := isostack.DecodeReleaseRequest(data); rerr == nil {
-				return c.handleRelease(ctx)
+			if isFinish(data) {
+				return c.handleUnexpectedRelease(ctx)
 			}
 			return fmt.Errorf("serverconn: decode data: %w", err)
 		}
@@ -280,7 +193,7 @@ func (c *Conn) sendError(ctx context.Context, invokeID codec.InvokeID, errorClas
 func (c *Conn) sendData(ctx context.Context, mmsPdu []byte) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
-	data := isostack.EncodeDataRequest(mmsPdu)
+	data := isostack.EncodeData(c.contexts, mmsPdu)
 	return c.transport.Send(ctx, data)
 }
 
@@ -310,7 +223,7 @@ func (c *Conn) SendUnconfirmed(ctx context.Context, mmsPdu []byte) error {
 			done <- nil
 			return
 		}
-		done <- c.transport.Send(context.WithoutCancel(ctx), isostack.EncodeDataRequest(mmsPdu))
+		done <- c.transport.Send(context.WithoutCancel(ctx), isostack.EncodeData(c.contexts, mmsPdu))
 	}()
 	select {
 	case err := <-done:
@@ -319,34 +232,6 @@ func (c *Conn) SendUnconfirmed(ctx context.Context, mmsPdu []byte) error {
 		state.CompareAndSwap(pending, abandoned)
 		return ctx.Err()
 	}
-}
-
-func (c *Conn) handleConclude(ctx context.Context) error {
-	resp := codec.MarshalConcludeResponse()
-	if err := c.sendData(ctx, resp); err != nil {
-		return fmt.Errorf("serverconn: send conclude response: %w", err)
-	}
-	c.logger.Info("mms: concluded")
-	return nil
-}
-
-func (c *Conn) handleRelease(ctx context.Context) error {
-	resp := isostack.EncodeReleaseResponse()
-	if err := c.transport.Send(ctx, resp); err != nil {
-		return fmt.Errorf("serverconn: send release response: %w", err)
-	}
-	c.logger.Info("mms: released")
-	return nil
-}
-
-// SendAbort sends a protocol-level Abort PDU (Session ABORT / ACSE
-// ABRT) to the peer. This is a best-effort send — errors are returned
-// but the caller should close the transport regardless.
-func (c *Conn) SendAbort(ctx context.Context) error {
-	c.sendMu.Lock()
-	defer c.sendMu.Unlock()
-	data := isostack.EncodeAbort()
-	return c.transport.Send(ctx, data)
 }
 
 // Close closes the transport, ending Serve.

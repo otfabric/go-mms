@@ -114,7 +114,7 @@ func TestRejectAssociation(t *testing.T) {
 		t.Fatalf("ReceiveAssociation: %v", err)
 	}
 
-	if err := c.RejectAssociation(ctx); err != nil {
+	if err := c.RejectAssociation(ctx, 13); err != nil {
 		t.Fatalf("RejectAssociation: %v", err)
 	}
 }
@@ -130,15 +130,6 @@ func TestAcceptAssociationWithoutReceive(t *testing.T) {
 	err := c.AcceptAssociation(context.Background())
 	if err == nil {
 		t.Fatal("expected error when no pending association")
-	}
-}
-
-func TestClampMin(t *testing.T) {
-	if clampMin(5, 10) != 10 {
-		t.Fatal("should clamp up")
-	}
-	if clampMin(15, 10) != 15 {
-		t.Fatal("should not clamp")
 	}
 }
 
@@ -175,8 +166,10 @@ func TestFullAssociationAndConclude(t *testing.T) {
 	concludePdu := codec.MarshalConcludeRequest()
 	concludeData := isostack.EncodeDataRequest(concludePdu)
 	client.send <- concludeData
+	// A-RELEASE after the Conclude-Response (ISO 9506-2 Annex A.1.2).
+	client.send <- isostack.EncodeReleaseRequest()
 
-	// Serve should process the conclude and return
+	// Serve should process the conclude and the release and return
 	err = c.Serve(ctx)
 	if err != nil {
 		t.Fatalf("Serve: %v", err)
@@ -211,12 +204,13 @@ func TestFullAssociationAndRelease(t *testing.T) {
 
 	<-client.recv
 
-	// Send a release (FINISH) request
+	// A FINISH without a prior Conclude is aborted (ISO 9506-2 Annex
+	// A.1.2.2).
 	releaseData := isostack.EncodeReleaseRequest()
 	client.send <- releaseData
 
 	err = c.Serve(ctx)
-	if err != nil {
+	if !errors.Is(err, ErrReleaseWithoutConclude) {
 		t.Fatalf("Serve: %v", err)
 	}
 }
@@ -265,6 +259,7 @@ func TestConfirmedRequestHandling(t *testing.T) {
 	// Conclude
 	concludePdu := codec.MarshalConcludeRequest()
 	client.send <- isostack.EncodeDataRequest(concludePdu)
+	client.send <- isostack.EncodeReleaseRequest()
 
 	err = <-done
 	if err != nil {
@@ -307,6 +302,7 @@ func TestServiceErrorHandling(t *testing.T) {
 
 	concludePdu := codec.MarshalConcludeRequest()
 	client.send <- isostack.EncodeDataRequest(concludePdu)
+	client.send <- isostack.EncodeReleaseRequest()
 
 	if err := <-done; err != nil {
 		t.Fatalf("Serve: %v", err)

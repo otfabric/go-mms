@@ -43,6 +43,23 @@ type ServerOptions struct {
 	// is disconnected after it. Zero means 30s; a negative value disables
 	// the limit.
 	AssociationTimeout time.Duration
+
+	// ReleaseTimeout bounds how long Serve waits, after answering a
+	// Conclude-Request, for the client's A-RELEASE (Session FINISH
+	// carrying an ACSE RLRQ), which it answers with DISCONNECT + RLRE
+	// (ISO 9506-2 Annex A.1.2.2). A client that closes the transport
+	// instead ends the association normally. Zero means 2s; a negative
+	// value does not wait (Serve returns right after the
+	// Conclude-Response, the behaviour before v1.8.0).
+	ReleaseTimeout time.Duration
+
+	// RespondingAPTitle and RespondingAEQualifier, when the AP-title is
+	// non-empty, are sent in the AARE as responding-AP-title [4] and
+	// responding-AE-qualifier [5] (ISO 8650-1; ISO 9506-2 Annex A.1.1
+	// maps them to the Responding Application Reference). Nil sends
+	// neither.
+	RespondingAPTitle     APTitle
+	RespondingAEQualifier int
 }
 
 // ServerMMSOptions configures MMS protocol negotiation parameters for

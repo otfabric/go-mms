@@ -85,6 +85,9 @@ func nopHandler(_ context.Context, _ codec.InvokeID, _ int, _ []byte) (int, bool
 	return 0, false, nil, nil
 }
 
+// minPDUSize is a small negotiated PDU size used by the Serve tests.
+const minPDUSize = 128
+
 func defaultOpts() MMSOptions {
 	return MMSOptions{MaxPDUSize: 65000, MaxOutstandingCalling: 5, MaxOutstandingCalled: 5, DataStructureNestingLevel: 10}
 }
@@ -164,6 +167,9 @@ func TestReceiveAssociation_Errors(t *testing.T) {
 		tr      *scriptTransport
 		wantIs  error
 		wantSub string
+		// refused: the request is answered with a REFUSE (ISO 8327-1)
+		// carrying an AARE rejected-permanent (ISO 8650-1).
+		refused bool
 	}{
 		{
 			name:   "transport receive error",
@@ -183,17 +189,17 @@ func TestReceiveAssociation_Errors(t *testing.T) {
 		{
 			name:    "undecodable MMS payload",
 			tr:      &scriptTransport{in: [][]byte{mustAssocReq(t, []byte{0x1f, 0xff, 0xff, 0xff, 0xff, 0xff})}},
-			wantSub: "decode MMS initiate",
+			wantSub: "decode MMS initiate", wantIs: ErrRefused, refused: true,
 		},
 		{
 			name:    "non-initiate MMS PDU",
 			tr:      &scriptTransport{in: [][]byte{mustAssocReq(t, codec.MarshalConcludeRequest())}},
-			wantSub: "expected InitiateRequest",
+			wantSub: "expected InitiateRequest", wantIs: ErrRefused, refused: true,
 		},
 		{
 			name:    "malformed initiate request",
 			tr:      &scriptTransport{in: [][]byte{mustAssocReq(t, []byte{0xa8, 0x02, 0x05, 0x00})}},
-			wantSub: "serverconn:",
+			wantSub: "serverconn:", wantIs: ErrRefused, refused: true,
 		},
 	}
 	for _, tc := range tests {
@@ -212,15 +218,28 @@ func TestReceiveAssociation_Errors(t *testing.T) {
 			if auth.Password != nil || auth.MechanismOID != nil {
 				t.Fatalf("expected zero auth, got %+v", auth)
 			}
-			if c.pendingInitReq != nil {
-				t.Fatal("pendingInitReq set after failed ReceiveAssociation")
+			if c.pendingInitReq != nil || c.pendingReq != nil {
+				t.Fatal("pending request set after failed ReceiveAssociation")
 			}
 			// A failed ReceiveAssociation leaves nothing to accept.
 			if err := c.AcceptAssociation(context.Background()); err == nil {
 				t.Fatal("AcceptAssociation after failed receive should fail")
 			}
-			if n := len(tc.tr.sentFrames()); n != 0 {
-				t.Fatalf("sent %d frames, want 0", n)
+			sent := tc.tr.sentFrames()
+			if !tc.refused {
+				if len(sent) != 0 {
+					t.Fatalf("sent %d frames, want 0", len(sent))
+				}
+				return
+			}
+			if len(sent) != 1 {
+				t.Fatalf("sent %d frames, want 1 refusal", len(sent))
+			}
+			_, err = isostack.DecodeAssociateResponse(sent[0])
+			rj, ok := errors.AsType[*isostack.Rejection](err)
+			if !ok || rj.SessionReason != 2 || rj.ACSEResult != acse.ResultRejectedPerm ||
+				rj.DiagSource != acse.DiagSourceUser || rj.Diagnostic != acse.DiagUserNoReasonGiven {
+				t.Fatalf("refusal %+v (%v)", rj, err)
 			}
 		})
 	}
@@ -248,8 +267,9 @@ func TestReceiveAssociation_PasswordAuth(t *testing.T) {
 // --- AcceptAssociation / negotiation / MaxPDUSize ---------------------------
 
 func TestAcceptAssociation_NegotiatesAndEncodesResponse(t *testing.T) {
-	// Client proposes values below the server maxima; the PDU size is
-	// clamped up to the minimum.
+	// Client proposes values below the server maxima; the negotiated
+	// values are the proposals, without an upward clamp (ISO 9506-2 8.2,
+	// MMS-STK-05).
 	tr := &scriptTransport{in: [][]byte{mustAssocReq(t, mustInitReq(t, 64, 3, 2, 4))}}
 	c := New(tr, discardLogger(), nopHandler, defaultOpts())
 	ctx := context.Background()
@@ -263,8 +283,8 @@ func TestAcceptAssociation_NegotiatesAndEncodesResponse(t *testing.T) {
 	if err := c.AcceptAssociation(ctx); err != nil {
 		t.Fatalf("AcceptAssociation: %v", err)
 	}
-	if got := c.MaxPDUSize(); got != minPDUSize {
-		t.Fatalf("MaxPDUSize after accept = %d, want %d", got, minPDUSize)
+	if got := c.MaxPDUSize(); got != 64 {
+		t.Fatalf("MaxPDUSize after accept = %d, want 64", got)
 	}
 
 	sent := tr.sentFrames()
@@ -286,7 +306,7 @@ func TestAcceptAssociation_NegotiatesAndEncodesResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UnmarshalInitiateResponse: %v", err)
 	}
-	if ir.LocalDetailCalled != minPDUSize || ir.NegotiatedMaxServOutstandingCall != 3 ||
+	if ir.LocalDetailCalled != 64 || ir.NegotiatedMaxServOutstandingCall != 3 ||
 		ir.NegotiatedMaxServOutstandingCalled != 2 || ir.NegotiatedDataStructureNesting != 4 {
 		t.Fatalf("unexpected negotiated values: %+v", *ir)
 	}
@@ -325,19 +345,24 @@ func TestRejectAssociation_EncodesRejectAndClearsPending(t *testing.T) {
 	if _, err := c.ReceiveAssociation(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.RejectAssociation(ctx); err != nil {
+	if err := c.RejectAssociation(ctx, acse.DiagUserAuthFailure); err != nil {
 		t.Fatal(err)
 	}
 	sent := tr.sentFrames()
 	if len(sent) != 1 {
 		t.Fatalf("sent %d frames", len(sent))
 	}
-	res, err := isostack.DecodeAssociateResponse(sent[0])
-	if err != nil {
-		t.Fatalf("DecodeAssociateResponse: %v", err)
+	_, err := isostack.DecodeAssociateResponse(sent[0])
+	rj, ok := errors.AsType[*isostack.Rejection](err)
+	if !ok || rj.ACSEResult != acse.ResultRejectedPerm || rj.Diagnostic != acse.DiagUserAuthFailure {
+		t.Fatalf("reject %+v (%v)", rj, err)
 	}
-	if res.ACSEResult == 0 {
-		t.Fatal("reject encoded as accepted")
+	// Initiate-ErrorPDU access object-access-denied (ISO 9506-2 8.2).
+	if !bytes.Equal(rj.MmsPayload, []byte{0xaa, 0x05, 0xa0, 0x03, 0x87, 0x01, 0x03}) {
+		t.Fatalf("Initiate-Error %x", rj.MmsPayload)
+	}
+	if err := c.RejectAssociation(ctx, 13); err == nil {
+		t.Fatal("second RejectAssociation should fail")
 	}
 	if err := c.AcceptAssociation(ctx); err == nil {
 		t.Fatal("AcceptAssociation after reject should fail")
@@ -375,24 +400,31 @@ func TestServe_DecodeErrorNotRelease(t *testing.T) {
 	}
 }
 
-func TestServe_ReleaseSendsReleaseResponse(t *testing.T) {
+// ISO 9506-2 Annex A.1.2.2 (MMS-STK-13): FINISH before Conclude is
+// answered with an abort, not a release.
+func TestServe_ReleaseWithoutConcludeAborts(t *testing.T) {
 	tr := &scriptTransport{in: [][]byte{isostack.EncodeReleaseRequest()}}
 	c := New(tr, discardLogger(), nopHandler, defaultOpts())
-	if err := c.Serve(context.Background()); err != nil {
+	if err := c.Serve(context.Background()); !errors.Is(err, ErrReleaseWithoutConclude) {
 		t.Fatalf("Serve: %v", err)
 	}
 	sent := tr.sentFrames()
-	if len(sent) != 1 || !bytes.Equal(sent[0], isostack.EncodeReleaseResponse()) {
-		t.Fatalf("sent %x, want release response", sent)
+	if len(sent) != 1 || !bytes.Equal(sent[0], isostack.EncodeAbort()) {
+		t.Fatalf("sent %x, want abort", sent)
 	}
 }
 
 func TestServe_ReleaseSendError(t *testing.T) {
 	sendErr := errors.New("closed")
-	tr := &scriptTransport{in: [][]byte{isostack.EncodeReleaseRequest()}, sendErr: sendErr}
+	tr := &scriptTransport{in: [][]byte{dataFrame(codec.MarshalConcludeRequest()), isostack.EncodeReleaseRequest()}, sendErr: sendErr, sendOK: 1}
 	c := New(tr, discardLogger(), nopHandler, defaultOpts())
 	err := c.Serve(context.Background())
 	if !errors.Is(err, sendErr) || !strings.Contains(err.Error(), "send release response") {
+		t.Fatalf("Serve err = %v", err)
+	}
+	tr = &scriptTransport{in: [][]byte{isostack.EncodeReleaseRequest()}, sendErr: sendErr}
+	c = New(tr, discardLogger(), nopHandler, defaultOpts())
+	if err := c.Serve(context.Background()); !errors.Is(err, ErrReleaseWithoutConclude) || !errors.Is(err, sendErr) {
 		t.Fatalf("Serve err = %v", err)
 	}
 }
@@ -657,6 +689,7 @@ func TestAssociationThenServe(t *testing.T) {
 	tr := &scriptTransport{in: [][]byte{
 		mustAssocReq(t, mustInitReq(t, 4000, 5, 5, 10)),
 		dataFrame(mustConfirmedReq(t, 1, 1, nil)),
+		dataFrame(codec.MarshalConcludeRequest()),
 		isostack.EncodeReleaseRequest(),
 	}}
 	c := New(tr, discardLogger(), handler, defaultOpts())
@@ -674,13 +707,14 @@ func TestAssociationThenServe(t *testing.T) {
 		t.Fatalf("Serve: %v", err)
 	}
 	sent := tr.sentFrames()
-	if len(sent) != 3 {
-		t.Fatalf("sent %d frames, want 3", len(sent))
+	if len(sent) != 4 {
+		t.Fatalf("sent %d frames, want 4", len(sent))
 	}
 	if kind, _ := decodeSentMMS(t, sent[1]); kind != pdu.PduConfirmedResponse {
 		t.Fatalf("kind = %s, want ConfirmedResponse", kind)
 	}
-	if !bytes.Equal(sent[2], isostack.EncodeReleaseResponse()) {
+	expectConcludeResponse(t, sent[2])
+	if !bytes.Equal(sent[3], isostack.EncodeReleaseResponse()) {
 		t.Fatal("last frame is not the release response")
 	}
 }
@@ -737,8 +771,17 @@ func TestSendErrorsPropagate(t *testing.T) {
 	if err := c.SendAbort(ctx); !errors.Is(err, sendErr) {
 		t.Fatalf("SendAbort err = %v", err)
 	}
-	if err := c.RejectAssociation(ctx); !errors.Is(err, sendErr) {
+	tr.in = [][]byte{mustAssocReq(t, mustInitReq(t, 1000, 5, 5, 10))}
+	if _, err := c.ReceiveAssociation(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RejectAssociation(ctx, acse.DiagUserAuthFailure); !errors.Is(err, sendErr) {
 		t.Fatalf("RejectAssociation err = %v", err)
+	}
+	// A refusal that cannot be sent still reports the refusal.
+	tr.in = [][]byte{mustAssocReq(t, codec.MarshalConcludeRequest())}
+	if _, err := c.ReceiveAssociation(ctx); !errors.Is(err, ErrRefused) || !errors.Is(err, sendErr) {
+		t.Fatalf("ReceiveAssociation err = %v", err)
 	}
 }
 

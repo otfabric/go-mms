@@ -111,6 +111,7 @@ type Server struct {
 
 	metrics      Metrics
 	assocTimeout time.Duration
+	assocOpts    serverconn.MMSOptions // association settings beyond mmsOpts
 
 	connsMu   sync.RWMutex
 	conns     map[*ServerConn]struct{}
@@ -161,8 +162,15 @@ func NewServer(opts ServerOptions) *Server {
 		journalProvider: opts.JournalProvider,
 		metrics:         metricsOrNop(opts.Metrics),
 		assocTimeout:    assocTimeout,
-		conns:           make(map[*ServerConn]struct{}),
-		listeners:       make(map[TransportListener]struct{}),
+		assocOpts: serverconn.MMSOptions{
+			ServicesSupportedCalled: servicesSupportedCalled(opts.FileProvider != nil, opts.JournalProvider != nil),
+			ParameterCBB:            serverconn.DefaultParameterCBB,
+			ReleaseTimeout:          opts.ReleaseTimeout,
+			RespondingAPTitle:       append(APTitle(nil), opts.RespondingAPTitle...),
+			RespondingAEQualifier:   opts.RespondingAEQualifier,
+		},
+		conns:     make(map[*ServerConn]struct{}),
+		listeners: make(map[TransportListener]struct{}),
 	}
 }
 
@@ -309,12 +317,12 @@ func (s *Server) Serve(ctx context.Context, conn Transport) error {
 	}
 
 	sc := &ServerConn{busy: make(chan struct{}, 1), remote: remote, frsmTable: newFRSMTable()}
-	c := serverconn.New(conn, logger, s.handler(sc, logger), serverconn.MMSOptions{
-		MaxPDUSize:                s.mmsOpts.MaxPDUSize,
-		MaxOutstandingCalling:     s.mmsOpts.MaxOutstandingCalling,
-		MaxOutstandingCalled:      s.mmsOpts.MaxOutstandingCalled,
-		DataStructureNestingLevel: s.mmsOpts.DataStructureNestingLevel,
-	})
+	connOpts := s.assocOpts
+	connOpts.MaxPDUSize = s.mmsOpts.MaxPDUSize
+	connOpts.MaxOutstandingCalling = s.mmsOpts.MaxOutstandingCalling
+	connOpts.MaxOutstandingCalled = s.mmsOpts.MaxOutstandingCalled
+	connOpts.DataStructureNestingLevel = s.mmsOpts.DataStructureNestingLevel
+	c := serverconn.New(conn, logger, s.handler(sc, logger), connOpts)
 	sc.conn = c
 
 	// Cancelling ctx closes the transport so a blocked Receive returns.
@@ -390,12 +398,12 @@ func (s *Server) associate(ctx context.Context, conn Transport, c *serverconn.Co
 		result, authErr := s.authenticator(actx, authCtx)
 		if authErr != nil {
 			logger.Warn("mms: authenticator error", "error", authErr)
-			_ = c.RejectAssociation(actx)
+			_ = c.RejectAssociation(actx, authRejectDiagnostic(authInfo))
 			return nil, &AuthenticationError{Reason: authErr.Error()}
 		}
 		if !result.Accept {
 			logger.Warn("mms: authentication rejected")
-			_ = c.RejectAssociation(actx)
+			_ = c.RejectAssociation(actx, authRejectDiagnostic(authInfo))
 			return nil, &AuthenticationError{Reason: "authenticator rejected"}
 		}
 		authToken = result.Token
