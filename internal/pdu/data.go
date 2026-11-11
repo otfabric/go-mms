@@ -557,8 +557,8 @@ func decodeUTCTime(data []byte) (time.Time, uint8, error) {
 //
 // TimeOfDay (ISO 9506-2:2003 §7.5.1) is four octets of milliseconds since
 // midnight, optionally followed by two octets of days since 1984-01-01.
-// "Bits twenty-eight through thirty-one shall always be set to zero", so
-// the millisecond field is 28 bits wide; nothing limits it to one day.
+// The top four bits of the first word are always zero, so the
+// millisecond field is 28 bits wide; nothing limits it to one day.
 //
 // go-mms represents the 4-octet form as the millisecond field itself,
 // 0..2^28-1, and the 6-octet form as milliseconds since the Unix epoch,
