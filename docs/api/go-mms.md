@@ -304,7 +304,7 @@ ErrNotMMS is returned by [DecodeTSDU](#func-decodetsdu) for a unit that does not
 func IsRetryable(err error) bool
 ```
 
-IsRetryable is the default [RetryPolicy.Retryable](#func-retrypolicy-retryable) classification. It returns false for errors that another attempt cannot fix — context cancellation, invalid arguments, authentication failures, and associations rejected by the peer — and true for everything else (refused or dropped connections, timeouts including a per-attempt context deadline, protocol failures during the handshake). [Retry](#func-retry) stops on its own when its context is done.
+IsRetryable is the default [RetryPolicy.Retryable](#func-retrypolicy-retryable) classification. It returns false for errors that another attempt cannot fix — context cancellation, invalid arguments, authentication failures, and associations rejected by the peer (a [RejectionError](#type-rejectionerror) is retryable only when Transient) — and true for everything else (refused or dropped connections, timeouts including a per-attempt context deadline, protocol failures during the handshake). [Retry](#func-retry) stops on its own when its context is done.
 
 ### func Retry
 
@@ -613,9 +613,9 @@ type Captured struct {
 	// Session is the session SPDU: "connect", "accept", "refuse",
 	// "finish", "disconnect", "abort" or "data".
 	Session string
-	// Presentation is the presentation PPDU: "CP", "CPA", "user-data",
-	// or "" when the SPDU carries none (or one this decoder does not
-	// model, such as an abort PPDU).
+	// Presentation is the presentation PPDU: "CP", "CPA", "CPR",
+	// "user-data", "ARU" or "ARP" (ISO 8823-1), or "" when the SPDU
+	// carries none or one that does not decode.
 	Presentation string
 	// ACSE is set for an association control APDU (AARQ, AARE, RLRQ,
 	// RLRE, ABRT).
@@ -786,9 +786,12 @@ type Client struct {
 
 	// closed when reader loop exits
 	// why the reader loop exited; guarded by mu
-	// receives signal when ConcludeResponse arrives
+	// receives the Conclude outcome (nil: Conclude-Response)
 
 	// Negotiated parameters from MMS Initiate handshake.
+
+	// own localDetailCalling: largest PDU accepted
+	// server's localDetailCalled: largest PDU sent; 0 = unknown
 
 }
 ```
@@ -829,14 +832,17 @@ The ABRT PDU is sent best-effort and bounded by ctx; the transport is closed eve
 func (c *Client) Close(ctx context.Context) error
 ```
 
-Close performs an orderly shutdown of the MMS connection (Conclude). Use [Client.Abort](#func-client-abort) for an immediate one.
+Close performs an orderly shutdown of the MMS connection (Conclude and A-RELEASE, ISO 9506-2 Annex A.1.2). Use [Client.Abort](#func-client-abort) for an immediate one.
 
 Shutdown sequence:
 
  1. Marks the client as closed — all new service calls return ErrClosed.
  2. Cancels all pending confirmed requests with ErrClosed.
  3. Sends a ConcludeRequest and waits for the ConcludeResponse.
- 4. Stops the background reader loop and closes the transport.
+ 4. Sends the A-RELEASE (Session FINISH + ACSE RLRQ) and waits up to [DialOptions.ReleaseTimeout](#func-dialoptions-releasetimeout) for the DISCONNECT + RLRE. A server that closes the transport or does not answer still ends the association without an error.
+ 5. Stops the background reader loop and closes the transport.
+
+A Conclude-ErrorPDU makes Close abort the association (ISO 9506-2 24.3) and return an error carrying the \*[ServiceError](#type-serviceerror) (class conclude).
 
 This is NOT a graceful drain: pending requests are aborted immediately and their callers receive ErrClosed. Confirmed responses that arrive during the shutdown window (after CancelAll but before the reader exits) are discarded as unknown invoke IDs.
 
@@ -1399,6 +1405,15 @@ type DialOptions struct {
 	// {ServiceIdentify, ServiceStatus, ServiceGetNameList, ServiceRead,
 	// ServiceGetVariableAccessAttributes, ServiceGetNamedVariableListAttributes}.
 	AllowedServices []Service
+
+	// ReleaseTimeout bounds the A-RELEASE that [Client.Close] performs
+	// after the Conclude-Response: Session FINISH carrying an ACSE RLRQ,
+	// answered by DISCONNECT carrying an RLRE (ISO 9506-2 Annex A.1.2.1).
+	// Zero means 2s. A server that closes the transport or does not
+	// answer in time still ends the association without an error. A
+	// negative value skips the A-RELEASE: Close only concludes and closes
+	// the transport (the behaviour before v1.8.0).
+	ReleaseTimeout time.Duration
 }
 ```
 
@@ -1630,6 +1645,9 @@ type ISOOptions struct {
 	RemotePSelector   []byte
 	LocalSSelector    []byte
 	RemoteSSelector   []byte
+	// Selectors are at most 16 octets (ISO 8327-1 PI 51/52; IEC 61850-8-1
+	// SCL allows 8); a longer one fails NewClient with
+	// [ErrInvalidArgument] before anything is sent.
 
 	// Password, when non-nil, includes ACSE password authentication
 	// in the association request (AARQ). The server must be configured
@@ -1920,11 +1938,24 @@ NamedVariableListAttributes holds the result of a GetNamedVariableListAttributes
 
 ```go
 type NegotiatedParameters struct {
+	// MaxPDUSize is the smaller of this client's localDetailCalling and
+	// the server's localDetailCalled. Requests larger than the server's
+	// value are refused locally with [ErrInvalidArgument]; responses
+	// larger than this client's value are invalid.
 	MaxPDUSize    int
 	MaxOutCalling int
 	MaxOutCalled  int
 	NestingLevel  int
 	ServerVersion int
+
+	// ServicesSupportedCalled is the server's servicesSupportedCalled
+	// (ISO 9506-2 ServiceSupportOptions; bit n is the service whose
+	// ConfirmedServiceRequest tag is n, IEC 61850-8-1 Table 111).
+	ServicesSupportedCalled asn1.BitString
+	// ParameterCBB is the negotiated parameter CBB (ISO 9506-2
+	// ParameterSupportOptions: str1(0), str2(1), vnam(2), valt(3),
+	// vadr(4), vsca(5), tpy(6), vlis(7), real(8), cei(10)).
+	ParameterCBB asn1.BitString
 }
 ```
 
@@ -2151,6 +2182,50 @@ func (t RejectType) String() string
 
 String returns the ISO 9506-2 name of the reject type.
 
+### type RejectionError
+
+```go
+type RejectionError struct {
+	// SessionReason is the REFUSE Reason Code (ISO 8327-1: 0 no reason,
+	// 1 user congestion, 2 rejection by the user with data, 129+ by the
+	// session provider).
+	SessionReason int
+	// ProviderReason is the CPR provider-reason (ISO 8823-1).
+	ProviderReason int
+	// ACSEResult is the AARE result: 1 rejected-permanent,
+	// 2 rejected-transient.
+	ACSEResult int
+	// DiagnosticSource is 1 (acse-service-user) or 2 (acse-service-
+	// provider); Diagnostic is the result-source-diagnostic value.
+	DiagnosticSource int
+	Diagnostic       int
+	// InitiateError is the decoded Initiate-ErrorPDU, nil when absent.
+	InitiateError *ServiceError
+	// Transient reports a temporary refusal (session congestion,
+	// presentation temporary-congestion, ACSE rejected-transient); a
+	// later attempt may succeed.
+	Transient bool
+}
+```
+
+RejectionError reports an association the server refused: a Session REFUSE (ISO 8327-1) with its presentation CPR (ISO 8823-1), or an ACSE AARE with result rejected (ISO 8650-1), with the Initiate-ErrorPDU it carried (ISO 9506-2 8.2). Fields the refusal did not carry are -1.
+
+It matches ErrConnectionRejected, and also ErrAuthenticationFailed when the AARE diagnostic is one of the acse-service-user authentication diagnostics (11 to 14). [IsRetryable](#func-isretryable) reports Transient. The decoded Initiate-ErrorPDU is reachable with [errors.As](https://pkg.go.dev/errors#As) as a \*[ServiceError](#type-serviceerror).
+
+#### func (RejectionError) Error
+
+```go
+func (e *RejectionError) Error() string
+```
+
+#### func (RejectionError) Unwrap
+
+```go
+func (e *RejectionError) Unwrap() []error
+```
+
+Unwrap returns the sentinels the rejection matches and the Initiate-ErrorPDU.
+
 ### type RemoteAddrTransport
 
 ```go
@@ -2273,7 +2348,9 @@ String returns "client" or "server".
 
 ```go
 type Server struct {
-	// contains filtered or unexported fields
+
+	// association settings beyond mmsOpts
+
 }
 ```
 
@@ -2540,6 +2617,23 @@ type ServerOptions struct {
 	// is disconnected after it. Zero means 30s; a negative value disables
 	// the limit.
 	AssociationTimeout time.Duration
+
+	// ReleaseTimeout bounds how long Serve waits, after answering a
+	// Conclude-Request, for the client's A-RELEASE (Session FINISH
+	// carrying an ACSE RLRQ), which it answers with DISCONNECT + RLRE
+	// (ISO 9506-2 Annex A.1.2.2). A client that closes the transport
+	// instead ends the association normally. Zero means 2s; a negative
+	// value does not wait (Serve returns right after the
+	// Conclude-Response, the behaviour before v1.8.0).
+	ReleaseTimeout time.Duration
+
+	// RespondingAPTitle and RespondingAEQualifier, when the AP-title is
+	// non-empty, are sent in the AARE as responding-AP-title [4] and
+	// responding-AE-qualifier [5] (ISO 8650-1; ISO 9506-2 Annex A.1.1
+	// maps them to the Responding Application Reference). Nil sends
+	// neither.
+	RespondingAPTitle     APTitle
+	RespondingAEQualifier int
 }
 ```
 

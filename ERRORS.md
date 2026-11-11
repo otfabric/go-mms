@@ -16,8 +16,11 @@ original chain (transport errors, `context` errors, typed errors):
 | Situation | Matches |
 |-----------|---------|
 | `NewClient` / `iso.Dial` association failure of any kind | `ErrAssociationFailed` (plus the cause, e.g. `ErrConnectionRejected`, `ErrDecodeFailed`, `*ProtocolError`, `context.DeadlineExceeded`) |
-| Peer rejected the ACSE association | `ErrConnectionRejected` and `ErrAssociationFailed` |
-| Invalid negotiated MMS version in the Initiate response | `ErrNegotiationFailed`, `ErrAssociationFailed`, `*ProtocolError` (phase `mms`) |
+| Peer refused the association (Session REFUSE, CPR, AARE rejected, or an Initiate-ErrorPDU) | `*RejectionError`, `ErrConnectionRejected`, `ErrAssociationFailed`; also `ErrAuthenticationFailed` for ACSE diagnostics 11–14 and `*ServiceError` for the Initiate-ErrorPDU |
+| Initiate response outside the proposal (version not 1..proposed, max-services-outstanding not 1..proposed, nesting above the proposal) | `ErrNegotiationFailed`, `ErrAssociationFailed`, `*ProtocolError` (phase `mms`) |
+| Session or presentation selector longer than 16 octets | `ErrInvalidArgument`, `ErrAssociationFailed` (nothing is sent) |
+| Request larger than the server's localDetailCalled | `ErrInvalidArgument` (nothing is sent) |
+| Conclude-ErrorPDU during `Close` | `*ServiceError` (class `conclude`), `ErrServiceRejected`; the association is aborted |
 | Request after `Close`/`Abort`, or after the association ended | `ErrClosed` |
 | Pending request failed because the connection was lost | `ErrClosed` (plus the transport error) |
 | Connection ended by an undecodable PDU | `ErrClosed` and `ErrDecodeFailed` |
@@ -43,9 +46,9 @@ original chain (transport errors, `context` errors, typed errors):
 |----------|---------------|------------|
 | `ErrClosed` | Any client method after `Close`/`Abort`, after the peer concluded, released or aborted the association, or after the connection was lost or failed to decode; pending requests fail with it. `Server.Serve` when an established association ends abnormally | `errors.Is(err, mms.ErrClosed)` |
 | `ErrInvokeTimeout` | A confirmed request's deadline expired (also matches `context.DeadlineExceeded`) | `errors.Is(err, mms.ErrInvokeTimeout)` |
-| `ErrConnectionRejected` | `NewClient`/`Dial` when the peer rejects the ACSE association | `errors.Is(err, mms.ErrConnectionRejected)` |
+| `ErrConnectionRejected` | `NewClient`/`Dial` when the peer refuses the association (Session REFUSE, presentation CPR, AARE rejected, Initiate-ErrorPDU); also unwrapped from `*RejectionError` | `errors.Is(err, mms.ErrConnectionRejected)` |
 | `ErrAssociationFailed` | `NewClient`/`Dial` when the association fails for any reason; `Server.Serve` when receiving or accepting the association fails (including `ServerOptions.AssociationTimeout`) | `errors.Is(err, mms.ErrAssociationFailed)` |
-| `ErrNegotiationFailed` | `NewClient`/`Dial` when MMS Initiate parameter negotiation fails | `errors.Is(err, mms.ErrNegotiationFailed)` |
+| `ErrNegotiationFailed` | `NewClient`/`Dial` when the Initiate response negotiates outside the proposal (ISO 9506-2 §8.2) | `errors.Is(err, mms.ErrNegotiationFailed)` |
 | `ErrInvalidPDU` | A received PDU exceeds the negotiated maximum PDU size (the client then closes the association) | `errors.Is(err, mms.ErrInvalidPDU)` |
 | `ErrDecodeFailed` | PDU decoding failed; also unwrapped from `*DecodeError` | `errors.Is(err, mms.ErrDecodeFailed)` |
 | `ErrUnsupported` | Requested feature or operation is not supported | `errors.Is(err, mms.ErrUnsupported)` |
@@ -53,7 +56,7 @@ original chain (transport errors, `context` errors, typed errors):
 | `ErrDataAccess` | Per-variable access error in Read/Write; also unwrapped from `*DataAccessError` | `errors.Is(err, mms.ErrDataAccess)` |
 | `ErrProtocol` | Protocol-level error; also unwrapped from `*ProtocolError` and `*RejectError` | `errors.Is(err, mms.ErrProtocol)` |
 | `ErrServerConnClosed` | `ServerConn` methods after the connection is closed | `errors.Is(err, mms.ErrServerConnClosed)` |
-| `ErrAuthenticationFailed` | Server-side `Serve` when the authenticator rejects the client; also unwrapped from `*AuthenticationError` | `errors.Is(err, mms.ErrAuthenticationFailed)` |
+| `ErrAuthenticationFailed` | Server-side `Serve` when the authenticator rejects the client; also unwrapped from `*AuthenticationError`. Client-side from a `*RejectionError` whose AARE diagnostic is an authentication one (11–14) | `errors.Is(err, mms.ErrAuthenticationFailed)` |
 | `ErrFileAccessDenied` | `FileProvider`/`JournalProvider` implementations signal permission errors; server maps it to MMS error class "file", code "file-access-denied" | `errors.Is(err, mms.ErrFileAccessDenied)` |
 | `ErrServerClosed` | `Server.Serve` and `Server.ListenAndServe` after `Server.Shutdown` | `errors.Is(err, mms.ErrServerClosed)` |
 | `ErrInvalidArgument` | A caller-supplied argument or option is invalid (empty names, nil values, mismatched slices, values that cannot be encoded, bad selectors); the request is not sent | `errors.Is(err, mms.ErrInvalidArgument)` |
@@ -223,6 +226,34 @@ rejects the client during association establishment.
 - **Unwraps to:** `ErrAuthenticationFailed`
 - **Check with:** `errors.As(err, &ae)` and/or `errors.Is(err, mms.ErrAuthenticationFailed)`
 
+### `*RejectionError`
+
+Returned by `NewClient`/`Dial` when the server refuses the association: a
+Session REFUSE (ISO 8327-1) with its presentation CPR (ISO 8823-1), an ACSE
+AARE with result rejected (ISO 8650-1), or an accepting AARE that carries an
+Initiate-ErrorPDU (ISO 9506-2 §8.2). Fields the refusal did not carry are -1.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `SessionReason` | `int` | REFUSE reason code: 0 no reason, 1 user congestion, 2 rejection by the user (carries the CPR), 129–134 session provider |
+| `ProviderReason` | `int` | CPR provider-reason: 0 reason-not-specified, 1 temporary-congestion, 2 local-limit-exceeded, … |
+| `ACSEResult` | `int` | AARE result: 1 rejected-permanent, 2 rejected-transient (0 when an accepting AARE carried an Initiate-ErrorPDU) |
+| `DiagnosticSource` | `int` | 1 acse-service-user, 2 acse-service-provider |
+| `Diagnostic` | `int` | result-source-diagnostic: user 1 no-reason-given, 2 application-context-name-not-supported, 11 authentication-mechanism-name-not-recognized, 13 authentication-failure, 14 authentication-required, …; provider 1 no-reason-given, 2 no-common-acse-version |
+| `InitiateError` | `*ServiceError` | Decoded Initiate-ErrorPDU (e.g. access / object-access-denied, initiate / version-incompatible), nil when absent |
+| `Transient` | `bool` | Temporary refusal (session congestion, presentation temporary-congestion, ACSE rejected-transient) |
+
+- **Unwraps to:** `ErrConnectionRejected`; `ErrAuthenticationFailed` for diagnostics 11–14; `InitiateError`
+- **Retry:** `IsRetryable` returns `Transient`
+- **Check with:** `errors.As(err, &re)`
+
+The go-mms server refuses with REFUSE + CPR + AARE: authentication failures
+carry diagnostic 13 (14 without credentials, 11 for an unknown mechanism) and
+an Initiate-ErrorPDU access / object-access-denied; Initiate parameters it
+cannot accept carry an Initiate-ErrorPDU of class initiate (IEC 61850-8-1
+Table 13). Peers that close the transport instead (libiec61850 on an
+authentication failure) produce a plain association failure.
+
 ## `ErrorClass` values
 
 The `ErrorClass` type categorizes MMS service errors from
@@ -360,8 +391,11 @@ err := client.Err() // matches mms.ErrClosed; wraps the cause
 
 ```go
 client, err := mms.NewClient(ctx, transport, opts)
-if errors.Is(err, mms.ErrConnectionRejected) {
-    log.Println("server rejected the association")
+if re, ok := errors.AsType[*mms.RejectionError](err); ok {
+    log.Println("server refused the association:", re, "retry:", re.Transient)
+    if errors.Is(err, mms.ErrAuthenticationFailed) {
+        log.Println("check the credentials")
+    }
 } else if errors.Is(err, mms.ErrAssociationFailed) {
     log.Println("association failed:", err)
 }

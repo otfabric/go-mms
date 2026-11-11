@@ -7,9 +7,9 @@
 
 | Service | Client | Server | Public API | Encode Test | Decode Test | Negative Tests | Fuzzed | Interop vs C | Notes |
 |---------|:------:|:------:|:----------:|:-----------:|:-----------:|:--------------:|:------:|:------------:|-------|
-| Initiate | ✅ | ✅ | `NewClient`, `Server.Serve` | ✅ | ✅ | ✅ | ✅ | ✅ | Full handshake with parameter negotiation; `MarshalInitiateRequest`/`UnmarshalInitiateResponse` round-trip tested |
-| Conclude | ✅ | ✅ | `Client.Close` | ✅ | ✅ | ✅ | ❌ | ✅ | Graceful close with `ConcludeRequest`/`ConcludeResponse`; server handles both MMS Conclude and ISO Release |
-| Abort | ✅ | ✅ | `Client.Abort`, `ServerConn.Abort` | ✅ | N/A | ✅ | ❌ | ✅ | Client and server both send ACSE ABRT; server `SendAbort` is best-effort before transport close |
+| Initiate | ✅ | ✅ | `NewClient`, `Server.Serve` | ✅ | ✅ | ✅ | ✅ | ✅ | Full handshake with parameter negotiation (ISO 9506-2 §8.2, IEC 61850-8-1 Tables 109–113): the server advertises its own servicesSupportedCalled and the parameter CBB proposed AND str1/str2/vnam/valt/vlis, never exceeds a proposal, takes its own value for an absent localDetailCalling/nesting level, and refuses version < 1 or a zero max-services-outstanding with an Initiate-ErrorPDU; the client fails with `ErrNegotiationFailed` when the response exceeds its proposal and exposes the server's bit strings in `Client.Negotiated`. MMS version 1 (see INTEROP.md); `MarshalInitiateRequest`/`UnmarshalInitiateResponse` round-trip tested |
+| Conclude | ✅ | ✅ | `Client.Close` | ✅ | ✅ | ✅ | ❌ | ✅ | Graceful close with `ConcludeRequest`/`ConcludeResponse` followed by the A-RELEASE (FINISH + RLRQ, DISCONNECT + RLRE; ISO 9506-2 Annex A.1.2) on both sides, bounded by `ReleaseTimeout`; a Conclude-Error makes the client abort (§24.3) and `Close` return the `*ServiceError`; the server aborts a FINISH before Conclude. Interop not re-run since the release change (INTEROP.md) |
+| Abort | ✅ | ✅ | `Client.Abort`, `ServerConn.Abort` | ✅ | ✅ | ✅ | ✅ | ✅ | Client and server both send Session ABORT + ARU-PPDU + ACSE ABRT (ISO 8823-1); a received ABRT/ARP is decoded for the log (`DescribeAbort`); server `SendAbort` is best-effort before transport close |
 | Identify | ✅ | ✅ | `Client.Identify`, `Server.HandleIdentify` | ✅ | ✅ | ✅ | ❌ | ✅ | Full request/response; server returns `ServiceError` when no handler registered |
 | Status | ✅ | ✅ | `Client.Status`, `Client.StatusWithOptions`, `Server.HandleStatus` | ✅ | ✅ | ✅ | ❌ | ✅ | Supports `ExtendedDerivation` flag; VMD logical/physical status |
 | UnsolicitedStatus | N/A | ✅ | `ServerConn.SendUnsolicitedStatus` | ✅ | N/A | ✅ | ❌ | ❌ | Server-originated unconfirmed PDU; follows InformationReport pattern |
@@ -40,9 +40,9 @@
 |-------|--------|-------|
 | BER/TLV encoding | ✅ Implemented | `internal/berutil` — hand-rolled TLV encoder/decoder; supports short/long-form lengths, signed/unsigned integers, float32/float64; 4 fuzz targets |
 | MMS PDU marshaling | ✅ Implemented | `internal/pdu` — 39 source files covering all 17+ service types; tag-driven dispatch; confirmed request/response/error/reject envelope; PDUs and service choices with long-form (multi-byte) tags are rejected instead of being truncated to a short tag |
-| ACSE (association) | ✅ Implemented | `internal/acse` — AARQ/AARE/ABRT encoding/decoding; password authentication; AP-title/AE-qualifier; 34 unit tests |
-| Presentation layer | ✅ Implemented | `internal/presentation` — ISO 8823 presentation context negotiation; ASN.1 abstract/transfer syntax; 13 unit tests |
-| Session layer | ✅ Implemented | `internal/session` — ISO 8327 CONNECT/ACCEPT/DATA/FINISH/RELEASE SPDUs; selector negotiation; 19 unit tests |
+| ACSE (association) | ✅ Implemented | `internal/acse` — AARQ/AARE/RLRQ/RLRE/ABRT encoding/decoding (ISO 8650-1); AARQ protocol-version and application-context validation; AARE result-source-diagnostic, responding AP-title/AE-qualifier and responder-acse-requirements; password authentication; RLRQ/ABRT parsed as extensible SEQUENCEs; EXTERNAL single-ASN1-type and octet-aligned |
+| Presentation layer | ✅ Implemented | `internal/presentation` — ISO 8823-1 CP/CPA/CPR/ARU/ARP; per-context negotiation by abstract and transfer syntax with the result list in proposal order; data on the negotiated context ids; PDV single-ASN1-type and octet-aligned |
+| Session layer | ✅ Implemented | `internal/session` — ISO 8327-1 CONNECT/ACCEPT/REFUSE/DATA/FINISH/DISCONNECT/ABORT/ABORT-ACCEPT SPDUs; version 1/2 and duplex negotiation; REFUSE reason codes; Extended User Data (PGI 194) above 512 octets; selectors limited to 16 octets |
 | ISO transport (TPKT/COTP) | ✅ Implemented | `transport/iso` — RFC 1006 TPKT framing; ISO 8073 COTP class 0; TLS support; concurrent accept-side handshakes with timeout; dial retry; per-direction deadlines for full-duplex use |
 
 ## Data Type Support
@@ -76,7 +76,7 @@
 | Integration tests (end-to-end) | ~42 | Client↔Server over loopback transport; file, journal, NVL lifecycle |
 | Negative/strictness tests | ~200+ | Malformed PDU, unknown tags, trailing bytes, truncated inputs, missing fields, invalid scopes |
 | Race/concurrency tests | ~14 | `TestConcurrent*`, `TestDoubleClose*`, `TestClose*During*`; designed for `go test -race` |
-| Fuzz targets | 57 | `internal/pdu` (35), `internal/berutil` (6), `internal/codec` (4), `internal/isostack` (4), root package (3: `FuzzValueCodec`, `FuzzServerDispatch`, `FuzzServerSession`), `internal/asn1util` (2), `internal/acse`, `internal/session`, `internal/presentation` (1 each). `make fuzz` runs all (discovered with `go test -list`) |
+| Fuzz targets | 64 | `internal/pdu` (36), `internal/berutil` (8), `internal/isostack` (5), `internal/codec` (4), root package (4), `internal/asn1util`, `internal/presentation`, `internal/session` (2 each), `internal/acse` (1). `make fuzz` runs all (discovered with `go test -list`) |
 | Chaos / stress tests | 4 | `e2e/chaos_test.go` (`TestChaos_*`, `TestStress_Concurrent`) over `internal/chaos` fault-injecting connections (delays, chunked I/O, bandwidth limit, drops, resets, stalls); `make chaos` |
 | Benchmarks | 21 | `internal/pdu/bench_test.go`, `value_bench_test.go`, `internal/apisurface` |
 | End-to-end API tests | 64 | `e2e/` — every exported `Client`, `Server` and `ServerConn` method and every `Value` constructor between a go-mms client and server over ISO transport; `TestAPICoverage` fails when a public method has no test |
@@ -93,7 +93,7 @@
 2. ~~Abort PDU (server→client)~~ — **Resolved.** `ServerConn.Abort()` sends ACSE ABRT before transport close.
 3. ~~Association-scope object listing~~ — **Resolved.** `GetNameList` for association-scope NVLs is now implemented with per-connection storage.
 4. ~~DeleteNamedVariableList scope~~ — **Resolved.** All four `scopeOfDelete` values (0=specific, 1=aa-specific, 2=domain, 3=VMD) are supported by the server; the client exposes 0, 2 and 3 (no aa-specific helper). Goes beyond C reference which only supports `scopeOfDelete=0`.
-5. ~~No fuzz coverage for file/journal PDUs~~ — **Resolved.** 57 fuzz targets across all service categories, the value codec and server dispatch.
+5. ~~No fuzz coverage for file/journal PDUs~~ — **Resolved.** 64 fuzz targets across all service categories, the value codec and server dispatch.
 6. ~~Unsolicited Status~~ — **Resolved.** `ServerConn.SendUnsolicitedStatus()` sends UnconfirmedPDU with VMD status.
 7. ~~Cancel service~~ — **Resolved.** Server handles CancelRequestPDU and responds with CancelError (invoke-id-unknown, since requests are processed synchronously).
 8. ~~No live-wire interop testing~~ — **Resolved.** `interop/` runs both directions against libiec61850 through the iec61850-interop adapter images; see [INTEROP.md](INTEROP.md).

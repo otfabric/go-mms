@@ -11,18 +11,21 @@ This document describes how go-mms handles context cancellation, timeouts, and c
 1. Marks client as closed (idempotent — second call returns nil)
 2. Cancels all pending requests via `tracker.CancelAll(ErrClosed)`
 3. Sends a ConcludeRequest and waits for ConcludeResponse (or `ctx` done). The send is bounded by `ctx`: when `ctx` is done the transport is closed, which fails a request write stuck behind a peer that stopped reading and releases the write lock
-4. Cancels the reader loop
-5. Waits for the reader loop to exit
-6. Closes the transport
+4. Releases the association (ISO 9506-2 Annex A.1.2.1): sends a Session FINISH carrying an ACSE RLRQ and waits for the DISCONNECT carrying the RLRE, bounded by `ctx` and `DialOptions.ReleaseTimeout` (zero → 2 s; negative skips the release, the behaviour before v1.8.0). A server that closes the transport, aborts, or does not answer in time still yields a successful `Close`; any other answer is aborted. The transport is closed when the release timeout expires, so a stalled peer cannot hold `Close`
+5. Cancels the reader loop
+6. Waits for the reader loop to exit
+7. Closes the transport
 
-If `ctx` ends during conclude, the shutdown still completes — the conclude is abandoned, the transport is closed, and `Close` returns the conclude error (matching the context error).
+If `ctx` ends during conclude or release, the shutdown still completes — the exchange is abandoned, the transport is closed, and `Close` returns an error matching the context error.
+
+A Conclude-ErrorPDU makes `Close` abort the association (ISO 9506-2 §24.3: a failed Conclude leads to M-U-ABORT) and return an error carrying the `*ServiceError` (class `conclude`, e.g. `further-communication-required`).
 
 ### Abort
 
 `Abort(ctx)` performs an immediate shutdown:
 
 1. Marks client as closed
-2. Sends an ABRT PDU (best-effort, bounded by `ctx`: when `ctx` is done the transport is closed, which fails a stuck send)
+2. Sends a user abort (best-effort, bounded by `ctx`: when `ctx` is done the transport is closed, which fails a stuck send): Session ABORT carrying an ARU-PPDU with an ACSE ABRT, source acse-service-user (ISO 8823-1, ISO 8650-1)
 3. Cancels all pending requests via `CancelAll(ErrClosed)`
 4. Cancels the reader loop and waits for exit
 5. Closes the transport
@@ -91,13 +94,13 @@ An I/O error caused by the context always matches `context.Canceled` or `context
 
 ### Per-connection lifecycle (`Server.Serve`)
 
-1. `ReceiveAssociation` — reads the AARQ
-2. Authenticator (if configured)
+1. `ReceiveAssociation` — reads the CONNECT/CP/AARQ and the Initiate-Request and negotiates. A request that cannot be accepted is answered with a Session REFUSE (ISO 8327-1) carrying a presentation CPR (ISO 8823-1) and, when the ACSE was reached, an AARE rejected-permanent with its diagnostic and, for Initiate parameters, an Initiate-ErrorPDU (IEC 61850-8-1 Tables 3 and 13), before `Serve` returns
+2. Authenticator (if configured); a refusal is sent the same way, with diagnostic authentication-required (14), authentication-mechanism-name-not-recognized (11) or authentication-failure (13) and an Initiate-ErrorPDU access/object-access-denied
 3. `AcceptAssociation` — sends the AARE
 
    Steps 1–3 are bounded by `ServerOptions.AssociationTimeout` (zero → 30 s, negative disables); on expiry the transport is closed and `Serve` returns an error matching `ErrAssociationFailed` and `context.DeadlineExceeded`.
-4. `Serve` loop — reads and handles requests (serially per connection) until error, ConcludeRequest or session Release
-5. On ConcludeRequest/Release, sends the response and returns nil
+4. `Serve` loop — reads and handles requests (serially per connection) until error or ConcludeRequest
+5. On ConcludeRequest, sends the Conclude-Response, then waits up to `ServerOptions.ReleaseTimeout` (zero → 2 s, negative does not wait) for the client's FINISH + RLRQ and answers DISCONNECT + RLRE (ISO 9506-2 Annex A.1.2.2). A client that closes the transport, aborts or stays silent ends the association normally (nil); any other PDU after the Conclude-Response is aborted. A FINISH before any Conclude is aborted and `Serve` returns an error (A-RELEASE is valid only after Conclude)
 6. Deferred cleanup: `frsmTable.closeAll` (with a 10-second bounded context), then connection deregistration
 
 `Serve` closes the transport when its `ctx` is cancelled, so a blocked read returns; `Serve` then returns an error matching `ctx.Err()`. It also closes it on association timeout and when `Shutdown` aborts the association. Otherwise the caller owns the transport.
@@ -146,6 +149,11 @@ After `Shutdown`, `Serve` and `ListenAndServe` return `ErrServerClosed`. `Shutdo
 | Silent peer during COTP handshake | `TestListener_SlowHandshake`, `TestListener_HandshakeTimeoutLogged` | Other peers accepted; slow peer closed after the handshake timeout |
 | Graceful shutdown | `TestServer_Shutdown`, `TestServer_Shutdown_InFlight`, `TestServer_Shutdown_StopsListenAndServe`, `TestServer_Shutdown` (interop) | In-flight request completes; `ListenAndServe` returns `ErrServerClosed`; no association left |
 | Temporary accept errors | `TestListener_TemporaryAcceptErrors` | Retried with backoff |
+| Orderly release | `TestSpec_9506_A12_OrderlyRelease` | CONNECT, DATA, FINISH sent; ACCEPT, DATA, DISCONNECT received; `Serve` returns nil |
+| Release peer closes, silent, aborts, answers junk | `TestSpec_9506_A12_ReleaseTolerance` | `Close` returns nil within `ReleaseTimeout`; junk is aborted; `ctx` ending the release is an error |
+| Conclude-Error | `TestSpec_9506_24_3_ConcludeErrorAborts` | Abort sent; `Close` returns the `*ServiceError` |
+| Server release wait | `TestSpec_9506_A12_ServerRelease`, `TestSpec_9506_A12_ReleaseWaitBounded` (`internal/serverconn`) | DN + RLRE after FINISH; bounded by `ReleaseTimeout` and `ctx`; non-RLRQ aborted |
+| Release/abort races | `TestChaos_ReleaseAbortRaces`, `TestChaos_ReleaseRaces` (`internal/serverconn`) | No deadlock, no goroutine leak (goleak) |
 
 ## Known limitations
 

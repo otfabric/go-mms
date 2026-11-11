@@ -55,10 +55,14 @@ but no client methods, server handlers, or PDU encoders/decoders exist.
 
 ### PDU Size
 
-The negotiated `maxPDUSize` is the minimum of what each side proposes during
-association. Before negotiation (during the initial handshake), no size limit
-is enforced. After negotiation, the client rejects oversized PDUs and the
-server logs a warning and skips them.
+Each side's localDetail is the largest PDU it accepts (ISO 9506-2 §8.2). The
+client refuses to send a request larger than the server's localDetailCalled
+(`ErrInvalidArgument`, nothing sent) and treats a received PDU larger than its
+own localDetailCalling as invalid; `Client.Negotiated().MaxPDUSize` is the
+smaller of the two. The server answers min(own, proposed), or its own value
+when the client omits localDetailCalling. Before negotiation (during the
+initial handshake), no size limit is enforced. After negotiation, the server
+logs a warning and skips oversized PDUs.
 
 ## Transport Limitations
 
@@ -79,7 +83,12 @@ server logs a warning and skips them.
 | Client write serialization | Transport writes are serialized via a send mutex so PDUs do not interleave. Concurrent callers may still have multiple confirmed requests outstanding (wait for response happens outside the write lock); responses are correlated by invoke ID. |
 | Negotiated outstanding not enforced | `MaxOutstandingCalling` / `MaxOutstandingCalled` are negotiated and exposed via `Client.Negotiated()` / server association state, but the client invoke tracker is not capped by those values today. Limit concurrency in the caller if needed. |
 | Server request handling | Confirmed requests within a single server connection are handled serially. Concurrent request handling per-connection is not supported. |
-| Server Abort PDU | The server does not send an MMS Abort PDU on its own. It detects client disconnects and handles ISO Release/Conclude; applications can abort a connection explicitly with `ServerConn.Abort`, which sends ACSE ABRT and closes the connection. |
+| Server Abort PDU | The server sends an abort on its own only for a FINISH before Conclude, or a PDU other than FINISH + RLRQ after the Conclude-Response (ISO 9506-2 Annex A.1.2.2). Applications can abort a connection explicitly with `ServerConn.Abort`, which sends Session ABORT + ARU + ACSE ABRT and closes the connection. |
+| Parameter CBB insufficiency | The server answers the proposed parameter CBB AND its own (str1, str2, vnam, valt, vlis) and never refuses with Initiate-Error parameter-CBB-insufficient (6) or service-CBB-insufficient (5): a client that does not propose a CBB the server relies on gets errors from the services that need it. |
+| Initiate nesting level | When the client omits proposedDataStructureNestingLevel the server uses its own value and omits negotiatedDataStructureNestingLevel from the response (both are OPTIONAL in ISO 9506-2 §8.2). |
+| Client servicesSupportedCalling | The client still proposes libiec61850's servicesSupportedCalling bit string, which names services the client does not serve as a responder (MMS-PDU-26). Servers use it only informationally. |
+| Session protocol | Version 2 and version 1 are negotiated; only the kernel and duplex functional units are used. A CONNECT without duplex is refused (reason 134). Extended User Data (PGI 194) is sent for CONNECT user data above 512 octets (ISO 8327-1); libiec61850 does not parse it, but an MMS AARQ is far below 512 octets. |
+| Presentation contexts | Any context ids the client proposes for ACSE and MMS (BER transfer syntax) are accepted and used; other proposed contexts are rejected per context. Default-context and multiple PDV-list fully-encoded data are not supported. |
 | RawHook availability | Raw wire hooks (`RawHook`) are only available on the client side via `DialOptions`. The server does not expose a raw hook for wire-level inspection. |
 
 ## Named Variable List Limitations

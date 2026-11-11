@@ -6,10 +6,11 @@ This document lists all hard limits enforced by go-mms to protect against malfor
 
 | Check | Location | Behavior |
 |-------|----------|----------|
-| Client receive | `mms.go` (`receiveRaw`) | Rejects PDUs exceeding negotiated `maxPDUSize` (after association only) |
+| Client receive | `mms.go` (`checkPDUSize`) | Rejects PDUs larger than the client's own localDetailCalling (after association only) |
+| Client send | `mms.go` (`doConfirmed`) | Refuses requests larger than the server's localDetailCalled with `ErrInvalidArgument`; nothing is sent |
 | Server receive | `serverconn/conn.go` (`Serve`) | Logs warning and skips PDUs exceeding negotiated `MaxPDUSize` |
 
-The negotiated `maxPDUSize` is the minimum of what each side proposes during association. Before negotiation (during the initial handshake), no size limit is enforced.
+`Client.Negotiated().MaxPDUSize` is the smaller of the client's localDetailCalling and the server's localDetailCalled; the server negotiates min(own, proposed), or its own value when localDetailCalling is absent (ISO 9506-2 §8.2). Before negotiation (during the initial handshake), no size limit is enforced.
 
 ## Nesting depth
 
@@ -54,6 +55,8 @@ These limits apply to recursive decoding of `DataValue` and `TypeSpec` trees. Th
 | Pending handshakes per `iso.Listener` | 64 | fixed (`maxPendingHandshakes`) | `transport/iso/listen.go` | Connections handshaking or waiting for `Accept`; further connections wait in the kernel backlog |
 | Temporary accept error backoff | 5 ms → 1 s | fixed | `transport/iso/listen.go` | Doubles per consecutive error, resets on success |
 | Association (AARQ → Authenticate → AARE) | 30 s | `ServerOptions.AssociationTimeout` (0 → default, negative disables) | `server.go` | Transport closed; `Serve` returns `ErrAssociationFailed` |
+| Server wait for A-RELEASE after Conclude | 2 s | `ServerOptions.ReleaseTimeout` (0 → default, negative does not wait) | `internal/serverconn/release.go` | Association ends normally |
+| Client A-RELEASE in `Close` | 2 s | `DialOptions.ReleaseTimeout` (0 → default, negative skips the release) | `client_association.go` | Transport closed; `Close` returns nil |
 | Confirmed request | none | `DialOptions.RequestTimeout` or the request context | `mms.go` | `ErrInvokeTimeout` + `context.DeadlineExceeded` |
 | ABRT send in `Server.Shutdown` | 1 s per association | fixed | `server.go` | Transport closed regardless |
 | File handle cleanup on disconnect | 10 s | fixed | `server_file.go` | `FileProvider.Close` context |
