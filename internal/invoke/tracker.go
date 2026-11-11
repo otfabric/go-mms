@@ -52,10 +52,7 @@ func NewTracker(maxPending int) *Tracker {
 func (t *Tracker) NextID() codec.InvokeID {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.nextID++
-	if t.nextID == 0 {
-		t.nextID = 1
-	}
+	t.advance()
 	return t.nextID
 }
 
@@ -71,10 +68,7 @@ func (t *Tracker) Allocate() (codec.InvokeID, <-chan Response, error) {
 		return 0, nil, fmt.Errorf("invoke: outstanding call limit reached (%d)", t.maxPending)
 	}
 
-	t.nextID++
-	if t.nextID == 0 {
-		t.nextID = 1
-	}
+	t.advance()
 	id := t.nextID
 
 	ch := make(chan Response, 1)
@@ -137,6 +131,33 @@ func (t *Tracker) CancelAll(err error) {
 	for id, ch := range pending {
 		ch <- Response{InvokeID: id, Err: err}
 	}
+}
+
+// advance moves nextID on, wrapping to 1 after 2^31-1: invokeID is
+// Unsigned32 ::= INTEGER (0..2147483647) in ISO 9506-2 (MMS-PDU-24).
+// The caller holds t.mu.
+func (t *Tracker) advance() {
+	t.nextID++
+	if t.nextID == 0 || t.nextID > maxInvokeID {
+		t.nextID = 1
+	}
+}
+
+// maxInvokeID is the largest Unsigned32 value of ISO 9506-2.
+const maxInvokeID = codec.MaxInvokeID
+
+// Sole returns the invoke ID of the only pending request, if exactly one
+// is pending.
+func (t *Tracker) Sole() (codec.InvokeID, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.pending) != 1 {
+		return 0, false
+	}
+	for id := range t.pending {
+		return id, true
+	}
+	return 0, false
 }
 
 // PendingCount returns the number of currently pending requests.

@@ -275,10 +275,12 @@ func TestMetrics_Events(t *testing.T) {
 	if _, err := c.Read(ctx, mms.ReadRequest{DomainID: dom, ItemID: "v"}); err != nil {
 		t.Fatal(err)
 	}
-	_, err := c.Identify(ctx) // no handler: ServiceError
-	var se *mms.ServiceError
+	// No handler: Reject unrecognized-service (IEC 61850-8-1 clause
+	// 8.1.3.4.1; it used to be a ServiceError, MMS-PDU-02).
+	_, err := c.Identify(ctx)
+	var se *mms.RejectError
 	if !errors.As(err, &se) {
-		t.Fatalf("Identify = %v, want ServiceError", err)
+		t.Fatalf("Identify = %v, want RejectError", err)
 	}
 	if err := c.Close(ctx); err != nil {
 		t.Fatal(err)

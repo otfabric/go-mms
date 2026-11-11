@@ -9,6 +9,7 @@
 package acse
 
 import (
+	"bytes"
 	"encoding/asn1"
 	"fmt"
 
@@ -35,6 +36,42 @@ const (
 	ResultRejectedPerm      = 1
 	ResultRejectedTransient = 2
 )
+
+// Associate-source-diagnostic CHOICE alternatives (ISO 8650-1 AARE
+// result-source-diagnostic [3]).
+const (
+	DiagSourceUser     = 1 // acse-service-user [1]
+	DiagSourceProvider = 2 // acse-service-provider [2]
+)
+
+// acse-service-user diagnostic values (ISO 8650-1).
+const (
+	DiagUserNull                        = 0
+	DiagUserNoReasonGiven               = 1
+	DiagUserAppContextNotSupported      = 2
+	DiagUserCallingAPTitleNotRecognized = 3
+	DiagUserAuthMechNameNotRecognized   = 11
+	DiagUserAuthMechNameRequired        = 12
+	DiagUserAuthFailure                 = 13
+	DiagUserAuthRequired                = 14
+)
+
+// acse-service-provider diagnostic values (ISO 8650-1).
+const (
+	DiagProviderNull                = 0
+	DiagProviderNoReasonGiven       = 1
+	DiagProviderNoCommonACSEVersion = 2
+)
+
+// ABRT-source values (ISO 8650-1).
+const (
+	AbortSourceUser     = 0
+	AbortSourceProvider = 1
+)
+
+// MMSApplicationContext is the content (without tag and length) of the
+// MMS application context name 1.0.9506.2.3 (ISO 9506-2 Annex A.7).
+var MMSApplicationContext = []byte{0x28, 0xca, 0x22, 0x02, 0x03}
 
 // ApduType classifies a parsed ACSE APDU.
 type ApduType byte
@@ -76,6 +113,10 @@ type AARQParams struct {
 	CallingAPTitle     asn1.ObjectIdentifier
 	CallingAEQualifier int
 	Password           []byte // if non-nil, includes ACSE password authentication
+
+	// MMSContextID is the presentation context id named by the
+	// user-information indirect-reference; 0 means 3.
+	MMSContextID int
 }
 
 // AuthMechanism identifies the ACSE authentication mechanism parsed
@@ -111,15 +152,52 @@ type AuthInfo struct {
 // ParsedAARE holds the parsed result of an AARE (Associate Response).
 type ParsedAARE struct {
 	Result   int    // 0=accepted, 1=rejected-permanent, 2=rejected-transient
-	UserData []byte // MMS Initiate Response payload
+	UserData []byte // MMS Initiate Response (or Initiate-Error) payload
+
+	// AppContext is the application-context-name OID content; nil when
+	// absent.
+	AppContext []byte
+	// DiagSource is DiagSourceUser or DiagSourceProvider, 0 when the
+	// result-source-diagnostic is absent; Diagnostic is its value.
+	DiagSource int
+	Diagnostic int
+	// ResponderAuth reports the authentication bit of
+	// responder-acse-requirements [8].
+	ResponderAuth bool
 }
+
+// AARQInfo holds the AARQ fields a responder validates.
+type AARQInfo struct {
+	// ProtocolVersionOK is false when protocol-version [0] is present
+	// without the version1 bit (ISO 8650-1: DEFAULT {version1}).
+	ProtocolVersionOK bool
+	// AppContext is the application-context-name OID content.
+	AppContext []byte
+	// AuthRequested reports the authentication bit of
+	// sender-acse-requirements [10].
+	AuthRequested bool
+	// CalledAPTitle and CalledAEQualifier are [2] and [3]; nil when absent.
+	CalledAPTitle     asn1.ObjectIdentifier
+	CalledAEQualifier *int
+}
+
+// IsMMS reports whether the AARQ names the MMS application context.
+func (i *AARQInfo) IsMMS() bool { return bytes.Equal(i.AppContext, MMSApplicationContext) }
 
 // ParsedAPDU holds the result of parsing any ACSE APDU.
 type ParsedAPDU struct {
 	Type     ApduType
 	AARE     *ParsedAARE // populated only when Type == ApduAARE
+	AARQ     *AARQInfo   // populated only when Type == ApduAARQ
 	Auth     AuthInfo    // populated for AARQ: authentication mechanism + value
-	UserData []byte      // for AARQ: MMS payload; for RLRQ/RLRE: nil
+	UserData []byte      // for AARQ/AARE: MMS payload; for RLRQ/RLRE/ABRT: user-information if present
+
+	// Reason is the RLRQ/RLRE reason [0], -1 when absent.
+	Reason int
+	// AbortSource and AbortDiagnostic are the ABRT abort-source [0] and
+	// abort-diagnostic [1] (-1 when absent).
+	AbortSource     int
+	AbortDiagnostic int
 }
 
 // EncodeAARQ builds an AARQ APDU (Associate Request) containing
@@ -154,7 +232,9 @@ func EncodeAARQ(p AARQParams, mmsPayload []byte) ([]byte, error) {
 	// ACSE authentication fields
 	if len(p.Password) > 0 {
 		// [10] sender-acse-requirements: authentication functional unit
-		content = berutil.AppendTLV(content, 0x8a, []byte{0x04, 0x80})
+		// BIT STRING {authentication(0)}: one used bit, seven unused
+		// (canonical form, as libiec61850 sends it; MMS-STK-21).
+		content = berutil.AppendTLV(content, 0x8a, []byte{0x07, 0x80})
 
 		// [11] mechanism-name: password OID 2.2.3.1
 		content = berutil.AppendTLV(content, 0x8b, authMechPasswordOID)
@@ -166,30 +246,75 @@ func EncodeAARQ(p AARQParams, mmsPayload []byte) ([]byte, error) {
 
 	// [30] user-information (EXTERNAL containing MMS payload)
 	if len(mmsPayload) > 0 {
-		content = append(content, encodeUserInformation(mmsPayload)...)
+		content = append(content, encodeUserInformation(p.MMSContextID, mmsPayload)...)
 	}
 
 	return berutil.EncodeTLV(TagAARQ, content), nil
 }
 
-// EncodeAARE builds an AARE APDU (Associate Response).
+// EncodeAARE builds an AARE APDU (Associate Response) with diagnostic
+// acse-service-user null, as libiec61850 does for an accepted
+// association.
 func EncodeAARE(result int, mmsPayload []byte) []byte {
+	return EncodeAAREWith(AAREParams{Result: result, DiagSource: DiagSourceUser}, mmsPayload)
+}
+
+// AAREParams holds the fields of an AARE.
+type AAREParams struct {
+	Result     int
+	DiagSource int // DiagSourceUser or DiagSourceProvider; 0 means user
+	Diagnostic int
+	// MMSContextID is the presentation context id named by the
+	// user-information indirect-reference; 0 means 3.
+	MMSContextID int
+	// RespondingAPTitle and RespondingAEQualifier are encoded as [4]
+	// and [5] when the title is set.
+	RespondingAPTitle     asn1.ObjectIdentifier
+	RespondingAEQualifier int
+	// ResponderAuth sets responder-acse-requirements [8] to
+	// {authentication}, echoing an AARQ that selected the
+	// authentication functional unit (ISO 8650-1).
+	ResponderAuth bool
+}
+
+// EncodeAAREWith builds an AARE APDU. A rejecting AARE carries the
+// MMS Initiate-ErrorPDU, when there is one, as user-information
+// (ISO 9506-2 24.1: Initiate-ErrorPDU maps to M-ASSOCIATE response with
+// result rejected).
+func EncodeAAREWith(p AAREParams, mmsPayload []byte) []byte {
 	var content []byte
 
 	// [1] application-context-name
 	content = berutil.AppendTLV(content, 0xa1, appContextMmsEncoded)
 
 	// [2] result
-	resultEnc := berutil.EncodeTLV(0x02, berutil.EncodeInt(result))
+	resultEnc := berutil.EncodeTLV(0x02, berutil.EncodeInt(p.Result))
 	content = berutil.AppendTLV(content, 0xa2, resultEnc)
 
 	// [3] result-source-diagnostic
-	diag := berutil.EncodeTLV(0xa1, berutil.EncodeTLV(0x02, []byte{0x00}))
+	src := byte(0xa1)
+	if p.DiagSource == DiagSourceProvider {
+		src = 0xa2
+	}
+	diag := berutil.EncodeTLV(src, berutil.EncodeTLV(0x02, berutil.EncodeInt(p.Diagnostic)))
 	content = berutil.AppendTLV(content, 0xa3, diag)
+
+	// [4] responding-AP-title + [5] responding-AE-qualifier
+	if len(p.RespondingAPTitle) > 0 {
+		if oid, err := marshalOID(p.RespondingAPTitle); err == nil {
+			content = berutil.AppendTLV(content, 0xa4, oid)
+			content = berutil.AppendTLV(content, 0xa5, encodeAEQualifier(p.RespondingAEQualifier))
+		}
+	}
+
+	// [8] responder-acse-requirements
+	if p.ResponderAuth {
+		content = berutil.AppendTLV(content, 0x88, []byte{0x07, 0x80})
+	}
 
 	// [30] user-information
 	if len(mmsPayload) > 0 {
-		content = append(content, encodeUserInformation(mmsPayload)...)
+		content = append(content, encodeUserInformation(p.MMSContextID, mmsPayload)...)
 	}
 
 	return berutil.EncodeTLV(TagAARE, content)
@@ -222,14 +347,16 @@ func Parse(data []byte) (*ParsedAPDU, error) {
 		return nil, fmt.Errorf("acse: APDU outer: %w", err)
 	}
 
-	result := &ParsedAPDU{Type: ApduType(tag)}
+	result := &ParsedAPDU{Type: ApduType(tag), Reason: -1, AbortSource: -1, AbortDiagnostic: -1}
 
 	switch tag {
 	case TagAARQ:
-		result.UserData, result.Auth, err = parseAARQ(content)
+		info := &AARQInfo{ProtocolVersionOK: true}
+		result.UserData, result.Auth, err = parseAARQInto(content, info)
 		if err != nil {
 			return nil, err
 		}
+		result.AARQ = info
 	case TagAARE:
 		aare, err := parseAARE(content)
 		if err != nil {
@@ -237,14 +364,12 @@ func Parse(data []byte) (*ParsedAPDU, error) {
 		}
 		result.AARE = aare
 		result.UserData = aare.UserData
-	case TagRLRQ:
-		if err := validateRLRQ(content); err != nil {
+	case TagRLRQ, TagRLRE:
+		if err := parseRelease(content, result); err != nil {
 			return nil, err
 		}
-	case TagRLRE:
-		// RLRE may be empty — nothing to validate beyond the outer TLV
 	case TagABRT:
-		if err := validateABRT(content); err != nil {
+		if err := parseABRT(content, result); err != nil {
 			return nil, err
 		}
 	default:
@@ -282,6 +407,36 @@ func parseAARE(content []byte) (*ParsedAARE, error) {
 				return nil, fmt.Errorf("acse: AARE user-information: %w", err)
 			}
 			aare.UserData = userData
+		case 0xa1: // application-context-name
+			oid, err := explicitOID(inner)
+			if err != nil {
+				return nil, fmt.Errorf("acse: AARE application-context-name: %w", err)
+			}
+			aare.AppContext = oid
+		case 0xa3: // result-source-diagnostic
+			dtag, dinner, err := berutil.DecodeTLV(inner)
+			if err != nil {
+				return nil, fmt.Errorf("acse: AARE result-source-diagnostic: %w", err)
+			}
+			_, v, err := berutil.DecodeTLV(dinner)
+			if err != nil {
+				return nil, fmt.Errorf("acse: AARE diagnostic: %w", err)
+			}
+			val, err := berutil.DecodeInteger(v)
+			if err != nil {
+				return nil, fmt.Errorf("acse: AARE diagnostic value: %w", err)
+			}
+			switch dtag {
+			case 0xa1:
+				aare.DiagSource = DiagSourceUser
+			case 0xa2:
+				aare.DiagSource = DiagSourceProvider
+			default:
+				return nil, fmt.Errorf("acse: AARE diagnostic source tag 0x%02x", dtag)
+			}
+			aare.Diagnostic = val
+		case 0x88: // responder-acse-requirements
+			aare.ResponderAuth = bitZero(inner)
 		default:
 			// Interop: skip unknown optional ACSE fields. ISO 8650 defines many
 			// optional fields (application-context-name, AP/AE qualifiers, etc.)
@@ -300,6 +455,10 @@ func parseAARE(content []byte) (*ParsedAARE, error) {
 }
 
 func parseAARQ(content []byte) (userData []byte, auth AuthInfo, err error) {
+	return parseAARQInto(content, &AARQInfo{})
+}
+
+func parseAARQInto(content []byte, info *AARQInfo) (userData []byte, auth AuthInfo, err error) {
 	var mechOIDRaw []byte
 	var rawAuthValue []byte
 	hasMechanism := false
@@ -314,6 +473,26 @@ func parseAARQ(content []byte) (userData []byte, auth AuthInfo, err error) {
 		offset += n
 
 		switch tag {
+		case 0x80: // [0] protocol-version BIT STRING {version1(0)}
+			info.ProtocolVersionOK = bitZero(inner)
+		case 0xa1: // [1] application-context-name
+			oid, oidErr := explicitOID(inner)
+			if oidErr != nil {
+				return nil, AuthInfo{}, fmt.Errorf("acse: AARQ application-context-name: %w", oidErr)
+			}
+			info.AppContext = oid
+		case 0xa2: // [2] called-AP-title
+			var oid asn1.ObjectIdentifier
+			if _, oidErr := asn1.Unmarshal(inner, &oid); oidErr == nil {
+				info.CalledAPTitle = oid
+			}
+		case 0xa3: // [3] called-AE-qualifier
+			var val int
+			if _, aeErr := asn1.Unmarshal(inner, &val); aeErr == nil {
+				info.CalledAEQualifier = &val
+			}
+		case 0x8a: // [10] sender-acse-requirements
+			info.AuthRequested = bitZero(inner)
 		case 0xa6: // [6] calling-AP-title (EXPLICIT, contains OID)
 			var oid asn1.ObjectIdentifier
 			if _, oidErr := asn1.Unmarshal(inner, &oid); oidErr != nil {
@@ -445,53 +624,111 @@ func parseExternalPayload(data []byte) ([]byte, error) {
 		}
 		offset += n
 
-		if tag == 0xa0 { // single-ASN1-type encoding
+		switch tag {
+		case 0xa0, 0x81: // single-ASN1-type, octet-aligned (X.208 EXTERNAL)
 			payload = inner
+		case 0x82:
+			return nil, fmt.Errorf("acse: EXTERNAL arbitrary (BIT STRING) encoding not supported")
 		}
 	}
 
 	if payload == nil {
-		return nil, fmt.Errorf("acse: EXTERNAL missing single-ASN1-type (0xa0) encoding")
+		return nil, fmt.Errorf("acse: EXTERNAL missing single-ASN1-type (0xa0) or octet-aligned (0x81) encoding")
 	}
 	return payload, nil
 }
 
-func validateRLRQ(content []byte) error {
-	if len(content) == 0 {
-		return nil // RLRQ with no content is tolerated
-	}
-	tag, _, n, err := berutil.DecodeTLVAt(content, 0)
-	if err != nil {
-		return fmt.Errorf("acse: RLRQ field: %w", err)
-	}
-	if tag != 0x80 {
-		return fmt.Errorf("acse: RLRQ unexpected field tag 0x%02x, expected 0x80 (reason)", tag)
-	}
-	if n != len(content) {
-		return fmt.Errorf("acse: RLRQ %d trailing bytes after reason", len(content)-n)
+// parseRelease decodes an RLRQ or RLRE: reason [0] IMPLICIT INTEGER
+// OPTIONAL, user-information [30] OPTIONAL. Other (extension) elements
+// are skipped (ISO 8650-1, MMS-STK-16).
+func parseRelease(content []byte, result *ParsedAPDU) error {
+	offset := 0
+	for offset < len(content) {
+		tag, inner, n, err := berutil.DecodeTLVAt(content, offset)
+		if err != nil {
+			return fmt.Errorf("acse: %s field: %w", result.Type, err)
+		}
+		offset += n
+		switch tag {
+		case 0x80:
+			v, err := berutil.DecodeInteger(inner)
+			if err != nil {
+				return fmt.Errorf("acse: %s reason: %w", result.Type, err)
+			}
+			result.Reason = v
+		case 0xbe:
+			if len(inner) == 0 {
+				continue // empty Association-information
+			}
+			ud, err := parseExternalPayload(inner)
+			if err != nil {
+				return fmt.Errorf("acse: %s user-information: %w", result.Type, err)
+			}
+			result.UserData = ud
+		}
 	}
 	return nil
 }
 
-func validateABRT(content []byte) error {
-	if len(content) == 0 {
+// parseABRT decodes an ABRT: abort-source [0] (mandatory),
+// abort-diagnostic [1] OPTIONAL, user-information [30] OPTIONAL; other
+// elements are skipped (ISO 8650-1, MMS-STK-16).
+func parseABRT(content []byte, result *ParsedAPDU) error {
+	offset := 0
+	for offset < len(content) {
+		tag, inner, n, err := berutil.DecodeTLVAt(content, offset)
+		if err != nil {
+			return fmt.Errorf("acse: ABRT field: %w", err)
+		}
+		offset += n
+		switch tag {
+		case 0x80, 0x81:
+			v, err := berutil.DecodeInteger(inner)
+			if err != nil {
+				return fmt.Errorf("acse: ABRT field 0x%02x: %w", tag, err)
+			}
+			if tag == 0x80 {
+				result.AbortSource = v
+			} else {
+				result.AbortDiagnostic = v
+			}
+		case 0xbe:
+			ud, err := parseExternalPayload(inner)
+			if err != nil {
+				return fmt.Errorf("acse: ABRT user-information: %w", err)
+			}
+			result.UserData = ud
+		}
+	}
+	if result.AbortSource < 0 {
 		return fmt.Errorf("acse: ABRT missing abort-source")
 	}
-	tag, _, n, err := berutil.DecodeTLVAt(content, 0)
-	if err != nil {
-		return fmt.Errorf("acse: ABRT field: %w", err)
-	}
-	if tag != 0x80 {
-		return fmt.Errorf("acse: ABRT unexpected field tag 0x%02x, expected 0x80 (abort-source)", tag)
-	}
-	if n != len(content) {
-		return fmt.Errorf("acse: ABRT %d trailing bytes after abort-source", len(content)-n)
-	}
 	return nil
 }
 
-func encodeUserInformation(payload []byte) []byte {
-	indirectRefTLV := berutil.EncodeTLV(0x02, berutil.EncodeInt(3))
+// bitZero reports whether bit 0 of a BER BIT STRING content is set.
+func bitZero(b []byte) bool {
+	return len(b) >= 2 && b[1]&0x80 != 0
+}
+
+// explicitOID decodes an EXPLICIT-tagged OBJECT IDENTIFIER and returns
+// its content octets.
+func explicitOID(inner []byte) ([]byte, error) {
+	tag, oid, err := berutil.DecodeTLVExact(inner)
+	if err != nil {
+		return nil, err
+	}
+	if tag != 0x06 {
+		return nil, fmt.Errorf("expected OBJECT IDENTIFIER, got tag 0x%02x", tag)
+	}
+	return oid, nil
+}
+
+func encodeUserInformation(ctxID int, payload []byte) []byte {
+	if ctxID == 0 {
+		ctxID = 3
+	}
+	indirectRefTLV := berutil.EncodeTLV(0x02, berutil.EncodeInt(ctxID))
 	singleASN1 := berutil.EncodeTLV(0xa0, payload)
 
 	extContent := make([]byte, 0, len(indirectRefTLV)+len(singleASN1))

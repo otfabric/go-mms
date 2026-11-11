@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/otfabric/go-mms/internal/acse"
+	"github.com/otfabric/go-mms/internal/session"
 )
 
 // Sample MMS payloads used to build the seed corpora.
@@ -73,7 +74,7 @@ func FuzzDecodeAssociateRequest(f *testing.F) {
 			valid = append(valid, b)
 		}
 	}
-	valid = append(valid, mustEncode(f)(EncodeAssociateResponse([]byte{0xa9, 0x00})), EncodeDataRequest([]byte{0x8b, 0x00}))
+	valid = append(valid, encodeAccept(f, []byte{0xa9, 0x00}), EncodeDataRequest([]byte{0x8b, 0x00}))
 	for _, v := range valid {
 		f.Add(v)
 	}
@@ -110,9 +111,9 @@ func FuzzDecodeAssociateRequest(f *testing.F) {
 func FuzzDecodeAssociateResponse(f *testing.F) {
 	var valid [][]byte
 	for _, p := range fuzzMMSPayloads {
-		valid = append(valid, mustEncode(f)(EncodeAssociateResponse(p)))
+		valid = append(valid, encodeAccept(f, p))
 	}
-	valid = append(valid, EncodeAssociateReject())
+	valid = append(valid, encodeReject(f))
 	if req, err := EncodeAssociateRequest(Params{}, []byte{0xa8, 0x00}); err == nil {
 		valid = append(valid, req)
 	}
@@ -126,7 +127,7 @@ func FuzzDecodeAssociateResponse(f *testing.F) {
 		if err != nil || res.ACSEResult != acse.ResultAccepted {
 			return
 		}
-		enc := mustEncode(t)(EncodeAssociateResponse(res.MmsPayload))
+		enc := encodeAccept(t, res.MmsPayload)
 		again, err := DecodeAssociateResponse(enc)
 		if err != nil {
 			t.Fatalf("decode(encode(x)) failed: %v\noriginal %x\nre-encoded %x", err, data, enc)
@@ -185,5 +186,34 @@ func FuzzDecodeReleaseRequest(f *testing.F) {
 		if _, err := DecodeDataResponse(data); err == nil {
 			t.Fatalf("input accepted both as FINISH and as DATA: %x", data)
 		}
+	})
+}
+
+// FuzzDecodeReleaseResponse covers the client's release-response and
+// abort decoding (ISO 9506-2 Annex A.1.2, ISO 8823-1 ARU/ARP).
+func FuzzDecodeReleaseResponse(f *testing.F) {
+	valid := [][]byte{
+		EncodeReleaseResponse(),
+		EncodeReleaseResponseOn(Contexts{ACSE: 7, MMS: 3}),
+		EncodeAbort(),
+		EncodeAbortOn(Contexts{ACSE: 7, MMS: 3}),
+		EncodeReleaseRequest(),
+		mustEncode(f)(session.EncodeRefuse(session.ReasonUserCongestion, nil)),
+		encodeReject(f),
+	}
+	for _, v := range valid {
+		f.Add(v)
+	}
+	addMalformed(f, valid)
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		typ, err := DecodeReleaseResponse(data)
+		if err == nil && typ != session.SpduDisconnect {
+			t.Fatalf("release response of type %s accepted", typ)
+		}
+		if sp, perr := session.Parse(data); perr == nil {
+			_ = DescribeAbort(sp.UserData)
+		}
+		_, _ = DecodeAssociateResponse(data)
 	})
 }

@@ -220,7 +220,55 @@ The go-mms→libIEC column is the go-mms client against `libiec61850-mms-server`
 
 The ◐ rows are listed with the test that pins the peer behaviour in the iec61850-interop [`docs/CAPABILITIES.md`](https://github.com/otfabric/iec61850-interop/blob/v1.4.0/docs/CAPABILITIES.md) (v1.4.0, the release CI pins).
 
+### Association, release and refusal
+
+`make interop-all` against the four pinned peers (libiec61850, dscsystems,
+iec61850-rust, iec61850bean; images from iec61850-interop v1.4.0) passes
+with the upper-layer conformance changes of v1.8.0 (run on 2026-11-11, local
+Docker on arm64). The behaviour the suite exercises and what the peer
+sources show for the rest:
+
+| Change | Peer behaviour |
+|--------|----------------|
+| `Client.Close` sends FINISH + RLRQ after the Conclude-Response and waits for DISCONNECT + RLRE (ISO 9506-2 Annex A.1.2) | libiec61850's server answers a FINISH with DISCONNECT + RLRE; a server that closes the transport instead (dscsystems go-iec61850, go-mms before v1.8.0) makes `Close` succeed on EOF |
+| The server waits up to `ServerOptions.ReleaseTimeout` for FINISH after the Conclude-Response and answers DISCONNECT + RLRE | libiec61850's client (`IedConnection_release`) sends FINISH + RLRQ after the Conclude-Response and does not wait for the DISCONNECT; clients that close after the Conclude-Response end the association on EOF |
+| A FINISH without a prior Conclude is aborted | libiec61850 answers such a FINISH with a release; a client relying on that (none known) now gets an abort |
+| Refusals are Session REFUSE + CPR (+ AARE with diagnostic and Initiate-ErrorPDU) instead of ACCEPT + CPA + AARE rejected | libiec61850's client fails the association on any non-ACCEPT SPDU, as before; the go-mms client still decodes the old ACCEPT + AARE-rejected form. libiec61850's server closes TCP on an authentication failure, which the go-mms client reports as a failed association |
+| Abort is an ARU-PPDU (`a0 …`) carrying ABRT | libiec61850 sends and parses the same ARU form |
+| The server uses the presentation context ids the client proposes | libiec61850 always proposes ACSE 1 and MMS 3 |
+| The server advertises its own servicesSupportedCalled and the parameter CBB proposed AND `f1 00` | libiec61850's server answers the same CBB intersection |
+| CONNECT user data above 512 octets uses Extended User Data (PGI 194) | libiec61850's session parser ignores PGI 194; an AARQ is far below 512 octets, so this is not reached in practice |
+
+The proposed and negotiated MMS version is 1 (ISO 9506:2003 major version 1;
+IEC 61850-8-1 Ed2 Tables 109/110 print "2.1", which an Integer16 cannot
+carry, and every deployed stack, libiec61850 included, uses 1). The server
+negotiates min(proposed, 1) and refuses a proposal below 1 with
+Initiate-Error version-incompatible.
+
 ## Related test suites
+
+### Wire changes of v1.8.0
+
+These PDU-level changes alter bytes on the wire; the same `make
+interop-all` run passes with them:
+
+- nested AlternateAccess sent as an untagged SEQUENCE OF (0x30), as the
+  libiec61850 asn1c encoder does (ISO 9506-2 clause 14.3.1); 0xa5 is still
+  accepted;
+- `NewFloat` sent as single precision, server Read results with the width of
+  the variable's TypeSpec;
+- RejectPDU instead of ServiceError for unsupported services and malformed
+  requests, and Reject on oversized requests;
+- journal times always as a 6-octet TimeOfDay.
+
+InitializeJournal and GetDomainAttributes on the server have no interop
+evidence: no peer adapter sends them (`interopServiceExempt`); they are
+covered by unit and `e2e` tests.
+
+Names outside the Identifier character set: the shared fixture registers
+`visible-string`, `structure-rw` and similar names, which libiec61850
+serves. go-mms therefore enforces only the 1..64 length on names it sends
+and registers; `ValidateIdentifier` is the strict check.
 
 The interop suite complements the in-process quality gates (all without
 Docker):

@@ -42,9 +42,11 @@ func (c *Client) Done() <-chan struct{}
 func (c *Client) Err() error
 ```
 
-`Close` performs a graceful MMS Conclude exchange. `Abort` tears down the connection
-immediately without waiting for a response; the ABRT send is bounded by `ctx`. Both
-methods are idempotent.
+`Close` performs a graceful MMS Conclude exchange followed by the A-RELEASE
+(FINISH + RLRQ, DISCONNECT + RLRE; bounded by `ctx` and `DialOptions.ReleaseTimeout`).
+A Conclude-Error makes it abort and return the `*ServiceError`. `Abort` tears down
+the connection immediately without waiting for a response; the abort (Session ABORT,
+ARU-PPDU, ACSE ABRT) is bounded by `ctx`. Both methods are idempotent.
 
 `Done` is closed when the association has ended (local `Close`/`Abort`, peer
 conclude/release/abort, connection lost or undecodable). `Err` returns nil while the
@@ -59,6 +61,13 @@ func (c *Client) Status(ctx context.Context) (*ServerStatus, error)
 func (c *Client) StatusWithOptions(ctx context.Context, req ClientStatusRequest) (*ServerStatus, error)
 func (c *Client) Negotiated() NegotiatedParameters
 ```
+
+`NegotiatedParameters` carries `MaxPDUSize` (the smaller of the client's
+localDetailCalling and the server's localDetailCalled), `MaxOutCalling`,
+`MaxOutCalled`, `NestingLevel`, `ServerVersion`, and the server's
+`ServicesSupportedCalled` and negotiated `ParameterCBB` bit strings. A request
+larger than the server's localDetailCalled fails with `ErrInvalidArgument`
+before it is sent.
 
 ### Read and write
 
@@ -236,6 +245,18 @@ type JournalProvider interface {
     ReadStartAfter(ctx context.Context, domain, journal string,
         afterID []byte, afterTime time.Time, maxEntries int) (*JournalResult, error)
 }
+
+// Optional: receives every ReadJournal option (IEC 61850-8-1 Table 124).
+type JournalQueryProvider interface {
+    JournalProvider
+    ReadJournal(ctx context.Context, q JournalQuery) (*JournalResult, error)
+}
+
+// Optional: serves InitializeJournal (ISO 9506-2 clause 23.4); limit nil
+// deletes every entry.
+type JournalInitializer interface {
+    InitializeJournal(ctx context.Context, domain, journal string, limit *JournalLimit) (deleted uint32, err error)
+}
 ```
 
 ### Server connection context
@@ -267,7 +288,9 @@ func (sc *ServerConn) AuthToken() any
 func NewBoolean(v bool) *Value
 func NewInteger(v int64) *Value
 func NewUnsigned(v uint64) *Value
-func NewFloat(v float64) *Value
+func NewFloat(v float64) *Value   // single precision (format width 32)
+func NewFloat32(v float32) *Value
+func NewFloat64(v float64) *Value // double precision (format width 64)
 func NewReal(v float64) *Value
 func NewOctetString(v []byte) *Value
 func NewVisibleString(v string) *Value
@@ -490,6 +513,20 @@ type ProtocolError struct {
 
 type AuthenticationError struct {
     Reason string
+}
+
+// Association refused by the server (Session REFUSE / CPR / AARE rejected).
+// Matches ErrConnectionRejected; ErrAuthenticationFailed for ACSE
+// diagnostics 11–14; the Initiate-ErrorPDU is reachable as *ServiceError.
+// IsRetryable reports Transient. Absent fields are -1.
+type RejectionError struct {
+    SessionReason    int
+    ProviderReason   int
+    ACSEResult       int
+    DiagnosticSource int // 1 acse-service-user, 2 acse-service-provider
+    Diagnostic       int
+    InitiateError    *ServiceError
+    Transient        bool
 }
 
 // MMS RejectPDU; unwraps to *ProtocolError (Phase PhaseMMS) → ErrProtocol.
@@ -755,6 +792,7 @@ type DialOptions struct {
     Metrics   Metrics       // nil → no metrics
     RequestTimeout time.Duration // > 0: default bound per confirmed request
     AllowedServices []Service   // non-nil: only these confirmed services are sent
+    ReleaseTimeout time.Duration // A-RELEASE in Close; 0 → 2s, < 0 skips it
 }
 
 const (
@@ -799,6 +837,9 @@ type ISOOptions struct {
 }
 ```
 
+Selectors are at most 16 octets (ISO 8327-1 PI 51/52); a longer one fails
+`NewClient` with `ErrInvalidArgument` before anything is sent.
+
 Client defaults (libiec61850's; IEC 61850-8-1 Table 132 names these SCL address
 parameters but mandates no value): S-selector `00 01`, P-selector `00 00 00 01`,
 calling AP-title `1.1.1.999`, called AP-title `1.1.1.999.1`, AE-qualifiers `12`.
@@ -828,8 +869,21 @@ type ServerOptions struct {
     JournalProvider JournalProvider
     Metrics         Metrics       // nil → no metrics
     AssociationTimeout time.Duration // AARQ → Authenticate → AARE; 0 → 30s, < 0 disables
+    ReleaseTimeout     time.Duration // wait for FINISH after Conclude; 0 → 2s, < 0 does not wait
+    RespondingAPTitle     APTitle    // non-empty: sent in the AARE with RespondingAEQualifier
+    RespondingAEQualifier int
 }
 ```
+
+The server's Initiate-Response advertises the services it implements
+(IEC 61850-8-1 Table 111): status, identify, getNameList, read, write,
+getVariableAccessAttributes, the named-variable-list services,
+informationReport, conclude and cancel; the file services and obtainFile only
+with a `FileProvider`, readJournal only with a `JournalProvider`. The
+parameter CBB is the client's proposal AND str1/str2/vnam/valt/vlis
+(Table 112). An association that cannot be accepted is answered with a Session
+REFUSE + presentation CPR (+ AARE with its diagnostic and an Initiate-ErrorPDU)
+before `Serve` returns.
 
 ### ServerIdentity / ServerStatus
 

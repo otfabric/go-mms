@@ -63,6 +63,7 @@ type Value struct {
 	intVal      int64
 	uintVal     uint64
 	floatVal    float64
+	floatWidth  uint8  // Float: 0 not declared (sent as 32-bit), 32 or 64
 	bytesVal    []byte // OctetString, BitString
 	bitLen      int    // BitString: number of valid bits
 	stringVal   string // VisibleString, MmsString
@@ -320,9 +321,42 @@ func NewUnsigned(u uint64) *Value {
 	return &Value{typ: ValueTypeUnsigned, uintVal: u}
 }
 
-// NewFloat creates a [Value] of type [ValueTypeFloat].
+// NewFloat creates a [Value] of type [ValueTypeFloat] without a declared
+// width. It is encoded as a single-precision floating-point (format width
+// 32, exponent width 8: IEC 61850 FLOAT32) unless a [Server] serves it
+// for a variable whose [TypeSpec] declares 64 bits. The MMS Floatingpoint
+// width is a property of the variable's type (ISO 9506-2 clause 14.4,
+// TypeDescription floating-point), not of the value. Use [NewFloat64] to
+// send double precision and [NewFloat32] to state single precision.
+//
+// Up to v1.7.2 the width followed the value (9 octets whenever float32
+// could not represent it exactly), so a FLOAT32 attribute could be
+// written with a double.
 func NewFloat(f float64) *Value {
 	return &Value{typ: ValueTypeFloat, floatVal: f}
+}
+
+// NewFloat32 creates a single-precision [ValueTypeFloat] (format width 32,
+// exponent width 8; IEC 61850 FLOAT32).
+func NewFloat32(f float32) *Value {
+	return &Value{typ: ValueTypeFloat, floatVal: float64(f), floatWidth: 32}
+}
+
+// NewFloat64 creates a double-precision [ValueTypeFloat] (format width 64,
+// exponent width 11; IEC 61850 FLOAT64).
+func NewFloat64(f float64) *Value {
+	return &Value{typ: ValueTypeFloat, floatVal: f, floatWidth: 64}
+}
+
+// FloatWidth returns the declared width of a [ValueTypeFloat] in bits:
+// 32 or 64 for a value decoded from the wire or made by [NewFloat32] or
+// [NewFloat64], 0 for [NewFloat] (encoded as 32 bits). It returns 0 for
+// any other type.
+func (v *Value) FloatWidth() int {
+	if v == nil || v.typ != ValueTypeFloat {
+		return 0
+	}
+	return int(v.floatWidth)
 }
 
 // NewBitString creates a [Value] of type [ValueTypeBitString].
@@ -452,6 +486,7 @@ func (v *Value) Clone() *Value {
 		intVal:      v.intVal,
 		uintVal:     v.uintVal,
 		floatVal:    v.floatVal,
+		floatWidth:  v.floatWidth,
 		bitLen:      v.bitLen,
 		stringVal:   v.stringVal,
 		timeVal:     v.timeVal,

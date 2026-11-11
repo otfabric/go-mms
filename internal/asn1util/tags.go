@@ -15,7 +15,7 @@ const (
 	TagInitiateError     byte = 0xaa // context 10, constructed
 	TagConcludeRequest   byte = 0x8b // context 11, primitive (NULL)
 	TagConcludeResponse  byte = 0x8c // context 12, primitive (NULL)
-	TagConcludeError     byte = 0x8d // context 13, primitive
+	TagConcludeError     byte = 0xad // context 13, constructed: Conclude-ErrorPDU ::= ServiceError (ISO 9506-2 clause 8.4.3)
 	TagCancelRequest     byte = 0x85 // context 5, primitive (Unsigned32 invokeID)
 	TagCancelResponse    byte = 0x86 // context 6, primitive (Unsigned32 invokeID)
 	TagCancelError       byte = 0xa7 // context 7, constructed
@@ -28,7 +28,7 @@ const (
 	TagServiceRead                        byte = 0xa4 // context 4, constructed
 	TagServiceWrite                       byte = 0xa5 // context 5, constructed
 	TagServiceGetVariableAccessAttributes byte = 0xa6 // context 6, constructed (explicit)
-	TagServiceStatus                      byte = 0x80 // context 0, primitive (empty)
+	TagServiceStatus                      byte = 0x80 // context 0, primitive (Status-Request ::= BOOLEAN, ISO 9506-2 clause 10.3)
 	TagServiceDefineNamedVariableList     byte = 0xab // context 11, constructed
 	TagServiceGetNamedVariableListAttrs   byte = 0xac // context 12, constructed (explicit)
 	TagServiceDeleteNamedVariableList     byte = 0xad // context 13, constructed
@@ -63,9 +63,12 @@ const (
 	TagNumGetNamedVariableListAttrs   = 12 // 0x0c
 	TagNumDeleteNamedVariableList     = 13 // 0x0d
 
+	TagNumGetDomainAttributes = 37 // 0x25
+
 	TagNumObtainFile = 46 // 0x2e
 
-	TagNumReadJournal = 65 // 0x41
+	TagNumReadJournal       = 65 // 0x41
+	TagNumInitializeJournal = 67 // 0x43
 
 	TagNumFileOpen      = 72 // 0x48
 	TagNumFileRead      = 73 // 0x49

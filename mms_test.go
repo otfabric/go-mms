@@ -266,10 +266,14 @@ func (s *mockServer) sendStatusResponse(ctx context.Context, invokeID codec.Invo
 	s.sendDataResponse(ctx, respPdu)
 }
 
+// sendConcludeResponse answers a Conclude-Request and queues the
+// DISCONNECT + RLRE that answers the client's A-RELEASE (ISO 9506-2
+// Annex A.1.2.2); the client reads it after sending its FINISH.
 func (s *mockServer) sendConcludeResponse(ctx context.Context) {
 	s.t.Helper()
 	concludeResp := []byte{asn1util.TagConcludeResponse, 0x00}
 	s.sendDataResponse(ctx, concludeResp)
+	s.transport.sendToClient(isostack.EncodeReleaseResponse())
 }
 
 func (s *mockServer) sendDataResponse(_ context.Context, mmsPdu []byte) {

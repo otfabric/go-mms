@@ -30,9 +30,9 @@ type Captured struct {
 	// Session is the session SPDU: "connect", "accept", "refuse",
 	// "finish", "disconnect", "abort" or "data".
 	Session string
-	// Presentation is the presentation PPDU: "CP", "CPA", "user-data",
-	// or "" when the SPDU carries none (or one this decoder does not
-	// model, such as an abort PPDU).
+	// Presentation is the presentation PPDU: "CP", "CPA", "CPR",
+	// "user-data", "ARU" or "ARP" (ISO 8823-1), or "" when the SPDU
+	// carries none or one that does not decode.
 	Presentation string
 	// ACSE is set for an association control APDU (AARQ, AARE, RLRQ,
 	// RLRE, ABRT).
@@ -190,16 +190,25 @@ func DecodeTSDU(b []byte) (*Captured, error) {
 	if len(spdu.UserData) == 0 {
 		return out, nil
 	}
-	ppdu, err := presentation.Parse(spdu.UserData)
+	parse := presentation.Parse
+	if spdu.Type == session.SpduAbort {
+		// ARU-PPDU or ARP-PPDU (ISO 8823-1).
+		parse = presentation.ParseAbort
+	}
+	ppdu, err := parse(spdu.UserData)
 	if err != nil {
 		if spdu.Type == session.SpduAbort {
-			return out, nil // an abort PPDU (ARU, ARP) is not modelled
+			return out, nil // an abort PPDU that does not decode is not modelled
 		}
 		return out, fmt.Errorf("mms: presentation: %w", err)
 	}
 	out.Presentation = map[presentation.PpduKind]string{
-		presentation.PpduCP: "CP", presentation.PpduCPA: "CPA", presentation.PpduUserData: "user-data",
+		presentation.PpduCP: "CP", presentation.PpduCPA: "CPA", presentation.PpduCPR: "CPR",
+		presentation.PpduUserData: "user-data", presentation.PpduARU: "ARU", presentation.PpduARP: "ARP",
 	}[ppdu.Kind]
+	if len(ppdu.UserData) == 0 {
+		return out, nil
+	}
 	if ppdu.Kind == presentation.PpduUserData && ppdu.ContextID == presentation.ContextIDMMS {
 		out.PDU, err = DecodePDU(ppdu.UserData)
 		return out, err
@@ -286,6 +295,14 @@ func DecodePDU(b []byte) (*CapturedPDU, error) {
 		}
 		out.InvokeID, out.HasInvokeID = r.InvokeID, r.HasInvokeID
 		out.Reject = &CapturedReject{Type: r.RejectType, Reason: r.RejectReason}
+	case pdu.PduConcludeError:
+		// Conclude-ErrorPDU ::= ServiceError (ISO 9506-2 clause 8.4.3).
+		se, err := pdu.DecodeConcludeError(content)
+		if err != nil {
+			out.fail(content, err)
+			break
+		}
+		out.Error = &CapturedServiceError{Class: se.ErrorClass, Code: se.ErrorCode}
 	case pdu.PduUnconfirmed:
 		out.Service = "InformationReport"
 		out.decodeReport(content)

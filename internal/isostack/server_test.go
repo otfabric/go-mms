@@ -28,7 +28,7 @@ func TestDecodeAssociateRequest(t *testing.T) {
 
 func TestEncodeAssociateResponse(t *testing.T) {
 	mmsPayload := []byte{0x04, 0x05}
-	resp := mustEncode(t)(EncodeAssociateResponse(mmsPayload))
+	resp := encodeAccept(t, mmsPayload)
 	if len(resp) == 0 {
 		t.Fatal("empty")
 	}
@@ -41,17 +41,19 @@ func TestEncodeAssociateResponse(t *testing.T) {
 	}
 }
 
+// ISO 8327-1 / ISO 8823-1 (MMS-STK-03): a rejected association is a
+// Session REFUSE carrying a CPR, not an ACCEPT carrying a CPA.
 func TestEncodeAssociateReject(t *testing.T) {
-	resp := EncodeAssociateReject()
-	if len(resp) == 0 {
-		t.Fatal("empty")
-	}
+	resp := encodeReject(t)
 	spdu, err := session.Parse(resp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spdu.Type != session.SpduAccept {
-		t.Fatalf("got SPDU type %s, want ACCEPT (reject uses ACCEPT SPDU with rejected AARE)", spdu.Type)
+	if spdu.Type != session.SpduRefuse || spdu.Reason != session.ReasonUserData {
+		t.Fatalf("got SPDU type %s reason %d, want REFUSE reason 2", spdu.Type, spdu.Reason)
+	}
+	if spdu.UserData[0] != 0x30 {
+		t.Fatalf("PPDU tag %02x, want CPR 0x30", spdu.UserData[0])
 	}
 }
 

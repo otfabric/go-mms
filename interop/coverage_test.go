@@ -112,6 +112,13 @@ var interopServiceCoverage = map[string][]string{
 	"TagNumReadJournal":                 {"TestServer_ReadJournal_TimeRange", "TestServer_ReadJournal_StartAfter", "TestServer_ReadJournal_Unknown"},
 }
 
+// interopServiceExempt lists dispatched services no peer adapter can send,
+// with the reason. Each is covered by the unit and e2e suites.
+var interopServiceExempt = map[string]string{
+	"TagNumGetDomainAttributes": "no iec61850-interop client adapter sends GetDomainAttributes (ISO 9506-2 clause 11.13)",
+	"TagNumInitializeJournal":   "no iec61850-interop client adapter sends InitializeJournal (ISO 9506-2 clause 23.4)",
+}
+
 // TestInteropCoverage needs no peer binaries: it checks the manifests above
 // against the library source and the interop tests.
 func TestInteropCoverage(t *testing.T) {
@@ -157,8 +164,15 @@ func TestInteropCoverage(t *testing.T) {
 	services := dispatchedServices(t)
 	for _, svc := range services {
 		mapped, ok := interopServiceCoverage[svc]
-		if !ok {
-			t.Errorf("server dispatches %s but no server-direction interop test is mapped to it", svc)
+		_, exempt := interopServiceExempt[svc]
+		switch {
+		case ok && exempt:
+			t.Errorf("%s is both covered and exempt", svc)
+			continue
+		case exempt:
+			continue
+		case !ok:
+			t.Errorf("server dispatches %s but no server-direction interop test is mapped to it (or interopServiceExempt with a reason)", svc)
 			continue
 		}
 		requireTests(t, svc, mapped, tests)
@@ -166,6 +180,11 @@ func TestInteropCoverage(t *testing.T) {
 	for svc := range interopServiceCoverage {
 		if !contains(services, svc) {
 			t.Errorf("interopServiceCoverage lists %s, which the server does not dispatch", svc)
+		}
+	}
+	for svc := range interopServiceExempt {
+		if !contains(services, svc) {
+			t.Errorf("interopServiceExempt lists %s, which the server does not dispatch", svc)
 		}
 	}
 }

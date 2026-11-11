@@ -1,5 +1,66 @@
 # go-mms Releases
 
+## v1.8.0
+
+**Date:** 2026-11-11
+**Previous release:** v1.7.2
+
+Spec review against ISO 9506-2:2003 and the IEC 61850-8-1:2011 MMS profile (A-profile, Initiate, services, data). No exported signature changes; several wire behaviours change to what the standards require, each listed under **Changed**. `make interop-all` passes against the four pinned peers (libiec61850, dscsystems, iec61850-rust, iec61850bean).
+
+### Changed
+
+**Association and release (ISO 8327-1, 8823-1, 8650-1; 9506-2 §8.2, Annex A.1.2; 8-1 Tables 3, 13, 109–113)**
+
+- The server advertises its own servicesSupportedCalled (file services and obtainFile only with a `FileProvider`, readJournal only with a `JournalProvider`) and the parameter CBB proposed AND str1/str2/vnam/valt/vlis, instead of echoing the client's bit strings.
+- Initiate negotiation never exceeds the proposal: an absent localDetailCalling or nesting level takes the server's own value (was 128 octets / 1). Version < 1, max-services-outstanding 0 or localDetailCalling < 1 get an Initiate-ErrorPDU; the version is min(proposed, 1). The client fails with `ErrNegotiationFailed` when the response exceeds its proposal.
+- Orderly release: `Client.Close` sends FINISH + RLRQ after the Conclude-Response and waits for DISCONNECT + RLRE (`DialOptions.ReleaseTimeout`, default 2s, negative skips); the server waits for that FINISH and answers it (`ServerOptions.ReleaseTimeout`). A Conclude-ErrorPDU (now tag 0xad, §8.4.3) makes the client abort and `Close` return the `*ServiceError`; the server aborts a FINISH without a prior Conclude.
+- Refusals are Session REFUSE + presentation CPR + AARE rejected with result-source-diagnostic (13/14/11 for authentication) + Initiate-ErrorPDU, instead of ACCEPT + CPA + AARE with diagnostic null. The client reports them as `*RejectionError` (still `ErrConnectionRejected`; `ErrAuthenticationFailed` for diagnostics 11–14; `IsRetryable` only for transient refusals) and still accepts the old form.
+- User abort is an ARU-PPDU carrying ABRT (was TD user data). The server uses the presentation context ids the client proposes.
+- PDU size per direction: the client's receive limit is its own localDetailCalling, and a request above the server's localDetailCalled fails locally with `ErrInvalidArgument`.
+
+**PDUs and services (ISO 9506-2, 8-1 §8.1.3)**
+
+- An unsupported service gets Reject unrecognized-service (was a ConfirmedError with an invalid vmd-state code). A malformed body gets Reject invalid-argument, an oversized request Reject value-out-of-range, a malformed PDU Reject pdu-error; a response that does not fit gets ServiceError service/pdu-size. The service error class constant is 4. One malformed PDU no longer ends the association.
+- Receive accepts BER as X.690 allows (non-minimal lengths and INTEGERs, indefinite length, multi-octet tags); go-mms still sends canonical DER-style encodings.
+- Nested AlternateAccess is sent as an untagged SEQUENCE OF (0x30, as libiec61850); 0xa5 is still accepted; sibling selections are refused instead of misread.
+- **`NewFloat` is single precision**; use the new `NewFloat64` for a double. A server Read result uses the width of the variable's TypeSpec (IEC 61850 FLOAT32).
+- Invoke IDs are 0..2^31−1 (Unsigned32); the client counter wraps there.
+- Journal times are always a 6-octet TimeOfDay; times before 1984 are clamped to the epoch.
+- FileName is a SEQUENCE OF GraphicString, at most 255 octets (8-1 §23.1).
+- Names sent and registered are limited to 64 characters (8-1 Annex F.3.2). The Identifier character set is not enforced, because peers serve names outside it; `ValidateIdentifier` is the strict check.
+- A Write whose data count differs from the named variable list is rejected; a negative BCD is refused.
+- GetNameList Table 15 conflicts get object-constraint-conflict; DeleteNamedVariableList accepts every OPTIONAL component.
+
+### Fixed
+
+- A Reject without originalInvokeID fails the outstanding request(s) instead of leaving them hanging.
+- ServiceError is decoded in full: class 0..12, additionalCode, additionalDescription, serviceSpecificInfo, modifierPosition.
+- ReadJournal serves every 8-1 Table 124 option (start/stop only, numberOfEntries, listOfVariables, start + entryToStartAfter); the client accepts annotation entries (Table 125).
+- GetVariableAccessAttributes never answers with a top-level typeName; TypeSpecification decoding checks class and form and skips accessControlList/meaning.
+- BIT STRING length must match the declared bit count; padding bits are zeroed. GeneralizedTime accepts every X.680 §46 form.
+- Session: REFUSE, version and user-requirements negotiation, Extended User Data (PGI 194), ABORT ACCEPT; selectors above 16 octets fail with `ErrInvalidArgument`. ACSE: RLRQ/ABRT parsed as extensible SEQUENCEs; EXTERNAL octet-aligned accepted. Presentation: octet-aligned PDVs accepted.
+- The documentation now matches the code on Cancel, tags, lengths, Reject behaviour and limits.
+
+### Added
+
+- Server services InitializeJournal (`JournalInitializer`, `JournalLimit`) and GetDomainAttributes (8-1 Table 111).
+- `RejectionError`; `DialOptions.ReleaseTimeout`; `ServerOptions.ReleaseTimeout`, `RespondingAPTitle`, `RespondingAEQualifier`; `NegotiatedParameters.ServicesSupportedCalled`, `ParameterCBB`.
+- `NewFloat32`, `NewFloat64`, `Value.FloatWidth`; `JournalQuery`, `JournalQueryProvider`; `JournalEntry.HasAnnotation`, `Annotation`; `ServiceError.AdditionalCode`, `AdditionalDescription`, `ServiceSpecific`, `ModifierPosition`, `ServiceSpecificInfo`; `VMDLogicalStatusSupportServices`; `MaxIdentifierLength`, `ValidateIdentifier`.
+
+### Documented
+
+- Data `[8]` REAL is a non-standard extension (reserved in ISO 9506-2:2003) and is still sent for `NewReal`. The client does not enforce the negotiated nesting level on receive. The client still proposes libiec61850's servicesSupportedCalling bit string. MMS version 1 against the Ed2 "2.1" text (INTEROP.md).
+
+### Tests
+
+- `TestSpec_*` tests named after their clause (ISO 8327, 8823, 8650, 9506-2 and 8-1 tables) across the session, presentation, ACSE, isostack, serverconn, pdu, berutil, codec and root packages, with byte vectors.
+- Chaos with goroutine-leak checks: `TestChaos_ReleaseRaces`, `TestChaos_ReleaseAbortRaces`, `TestChaos_RejectsKeepAssociation`.
+- New fuzz targets (69 in total): `FuzzDecodeElement`, `FuzzCanonicalize`, `FuzzDecodeServiceError`, `FuzzRecoverInvokeID`, `FuzzUnmarshalInitializeJournalRequest`, `FuzzInitiatePresence`, `FuzzPresentationParseAbort`, `FuzzDecodeReleaseResponse`; fuzz-found inputs kept as corpus.
+- Interop: the coverage gate gains written exemptions for services no peer adapter sends.
+- Assertions that contradicted the standard were rewritten, each citing the clause in its commit.
+
+---
+
 ## v1.7.2
 
 **Date:** 2026-11-10

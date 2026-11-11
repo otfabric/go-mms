@@ -94,3 +94,55 @@ func MarshalCancelError(originalInvokeID InvokeID, errorClass, errorCode int) []
 func MarshalCancelResponse(originalInvokeID InvokeID) []byte {
 	return asn1util.WrapPrimitive(6, berutil.EncodeUint32(uint32(originalInvokeID)))
 }
+
+// ServiceErrorFields are the optional components of an ISO 9506-2
+// clause 7.4.1 ServiceError beyond errorClass.
+type ServiceErrorFields struct {
+	AdditionalCode        *int
+	AdditionalDescription string
+	// HasSpecific selects serviceSpecificInfo [3]; SpecificKind is the
+	// CHOICE alternative's tag number and SpecificContent its contents
+	// (encoded primitive).
+	HasSpecific     bool
+	SpecificKind    int
+	SpecificContent []byte
+}
+
+// MarshalServiceError encodes the contents of a ServiceError SEQUENCE:
+// errorClass [0] { [class] IMPLICIT INTEGER code }, then the optional
+// additionalCode [1], additionalDescription [2] and serviceSpecificInfo
+// [3] in that order.
+func MarshalServiceError(errorClass, errorCode int, f ServiceErrorFields) []byte {
+	out := berutil.EncodeTLV(0xa0, asn1util.WrapPrimitive(errorClass, berutil.EncodeInt(errorCode)))
+	if f.AdditionalCode != nil {
+		out = append(out, berutil.EncodeTLV(0x81, berutil.EncodeInt(*f.AdditionalCode))...)
+	}
+	if f.AdditionalDescription != "" {
+		out = append(out, berutil.EncodeTLV(0x82, []byte(f.AdditionalDescription))...)
+	}
+	if f.HasSpecific {
+		out = append(out, berutil.EncodeTLV(0xa3, asn1util.WrapPrimitive(f.SpecificKind, f.SpecificContent))...)
+	}
+	return out
+}
+
+// MarshalConfirmedErrorFields builds a Confirmed-ErrorPDU whose
+// ServiceError carries the optional components in f.
+func MarshalConfirmedErrorFields(invokeID InvokeID, errorClass, errorCode int, f ServiceErrorFields) []byte {
+	content := berutil.EncodeTLV(0x80, berutil.EncodeUint32(uint32(invokeID)))
+	content = append(content, berutil.EncodeTLV(0xa2, MarshalServiceError(errorClass, errorCode, f))...)
+	return asn1util.WrapConstructed(2, content)
+}
+
+// MarshalRejectPDUNoInvokeID builds a RejectPDU without the OPTIONAL
+// originalInvokeID, for a PDU whose invokeID could not be decoded
+// (ISO 9506-2 clause 8.6).
+func MarshalRejectPDUNoInvokeID(rejectType, rejectReason int) []byte {
+	return asn1util.WrapConstructed(4, asn1util.WrapPrimitive(rejectType, berutil.EncodeInt(rejectReason)))
+}
+
+// MarshalConcludeError builds a Conclude-ErrorPDU: MMSpdu
+// conclude-ErrorPDU [13] IMPLICIT ServiceError (ISO 9506-2 clause 8.4.3).
+func MarshalConcludeError(errorClass, errorCode int) []byte {
+	return asn1util.WrapConstructed(13, MarshalServiceError(errorClass, errorCode, ServiceErrorFields{}))
+}

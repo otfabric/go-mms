@@ -99,10 +99,43 @@ func invalidPDUf(format string, args ...any) error {
 
 // ServiceError represents a remote MMS service error received via
 // ConfirmedErrorPDU. Use [errors.As] to extract it from wrapped errors.
+//
+// The optional ServiceError components of ISO 9506-2 clause 7.4.1 are
+// carried when the peer sends them; a [Server] handler may set them too.
+// A Conclude-ErrorPDU (Conclude-ErrorPDU ::= ServiceError, clause 8.4.3)
+// is returned by [Client.Close] as a ServiceError with InvokeID 0.
 type ServiceError struct {
 	Class    ErrorClass
 	Code     int
 	InvokeID InvokeID
+
+	// AdditionalCode is the optional additionalCode [1]; nil when absent.
+	AdditionalCode *int
+	// AdditionalDescription is the optional additionalDescription [2]
+	// (a VisibleString); "" when absent.
+	AdditionalDescription string
+	// ServiceSpecific is the optional serviceSpecificInfo [3]; nil when
+	// absent.
+	ServiceSpecific *ServiceSpecificInfo
+	// ModifierPosition is the optional modifierPosition [1] of the
+	// Confirmed-ErrorPDU (clause 7.4); nil when absent. A server ignores it.
+	ModifierPosition *uint32
+}
+
+// ServiceSpecificInfo is the serviceSpecificInfo [3] CHOICE of a
+// ServiceError (ISO 9506-2 clause 7.4.1). Kind is the alternative's tag
+// number: 0 obtainFile, 1 start, 2 stop, 3 resume, 4 reset,
+// 5 deleteVariableAccess, 6 deleteNamedVariableList, 7 deleteNamedType,
+// 8 defineEventEnrollment, 9 fileRename, 10 additionalService,
+// 11 changeAccessControl.
+// For the alternatives that are a single INTEGER or ENUMERATED (for
+// example numberDeleted of DeleteNamedVariableList-Error) HasValue is
+// set and Value holds it; Raw always holds the contents octets.
+type ServiceSpecificInfo struct {
+	Kind     int
+	Raw      []byte
+	HasValue bool
+	Value    int
 }
 
 func (e *ServiceError) Error() string {

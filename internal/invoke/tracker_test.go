@@ -280,30 +280,49 @@ func TestAllocateWithIDConcurrent(t *testing.T) {
 	wg.Wait()
 }
 
-// TestInvokeIDWraparound verifies that the tracker skips ID 0 when the
-// uint32 counter wraps from 0xFFFFFFFF back to 0.
-func TestInvokeIDWraparound(t *testing.T) {
+// TestSpec_9506_2_Unsigned32_InvokeIDWrap verifies that the tracker
+// wraps after 2^31-1, the largest Unsigned32 ::= INTEGER (0..2147483647)
+// of ISO 9506-2, skipping 0 (MMS-PDU-24; it used to wrap at 2^32).
+func TestSpec_9506_2_Unsigned32_InvokeIDWrap(t *testing.T) {
 	tr := NewTracker(0)
-	// Force nextID to the maximum uint32 value minus 1 so the next Allocate
-	// will wrap through 0 and land on 1.
 	tr.mu.Lock()
-	tr.nextID = 0xFFFFFFFE
+	tr.nextID = 0x7FFFFFFE
 	tr.mu.Unlock()
 
 	id1, _, _ := tr.Allocate()
-	if id1 != 0xFFFFFFFF {
-		t.Fatalf("expected 0xFFFFFFFF, got %d", id1)
+	if id1 != 0x7FFFFFFF {
+		t.Fatalf("expected 0x7FFFFFFF, got %d", id1)
 	}
 	tr.Cancel(id1, nil)
 
-	// Wrap: nextID increments to 0x100000000 → truncated to 0 → skipped → 1.
 	id2, _, _ := tr.Allocate()
-	if id2 == 0 {
-		t.Fatal("invoke ID 0 must never be issued")
-	}
 	if id2 != 1 {
 		t.Fatalf("expected 1 after wraparound, got %d", id2)
 	}
+	tr.Cancel(id2, nil)
+
+	tr.mu.Lock()
+	tr.nextID = 0x7FFFFFFF
+	tr.mu.Unlock()
+	if id := tr.NextID(); id != 1 {
+		t.Fatalf("NextID after 2^31-1 = %d, want 1", id)
+	}
+}
+
+func TestSole(t *testing.T) {
+	tr := NewTracker(0)
+	if _, ok := tr.Sole(); ok {
+		t.Fatal("Sole with nothing pending")
+	}
+	id1, _, _ := tr.Allocate()
+	if id, ok := tr.Sole(); !ok || id != id1 {
+		t.Fatalf("Sole = %d, %v", id, ok)
+	}
+	id2, _, _ := tr.Allocate()
+	if _, ok := tr.Sole(); ok {
+		t.Fatal("Sole with two pending")
+	}
+	tr.Cancel(id1, nil)
 	tr.Cancel(id2, nil)
 }
 

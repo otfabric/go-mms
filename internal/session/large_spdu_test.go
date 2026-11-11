@@ -4,6 +4,7 @@ package session
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
 
@@ -17,7 +18,10 @@ func TestLargeSPDURoundTrip(t *testing.T) {
 		data := bytes.Repeat([]byte{0xa5}, n)
 		encoders := map[string]func() ([]byte, error){
 			"CONNECT": func() ([]byte, error) {
-				return EncodeConnect(ConnectParams{CallingSelector: sel, CalledSelector: sel}, data)
+				// ISO 8327-1: CONNECT user data is bounded by 10 240 octets
+				// (Extended User Data); TestConnectUserDataLimits covers it.
+				d := data[:min(len(data), maxConnectExtUserData)]
+				return EncodeConnect(ConnectParams{CallingSelector: sel, CalledSelector: sel}, d)
 			},
 			"ACCEPT":     func() ([]byte, error) { return EncodeAccept(ConnectParams{CalledSelector: sel}, data) },
 			"FINISH":     func() ([]byte, error) { return EncodeFinish(data) },
@@ -36,7 +40,11 @@ func TestLargeSPDURoundTrip(t *testing.T) {
 			if p.Type.String() != name {
 				t.Fatalf("%s n=%d: type %s", name, n, p.Type)
 			}
-			if !bytes.Equal(p.UserData, data) {
+			want := data
+			if name == "CONNECT" {
+				want = data[:min(len(data), maxConnectExtUserData)]
+			}
+			if !bytes.Equal(p.UserData, want) {
 				t.Fatalf("%s n=%d: user data %d bytes, want %d", name, n, len(p.UserData), n)
 			}
 		}
@@ -102,6 +110,10 @@ func FuzzSessionRoundTrip(f *testing.F) {
 			calling, called = nil, nil
 		}
 		if err != nil {
+			// Selectors above 16 octets are refused (ISO 8327-1 PI 51/52).
+			if errors.Is(err, ErrSelectorTooLong) && (len(calling) > 16 || len(called) > 16) {
+				return
+			}
 			if len(calling)+len(called)+len(data) < maxLI-32 {
 				t.Fatalf("encode failed for %d bytes: %v", len(calling)+len(called)+len(data), err)
 			}

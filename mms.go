@@ -4,6 +4,7 @@ package mms
 
 import (
 	"context"
+	"encoding/asn1"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,6 +18,7 @@ import (
 	"github.com/otfabric/go-mms/internal/invoke"
 	"github.com/otfabric/go-mms/internal/isostack"
 	"github.com/otfabric/go-mms/internal/pdu"
+	"github.com/otfabric/go-mms/internal/session"
 )
 
 // Client is an MMS client connection to a remote MMS server.
@@ -49,17 +51,21 @@ type Client struct {
 	readerCancel context.CancelFunc
 	readerDone   chan struct{} // closed when reader loop exits
 	readerErr    error         // why the reader loop exited; guarded by mu
-	concludeCh   chan struct{} // receives signal when ConcludeResponse arrives
+	concludeCh   chan error    // receives the Conclude outcome (nil: Conclude-Response)
 
 	reportMu      sync.RWMutex
 	reportHandler InformationReportHandler
 
 	// Negotiated parameters from MMS Initiate handshake.
-	maxPDUSize    int
-	maxOutCalling int
-	maxOutCalled  int
-	nestingLevel  int
-	serverVersion int
+	maxPDUSize        int
+	recvLimit         int // own localDetailCalling: largest PDU accepted
+	sendLimit         int // server's localDetailCalled: largest PDU sent; 0 = unknown
+	maxOutCalling     int
+	maxOutCalled      int
+	nestingLevel      int
+	serverVersion     int
+	servicesSupported asn1.BitString
+	parameterCBB      asn1.BitString
 }
 
 // NewClient creates a Client using an already-established [Transport]
@@ -90,7 +96,7 @@ func newClient(ctx context.Context, conn Transport, opts DialOptions) (*Client, 
 		remote:     remote,
 		conn:       conn,
 		readerDone: make(chan struct{}),
-		concludeCh: make(chan struct{}, 1),
+		concludeCh: make(chan error, 1),
 	}
 
 	if err := c.associate(ctx); err != nil {
@@ -131,9 +137,15 @@ func (c *Client) associate(ctx context.Context) error {
 		return fmt.Errorf("mms: marshal initiate request: %w", err)
 	}
 
+	if err := validateISOOptions(c.opts.ISO); err != nil {
+		return err
+	}
 	isoParams := c.buildISOParams()
 	assocReq, err := isostack.EncodeAssociateRequest(isoParams, initBytes)
 	if err != nil {
+		if errors.Is(err, session.ErrSelectorTooLong) {
+			return invalidArgf("mms: encode association request: %w", err)
+		}
 		return fmt.Errorf("mms: encode association request: %w", err)
 	}
 
@@ -147,13 +159,11 @@ func (c *Client) associate(ctx context.Context) error {
 	}
 
 	assocResult, err := isostack.DecodeAssociateResponse(respData)
+	if rj, ok := errors.AsType[*isostack.Rejection](err); ok {
+		return rejectionError(rj)
+	}
 	if err != nil {
 		return decodeErrorf("mms: %w", err)
-	}
-
-	if assocResult.ACSEResult != acse.ResultAccepted {
-		return fmt.Errorf("mms: association rejected (result=%d): %w",
-			assocResult.ACSEResult, ErrConnectionRejected)
 	}
 
 	if len(assocResult.MmsPayload) == 0 {
@@ -167,6 +177,13 @@ func (c *Client) associate(ctx context.Context) error {
 	if err != nil {
 		return decodeErrorf("mms: decode initiate response: %w", err)
 	}
+	if kind == pdu.PduInitiateError {
+		// An accepting AARE that carries an Initiate-ErrorPDU still
+		// refuses the MMS association (ISO 9506-2 8.2).
+		r := &RejectionError{SessionReason: -1, ProviderReason: -1, ACSEResult: acse.ResultAccepted, DiagnosticSource: -1, Diagnostic: -1,
+			InitiateError: initiateError(assocResult.MmsPayload)}
+		return r
+	}
 	if kind != pdu.PduInitiateResponse {
 		return &ProtocolError{
 			Phase:   PhaseMMS,
@@ -179,60 +196,7 @@ func (c *Client) associate(ctx context.Context) error {
 		return decodeErrorf("mms: %w", err)
 	}
 
-	if err := c.applyNegotiatedParams(initReq, initResp); err != nil {
-		return err
-	}
-	return nil
-}
-
-// applyNegotiatedParams stores the result of MMS Initiate negotiation.
-//
-// Negotiation policy (pragmatic interop defaults, not strict spec):
-//   - maxPDUSize: server's LocalDetailCalled, falling back to our proposed value
-//   - maxOutstanding: min(proposed, negotiated), floor of 1
-//   - nestingLevel: server's negotiated value, falling back to our proposed value
-//   - version: server's negotiated version, must be > 0
-//
-// This policy mirrors common MMS client behavior. The server side will
-// need its own negotiation logic when implemented in Phase 7.
-func (c *Client) applyNegotiatedParams(req pdu.InitiateRequest, resp *pdu.InitiateResponse) error {
-	c.maxPDUSize = resp.LocalDetailCalled
-	if c.maxPDUSize <= 0 {
-		c.maxPDUSize = req.LocalDetailCalling
-	}
-
-	c.maxOutCalling = min(req.ProposedMaxServOutstandingCall, resp.NegotiatedMaxServOutstandingCall)
-	if c.maxOutCalling <= 0 {
-		c.maxOutCalling = 1
-	}
-
-	c.maxOutCalled = min(req.ProposedMaxServOutstandingCalled, resp.NegotiatedMaxServOutstandingCalled)
-	if c.maxOutCalled <= 0 {
-		c.maxOutCalled = 1
-	}
-
-	c.nestingLevel = resp.NegotiatedDataStructureNesting
-	if c.nestingLevel <= 0 {
-		c.nestingLevel = req.ProposedDataStructureNesting
-	}
-
-	c.serverVersion = resp.InitResponseDetail.NegotiatedVersion
-	if c.serverVersion <= 0 {
-		return classify(&ProtocolError{
-			Phase:   PhaseMMS,
-			Message: fmt.Sprintf("invalid negotiated version %d", c.serverVersion),
-		}, ErrNegotiationFailed)
-	}
-
-	c.logger.Debug("mms: negotiated",
-		"max_pdu_size", c.maxPDUSize,
-		"max_outstanding_calling", c.maxOutCalling,
-		"max_outstanding_called", c.maxOutCalled,
-		"nesting_level", c.nestingLevel,
-		"version", c.serverVersion,
-	)
-
-	return nil
+	return c.checkNegotiated(initReq, initResp, content)
 }
 
 func (c *Client) buildISOParams() isostack.Params {
@@ -293,14 +257,23 @@ func isoAPTitle(title APTitle, aeq int, def APTitle) (APTitle, int) {
 	return append(APTitle(nil), title...), aeq
 }
 
-// Close performs an orderly shutdown of the MMS connection (Conclude).
-// Use [Client.Abort] for an immediate one.
+// Close performs an orderly shutdown of the MMS connection (Conclude
+// and A-RELEASE, ISO 9506-2 Annex A.1.2). Use [Client.Abort] for an
+// immediate one.
 //
 // Shutdown sequence:
 //  1. Marks the client as closed — all new service calls return [ErrClosed].
 //  2. Cancels all pending confirmed requests with [ErrClosed].
 //  3. Sends a ConcludeRequest and waits for the ConcludeResponse.
-//  4. Stops the background reader loop and closes the transport.
+//  4. Sends the A-RELEASE (Session FINISH + ACSE RLRQ) and waits up to
+//     [DialOptions.ReleaseTimeout] for the DISCONNECT + RLRE. A server
+//     that closes the transport or does not answer still ends the
+//     association without an error.
+//  5. Stops the background reader loop and closes the transport.
+//
+// A Conclude-ErrorPDU makes Close abort the association (ISO 9506-2
+// 24.3) and return an error carrying the *[ServiceError] (class
+// conclude).
 //
 // This is NOT a graceful drain: pending requests are aborted immediately
 // and their callers receive [ErrClosed]. Confirmed responses that arrive
@@ -356,6 +329,7 @@ func (c *Client) Abort(ctx context.Context) error {
 	// session/presentation layers). Ignored if the peer is already gone.
 	// A send stuck behind a slow peer must not block Abort past ctx: the
 	// transport is closed when ctx is done, which fails the send.
+	// ARU-PPDU carrying ABRT source acse-service-user (ISO 8823-1).
 	abortPDU := isostack.EncodeAbort()
 	stop := context.AfterFunc(ctx, func() { _ = c.conn.Close() })
 	c.sendMu.Lock()
@@ -396,11 +370,13 @@ func (c *Client) Err() error {
 // the association establishment handshake.
 func (c *Client) Negotiated() NegotiatedParameters {
 	return NegotiatedParameters{
-		MaxPDUSize:    c.maxPDUSize,
-		MaxOutCalling: c.maxOutCalling,
-		MaxOutCalled:  c.maxOutCalled,
-		NestingLevel:  c.nestingLevel,
-		ServerVersion: c.serverVersion,
+		MaxPDUSize:              c.maxPDUSize,
+		MaxOutCalling:           c.maxOutCalling,
+		MaxOutCalled:            c.maxOutCalled,
+		NestingLevel:            c.nestingLevel,
+		ServerVersion:           c.serverVersion,
+		ServicesSupportedCalled: cloneBits(c.servicesSupported),
+		ParameterCBB:            cloneBits(c.parameterCBB),
 	}
 }
 
@@ -423,9 +399,9 @@ func (c *Client) conclude(ctx context.Context) error {
 		return fmt.Errorf("mms: send conclude: %w", sendErr)
 	}
 
+	var result error
 	select {
-	case <-c.concludeCh:
-		return nil
+	case result = <-c.concludeCh:
 	case <-ctx.Done():
 		return fmt.Errorf("mms: conclude: %w", ctx.Err())
 	case <-c.readerDone:
@@ -433,12 +409,16 @@ func (c *Client) conclude(ctx context.Context) error {
 		// readerDone). When both are ready, select picks randomly.
 		// Drain concludeCh to avoid a false-negative race.
 		select {
-		case <-c.concludeCh:
-			return nil
+		case result = <-c.concludeCh:
 		default:
 			return &ProtocolError{Phase: PhaseMMS, Message: "connection closed before conclude response"}
 		}
 	}
+	if result != nil {
+		c.abortAfterConclude(ctx)
+		return result
+	}
+	return c.release(ctx)
 }
 
 // Identify sends an MMS Identify request and returns the server's identity.
@@ -598,6 +578,12 @@ func (c *Client) doConfirmed(ctx context.Context, invokeID codec.InvokeID, mmsPd
 		return nil, contextErr(invokeID, err)
 	}
 
+	// The server's localDetailCalled bounds what it accepts (ISO 9506-2
+	// 8.2, MMS-STK-15): refuse an oversized request before sending it.
+	if c.sendLimit > 0 && len(mmsPdu) > c.sendLimit {
+		return nil, invalidArgf("mms: request PDU size %d exceeds the server's localDetailCalled %d", len(mmsPdu), c.sendLimit)
+	}
+
 	_, ch, err := c.tracker.AllocateWithID(invokeID)
 	if err != nil {
 		return nil, fmt.Errorf("mms: allocate invoke ID %d: %w", invokeID, err)
@@ -724,11 +710,32 @@ func (c *Client) handleConfirmedError(expectedID codec.InvokeID, content []byte)
 			Message: fmt.Sprintf("confirmed error invoke ID mismatch: sent %d, received %d", expectedID, ce.InvokeID),
 		}
 	}
-	return &ServiceError{
-		Class:    ErrorClass(ce.ErrorClass),
-		Code:     ce.ErrorCode,
-		InvokeID: InvokeID(ce.InvokeID),
+	se := serviceErrorFromWire(ce.Detail, InvokeID(ce.InvokeID))
+	se.ModifierPosition = ce.ModifierPosition
+	return se
+}
+
+// serviceErrorFromWire converts a decoded ServiceError (ISO 9506-2
+// clause 7.4.1) to the public error.
+func serviceErrorFromWire(w pdu.ServiceErrorWire, invokeID InvokeID) *ServiceError {
+	se := &ServiceError{
+		Class:          ErrorClass(w.ErrorClass),
+		Code:           w.ErrorCode,
+		InvokeID:       invokeID,
+		AdditionalCode: w.AdditionalCode,
 	}
+	if w.AdditionalDescription != nil {
+		se.AdditionalDescription = *w.AdditionalDescription
+	}
+	if w.ServiceSpecific != nil {
+		se.ServiceSpecific = &ServiceSpecificInfo{
+			Kind:     w.ServiceSpecific.Kind,
+			Raw:      w.ServiceSpecific.Raw,
+			HasValue: w.ServiceSpecific.HasValue,
+			Value:    w.ServiceSpecific.Value,
+		}
+	}
+	return se
 }
 
 func (c *Client) handleReject(expectedID codec.InvokeID, content []byte) error {
@@ -791,9 +798,16 @@ func (c *Client) stopReader(err error) {
 // checkPDUSize enforces the negotiated maximum on an MMS PDU. The limit
 // applies to the MMS PDU itself, not to the session/presentation framing
 // around it.
+//
+// The receive limit is this client's own localDetailCalling: the server
+// must not send more (ISO 9506-2 8.2, MMS-STK-15).
 func (c *Client) checkPDUSize(mmsPayload []byte) error {
-	if c.maxPDUSize > 0 && len(mmsPayload) > c.maxPDUSize {
-		return invalidPDUf("mms: received PDU size %d exceeds negotiated max %d", len(mmsPayload), c.maxPDUSize)
+	limit := c.recvLimit
+	if limit <= 0 {
+		limit = c.maxPDUSize
+	}
+	if limit > 0 && len(mmsPayload) > limit {
+		return invalidPDUf("mms: received PDU size %d exceeds negotiated max %d", len(mmsPayload), limit)
 	}
 	return nil
 }
@@ -837,6 +851,9 @@ func (c *Client) readerLoop(ctx context.Context) {
 
 		kind, content, err := pdu.DecodePdu(mmsPayload)
 		if err != nil {
+			if c.rejectMalformed(ctx, mmsPayload, err) {
+				continue
+			}
 			c.logger.Debug("mms: reader loop PDU error", "error", err)
 			c.stopReader(classify(decodeErrorf("mms: decode PDU: %w", err), ErrClosed))
 			return
@@ -857,15 +874,18 @@ func (c *Client) readerLoop(ctx context.Context) {
 
 		case pdu.PduConcludeResponse:
 			select {
-			case c.concludeCh <- struct{}{}:
+			case c.concludeCh <- nil:
 			default:
 			}
 			return
 
 		case pdu.PduConcludeError:
-			c.logger.Warn("mms: server rejected conclude")
+			// Conclude-ErrorPDU ::= ServiceError (ISO 9506-2 clause
+			// 8.4.3); Close reports it as a *ServiceError.
+			concludeErr := c.concludeError(content)
+			c.logger.Warn("mms: server rejected conclude", "error", concludeErr)
 			select {
-			case c.concludeCh <- struct{}{}:
+			case c.concludeCh <- concludeErr:
 			default:
 			}
 			return
@@ -877,9 +897,9 @@ func (c *Client) readerLoop(ctx context.Context) {
 }
 
 func (c *Client) dispatchConfirmed(kind pdu.PduKind, content []byte) {
-	invokeID, err := pdu.ExtractInvokeID(content)
+	invokeID, err := pdu.ExtractInvokeIDFor(kind, content)
 	if err != nil {
-		c.logger.Warn("mms: reader cannot extract invoke ID", "error", err)
+		c.dispatchWithoutInvokeID(kind, content, err)
 		return
 	}
 
@@ -900,6 +920,70 @@ func (c *Client) dispatchConfirmed(kind pdu.PduKind, content []byte) {
 		}
 	}
 }
+
+// dispatchWithoutInvokeID handles a confirmed-service PDU without a
+// usable invoke ID. ISO 9506-2 clause 8.6 makes originalInvokeID of a
+// RejectPDU OPTIONAL: such a Reject is delivered to the only outstanding
+// request, or fails all outstanding requests when several are pending,
+// rather than leaving them to time out (MMS-PDU-07). A response or error
+// whose invoke ID cannot be read fails the only outstanding request with a
+// decode error.
+func (c *Client) dispatchWithoutInvokeID(kind pdu.PduKind, content []byte, extractErr error) {
+	if kind == pdu.PduReject {
+		if rj, err := pdu.DecodeRejectPDU(content); err == nil && !rj.HasInvokeID {
+			if id, ok := c.tracker.Sole(); ok {
+				c.tracker.Complete(id, invoke.Response{Kind: int(kind), Data: content})
+				return
+			}
+			rejErr := &RejectError{Type: RejectType(rj.RejectType), Reason: rj.RejectReason}
+			c.logger.Warn("mms: reject without invoke ID", "error", rejErr)
+			c.tracker.CancelAll(rejErr)
+			return
+		}
+	}
+	c.logger.Warn("mms: reader cannot extract invoke ID", "kind", kind, "error", extractErr)
+	if id, ok := c.tracker.Sole(); ok {
+		c.tracker.Cancel(id, decodeErrorf("mms: %s without a valid invoke ID: %w", kind, extractErr))
+	}
+}
+
+// rejectMalformed handles an MMS PDU that does not decode but whose
+// invoke ID can be read: the request it answers fails with a decode
+// error, the PDU is rejected (ISO 9506-2 clause 8.6; IEC 61850-8-1
+// clause 8.1.3.4.1 leaves the content of a Reject for a mal-formed PDU a
+// local issue) and the association continues. It reports false when the
+// invoke ID cannot be recovered.
+func (c *Client) rejectMalformed(ctx context.Context, mmsPayload []byte, decodeErr error) bool {
+	kind, id, ok := pdu.RecoverInvokeID(mmsPayload)
+	if !ok {
+		return false
+	}
+	c.logger.Warn("mms: rejecting malformed PDU", "kind", kind, "invoke_id", id, "error", decodeErr)
+	c.tracker.Cancel(id, decodeErrorf("mms: decode %s: %w", kind, decodeErr))
+	rejectType := 0
+	switch kind {
+	case pdu.PduConfirmedResponse:
+		rejectType = int(RejectConfirmedResponse)
+	case pdu.PduConfirmedError:
+		rejectType = int(RejectConfirmedError)
+	default:
+		return true // a RejectPDU is not rejected
+	}
+	c.sendReject(ctx, codec.MarshalRejectPDU(id, rejectType, 0))
+	return true
+}
+
+// sendReject sends a RejectPDU best-effort, bounded by rejectSendTimeout.
+func (c *Client) sendReject(ctx context.Context, rejectPDU []byte) {
+	sctx, cancel := context.WithTimeout(ctx, rejectSendTimeout)
+	defer cancel()
+	if err := c.send(sctx, isostack.EncodeDataRequest(rejectPDU)); err != nil {
+		c.logger.Debug("mms: send reject", "error", err)
+	}
+}
+
+// rejectSendTimeout bounds how long the reader waits to queue a Reject.
+const rejectSendTimeout = 5 * time.Second
 
 func (c *Client) dispatchUnconfirmed(content []byte) {
 	report, err := pdu.UnmarshalInformationReport(content)
@@ -2199,6 +2283,9 @@ func validateObjectName(n ObjectName) error {
 	if n.ItemID == "" {
 		return invalidArgf("empty ItemID")
 	}
+	if err := validateIdentifier("ItemID", string(n.ItemID)); err != nil {
+		return err
+	}
 	switch n.Scope {
 	case ObjectScopeVMD, ObjectScopeAssociation:
 		// valid
@@ -2206,8 +2293,58 @@ func validateObjectName(n ObjectName) error {
 		if n.Domain == "" {
 			return invalidArgf("domain scope requires non-empty Domain")
 		}
+		if err := validateIdentifier("Domain", string(n.Domain)); err != nil {
+			return err
+		}
 	default:
 		return invalidArgf("unknown scope %d", int(n.Scope))
+	}
+	return nil
+}
+
+// MaxIdentifierLength is maxIdentifier of the IEC 61850-8-1 MMS profile
+// (8-1 Annex F.3.2): an Identifier has 1 to 64 characters.
+const MaxIdentifierLength = 64
+
+// isIdentifierChar reports whether c is in the Identifier character set
+// A-Z a-z 0-9 $ _ (ISO 9506-2 clause 7.5.2).
+func isIdentifierChar(c byte) bool {
+	switch {
+	case 'A' <= c && c <= 'Z', 'a' <= c && c <= 'z', '0' <= c && c <= '9', c == '$', c == '_':
+		return true
+	}
+	return false
+}
+
+// validateIdentifier checks the length of an outbound or registered
+// Identifier: 1..maxIdentifier characters, maxIdentifier 64 (ISO 9506-2
+// clause 7.5.2, IEC 61850-8-1 Annex F.3.2 and clause 24.2.2.1). The
+// character set is not enforced here: peers serve names outside it (the
+// iec61850-interop fixture and libiec61850 use "visible-string"), and a
+// client must be able to address what a server lists. Use
+// [ValidateIdentifier] for the strict check. Names decoded from a peer
+// are not checked.
+func validateIdentifier(what, s string) error {
+	if s == "" || len(s) > MaxIdentifierLength {
+		return invalidArgf("%s %q: an Identifier has 1..%d characters (ISO 9506-2 clause 7.5.2)", what, s, MaxIdentifierLength)
+	}
+	return nil
+}
+
+// ValidateIdentifier reports whether name is a strict MMS Identifier
+// (ISO 9506-2 clause 7.5.2): 1..[MaxIdentifierLength] characters from
+// A-Z a-z 0-9 $ _. The client and server only enforce the length, so
+// that names peers use outside the character set stay reachable; call
+// this to check names you define yourself. The error matches
+// [ErrInvalidArgument].
+func ValidateIdentifier(name string) error {
+	if err := validateIdentifier("Identifier", name); err != nil {
+		return err
+	}
+	for i := 0; i < len(name); i++ {
+		if c := name[i]; !isIdentifierChar(c) {
+			return invalidArgf("Identifier %q: character %q is outside the Identifier character set A-Z a-z 0-9 $ _ (ISO 9506-2 clause 7.5.2)", name, c)
+		}
 	}
 	return nil
 }
@@ -2366,8 +2503,9 @@ func valueToDataValue(v *Value) (*pdu.DataValue, error) {
 	case ValueTypeUnsigned:
 		return &pdu.DataValue{Tag: pdu.TagDataUnsigned, Uint: v.uintVal}, nil
 	case ValueTypeFloat:
-		wide := float64(float32(v.floatVal)) != v.floatVal
-		return &pdu.DataValue{Tag: pdu.TagDataFloat, Float: v.floatVal, FloatWide: wide}, nil
+		// The width is the declared one (MMS-PDU-16); an undeclared
+		// width is single precision (IEC 61850 FLOAT32).
+		return &pdu.DataValue{Tag: pdu.TagDataFloat, Float: v.floatVal, FloatWide: v.floatWidth == 64}, nil
 	case ValueTypeBitString:
 		return &pdu.DataValue{Tag: pdu.TagDataBitString, Bytes: copyBytes(v.bytesVal), BitLen: v.bitLen}, nil
 	case ValueTypeOctetString:
@@ -2432,7 +2570,11 @@ func dataValueToValue(dv *pdu.DataValue) (*Value, error) {
 	case pdu.TagDataUnsigned:
 		return &Value{typ: ValueTypeUnsigned, uintVal: dv.Uint}, nil
 	case pdu.TagDataFloat:
-		return &Value{typ: ValueTypeFloat, floatVal: dv.Float}, nil
+		width := uint8(32)
+		if dv.FloatWide {
+			width = 64
+		}
+		return &Value{typ: ValueTypeFloat, floatVal: dv.Float, floatWidth: width}, nil
 	case pdu.TagDataBitString:
 		return &Value{typ: ValueTypeBitString, bytesVal: copyBytes(dv.Bytes), bitLen: dv.BitLen}, nil
 	case pdu.TagDataOctetString:

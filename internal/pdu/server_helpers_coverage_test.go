@@ -366,8 +366,10 @@ func TestUnmarshalDeleteNVLRequest_Errors(t *testing.T) {
 		t.Fatal("scope value / missing list")
 	}
 
-	if _, err := UnmarshalDeleteNVLRequest(nil); err == nil {
-		t.Fatal("missing list")
+	// Every component is OPTIONAL (ISO 9506-2 DeleteNamedVariableList-
+	// Request; this used to be an error, MMS-PDU-09).
+	if r, err := UnmarshalDeleteNVLRequest(nil); err != nil || r.ScopeOfDelete != 0 || len(r.ListNames) != 0 {
+		t.Fatalf("empty request = %+v, %v", r, err)
 	}
 	if _, err := UnmarshalDeleteNVLRequest([]byte{0xa1, 0x05}); err == nil {
 		t.Fatal("list TLV")

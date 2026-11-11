@@ -208,7 +208,11 @@ const (
 	// Deprecated: Use [DataAccessErrorTypeUnsupported].
 	DataAccessErrorTypeMismatch = DataAccessErrorTypeUnsupported
 
-	// Deprecated: Use [DataAccessErrorObjectAttributeInconsistent].
+	// Deprecated: Use [DataAccessErrorObjectAttributeInconsistent]. The
+	// name is misleading: object-exists is not a DataAccessError but the
+	// definition-class ServiceError code 5 (ISO 9506-2 clause 7.4.1);
+	// the alias keeps the value of object-attribute-inconsistent (8) for
+	// compatibility.
 	DataAccessErrorObjectExists = DataAccessErrorObjectAttributeInconsistent
 )
 ```
@@ -239,6 +243,12 @@ const (
 ```
 
 UTCTime quality byte bit masks (IEC 61850-8-1 TimeQuality).
+
+```go
+const MaxIdentifierLength = 64
+```
+
+MaxIdentifierLength is maxIdentifier of the IEC 61850-8-1 MMS profile (8-1 Annex F.3.2): an Identifier has 1 to 64 characters.
 
 ```go
 const VMDPhysicalStatusPartiallyOper = VMDPhysicalStatusPartiallyOperational
@@ -304,7 +314,7 @@ ErrNotMMS is returned by [DecodeTSDU](#func-decodetsdu) for a unit that does not
 func IsRetryable(err error) bool
 ```
 
-IsRetryable is the default [RetryPolicy.Retryable](#func-retrypolicy-retryable) classification. It returns false for errors that another attempt cannot fix — context cancellation, invalid arguments, authentication failures, and associations rejected by the peer — and true for everything else (refused or dropped connections, timeouts including a per-attempt context deadline, protocol failures during the handshake). [Retry](#func-retry) stops on its own when its context is done.
+IsRetryable is the default [RetryPolicy.Retryable](#func-retrypolicy-retryable) classification. It returns false for errors that another attempt cannot fix — context cancellation, invalid arguments, authentication failures, and associations rejected by the peer (a [RejectionError](#type-rejectionerror) is retryable only when Transient) — and true for everything else (refused or dropped connections, timeouts including a per-attempt context deadline, protocol failures during the handshake). [Retry](#func-retry) stops on its own when its context is done.
 
 ### func Retry
 
@@ -330,6 +340,14 @@ A typical reconnect loop:
 	        return err
 	    }
 	}
+
+### func ValidateIdentifier
+
+```go
+func ValidateIdentifier(name string) error
+```
+
+ValidateIdentifier reports whether name is a strict MMS Identifier (ISO 9506-2 clause 7.5.2): 1..MaxIdentifierLength characters from A-Z a-z 0-9 $ \_. The client and server only enforce the length, so that names peers use outside the character set stay reachable; call this to check names you define yourself. The error matches ErrInvalidArgument.
 
 ## Types
 
@@ -613,9 +631,9 @@ type Captured struct {
 	// Session is the session SPDU: "connect", "accept", "refuse",
 	// "finish", "disconnect", "abort" or "data".
 	Session string
-	// Presentation is the presentation PPDU: "CP", "CPA", "user-data",
-	// or "" when the SPDU carries none (or one this decoder does not
-	// model, such as an abort PPDU).
+	// Presentation is the presentation PPDU: "CP", "CPA", "CPR",
+	// "user-data", "ARU" or "ARP" (ISO 8823-1), or "" when the SPDU
+	// carries none or one that does not decode.
 	Presentation string
 	// ACSE is set for an association control APDU (AARQ, AARE, RLRQ,
 	// RLRE, ABRT).
@@ -786,9 +804,12 @@ type Client struct {
 
 	// closed when reader loop exits
 	// why the reader loop exited; guarded by mu
-	// receives signal when ConcludeResponse arrives
+	// receives the Conclude outcome (nil: Conclude-Response)
 
 	// Negotiated parameters from MMS Initiate handshake.
+
+	// own localDetailCalling: largest PDU accepted
+	// server's localDetailCalled: largest PDU sent; 0 = unknown
 
 }
 ```
@@ -829,14 +850,17 @@ The ABRT PDU is sent best-effort and bounded by ctx; the transport is closed eve
 func (c *Client) Close(ctx context.Context) error
 ```
 
-Close performs an orderly shutdown of the MMS connection (Conclude). Use [Client.Abort](#func-client-abort) for an immediate one.
+Close performs an orderly shutdown of the MMS connection (Conclude and A-RELEASE, ISO 9506-2 Annex A.1.2). Use [Client.Abort](#func-client-abort) for an immediate one.
 
 Shutdown sequence:
 
  1. Marks the client as closed — all new service calls return ErrClosed.
  2. Cancels all pending confirmed requests with ErrClosed.
  3. Sends a ConcludeRequest and waits for the ConcludeResponse.
- 4. Stops the background reader loop and closes the transport.
+ 4. Sends the A-RELEASE (Session FINISH + ACSE RLRQ) and waits up to [DialOptions.ReleaseTimeout](#func-dialoptions-releasetimeout) for the DISCONNECT + RLRE. A server that closes the transport or does not answer still ends the association without an error.
+ 5. Stops the background reader loop and closes the transport.
+
+A Conclude-ErrorPDU makes Close abort the association (ISO 9506-2 24.3) and return an error carrying the \*[ServiceError](#type-serviceerror) (class conclude).
 
 This is NOT a graceful drain: pending requests are aborted immediately and their callers receive ErrClosed. Confirmed responses that arrive during the shutdown window (after CancelAll but before the reader exits) are discarded as unknown invoke IDs.
 
@@ -1399,6 +1423,15 @@ type DialOptions struct {
 	// {ServiceIdentify, ServiceStatus, ServiceGetNameList, ServiceRead,
 	// ServiceGetVariableAccessAttributes, ServiceGetNamedVariableListAttributes}.
 	AllowedServices []Service
+
+	// ReleaseTimeout bounds the A-RELEASE that [Client.Close] performs
+	// after the Conclude-Response: Session FINISH carrying an ACSE RLRQ,
+	// answered by DISCONNECT carrying an RLRE (ISO 9506-2 Annex A.1.2.1).
+	// Zero means 2s. A server that closes the transport or does not
+	// answer in time still ends the association without an error. A
+	// negative value skips the A-RELEASE: Close only concludes and closes
+	// the transport (the behaviour before v1.8.0).
+	ReleaseTimeout time.Duration
 }
 ```
 
@@ -1630,6 +1663,9 @@ type ISOOptions struct {
 	RemotePSelector   []byte
 	LocalSSelector    []byte
 	RemoteSSelector   []byte
+	// Selectors are at most 16 octets (ISO 8327-1 PI 51/52; IEC 61850-8-1
+	// SCL allows 8); a longer one fails NewClient with
+	// [ErrInvalidArgument] before anything is sent.
 
 	// Password, when non-nil, includes ACSE password authentication
 	// in the association request (AARQ). The server must be configured
@@ -1751,10 +1787,37 @@ type JournalEntry struct {
 	EntryID        []byte
 	OccurrenceTime time.Time
 	Variables      []JournalVariable
+
+	// Annotation holds the text of an annotation entry (ISO 9506-2
+	// clause 23.8.1 entryForm annotation [3]) when HasAnnotation is set;
+	// such an entry has no Variables.
+	HasAnnotation bool
+	Annotation    string
 }
 ```
 
 JournalEntry is a single entry returned by a ReadJournal call. These types are shared between client results and server-side [JournalProvider](#type-journalprovider) implementations; the journal entry shape is defined by the MMS protocol and is the same on both sides.
+
+### type JournalInitializer
+
+```go
+type JournalInitializer interface {
+	InitializeJournal(ctx context.Context, domain, journal string, limit *JournalLimit) (deleted uint32, err error)
+}
+```
+
+JournalInitializer is an optional extension of [JournalProvider](#type-journalprovider) for the InitializeJournal service (ISO 9506-2 clause 23.4; mandatory for a server with a log model, IEC 61850-8-1 Table 111 c12, Table 126). The server calls InitializeJournal with limit nil to delete every entry. It returns the number of entries deleted. Return an error wrapping [fs.ErrNotExist](https://pkg.go.dev/io/fs#ErrNotExist) for an unknown journal.
+
+### type JournalLimit
+
+```go
+type JournalLimit struct {
+	Time    time.Time
+	EntryID []byte // nil when the request has no limitingEntry
+}
+```
+
+JournalLimit is the limitSpecification of an InitializeJournal request (ISO 9506-2 clause 23.4): delete the entries up to and including Time, or, with EntryID, up to and including that entry at Time.
 
 ### type JournalProvider
 
@@ -1797,6 +1860,53 @@ The provider MAY return fewer than maxEntries entries. When [JournalResult.MoreF
 #### Error mapping {#hdr-Error_mapping}
 
 If the provider returns [fs.ErrNotExist](https://pkg.go.dev/io/fs#ErrNotExist), the server maps it to MMS error class "access" (7), code "object-non-existent" (0). If the provider returns [fs.ErrPermission](https://pkg.go.dev/io/fs#ErrPermission) or ErrFileAccessDenied, the server maps it to "access" (7), code "object-access-denied" (1). All other errors are mapped to "access" (7), code "other" (0).
+
+### type JournalQuery
+
+```go
+type JournalQuery struct {
+	Domain, Journal string
+
+	// Range start: StartTime (startingTime) or StartEntry (startingEntry,
+	// inclusive). Neither set: from the oldest entry.
+	HasStartTime bool
+	StartTime    time.Time
+	StartEntry   []byte
+
+	// Range stop: StopTime (endingTime) or NumberOfEntries. Neither set:
+	// to the newest entry.
+	HasStopTime        bool
+	StopTime           time.Time
+	HasNumberOfEntries bool
+	NumberOfEntries    int
+
+	// entryToStartAfter: return entries after (AfterTime, AfterID).
+	HasStartAfter bool
+	AfterTime     time.Time
+	AfterID       []byte
+
+	// ListOfVariables restricts the variables returned per entry; nil
+	// returns all.
+	ListOfVariables []string
+
+	// MaxEntries is the number of entries the server can send; the
+	// provider may return fewer and set MoreFollows.
+	MaxEntries int
+}
+```
+
+JournalQuery is a complete ReadJournal request (ISO 9506-2 clause 23.2). IEC 61850-8-1 Table 124 requires a server to support every option; the start and stop specifications are independent.
+
+### type JournalQueryProvider
+
+```go
+type JournalQueryProvider interface {
+	JournalProvider
+	ReadJournal(ctx context.Context, q JournalQuery) (*JournalResult, error)
+}
+```
+
+JournalQueryProvider is an optional extension of [JournalProvider](#type-journalprovider): a provider that implements it receives every ReadJournal request in full. Without it the server maps a request onto ReadTimeRange and ReadStartAfter, filtering and truncating the result; a startingEntry range start then cannot be served and is answered with access/object-access-unsupported.
 
 ### type JournalResult
 
@@ -1920,11 +2030,24 @@ NamedVariableListAttributes holds the result of a GetNamedVariableListAttributes
 
 ```go
 type NegotiatedParameters struct {
+	// MaxPDUSize is the smaller of this client's localDetailCalling and
+	// the server's localDetailCalled. Requests larger than the server's
+	// value are refused locally with [ErrInvalidArgument]; responses
+	// larger than this client's value are invalid.
 	MaxPDUSize    int
 	MaxOutCalling int
 	MaxOutCalled  int
 	NestingLevel  int
 	ServerVersion int
+
+	// ServicesSupportedCalled is the server's servicesSupportedCalled
+	// (ISO 9506-2 ServiceSupportOptions; bit n is the service whose
+	// ConfirmedServiceRequest tag is n, IEC 61850-8-1 Table 111).
+	ServicesSupportedCalled asn1.BitString
+	// ParameterCBB is the negotiated parameter CBB (ISO 9506-2
+	// ParameterSupportOptions: str1(0), str2(1), vnam(2), valt(3),
+	// vadr(4), vsca(5), tpy(6), vlis(7), real(8), cei(10)).
+	ParameterCBB asn1.BitString
 }
 ```
 
@@ -2151,6 +2274,50 @@ func (t RejectType) String() string
 
 String returns the ISO 9506-2 name of the reject type.
 
+### type RejectionError
+
+```go
+type RejectionError struct {
+	// SessionReason is the REFUSE Reason Code (ISO 8327-1: 0 no reason,
+	// 1 user congestion, 2 rejection by the user with data, 129+ by the
+	// session provider).
+	SessionReason int
+	// ProviderReason is the CPR provider-reason (ISO 8823-1).
+	ProviderReason int
+	// ACSEResult is the AARE result: 1 rejected-permanent,
+	// 2 rejected-transient.
+	ACSEResult int
+	// DiagnosticSource is 1 (acse-service-user) or 2 (acse-service-
+	// provider); Diagnostic is the result-source-diagnostic value.
+	DiagnosticSource int
+	Diagnostic       int
+	// InitiateError is the decoded Initiate-ErrorPDU, nil when absent.
+	InitiateError *ServiceError
+	// Transient reports a temporary refusal (session congestion,
+	// presentation temporary-congestion, ACSE rejected-transient); a
+	// later attempt may succeed.
+	Transient bool
+}
+```
+
+RejectionError reports an association the server refused: a Session REFUSE (ISO 8327-1) with its presentation CPR (ISO 8823-1), or an ACSE AARE with result rejected (ISO 8650-1), with the Initiate-ErrorPDU it carried (ISO 9506-2 8.2). Fields the refusal did not carry are -1.
+
+It matches ErrConnectionRejected, and also ErrAuthenticationFailed when the AARE diagnostic is one of the acse-service-user authentication diagnostics (11 to 14). [IsRetryable](#func-isretryable) reports Transient. The decoded Initiate-ErrorPDU is reachable with [errors.As](https://pkg.go.dev/errors#As) as a \*[ServiceError](#type-serviceerror).
+
+#### func (RejectionError) Error
+
+```go
+func (e *RejectionError) Error() string
+```
+
+#### func (RejectionError) Unwrap
+
+```go
+func (e *RejectionError) Unwrap() []error
+```
+
+Unwrap returns the sentinels the rejection matches and the Initiate-ErrorPDU.
+
 ### type RemoteAddrTransport
 
 ```go
@@ -2273,7 +2440,9 @@ String returns "client" or "server".
 
 ```go
 type Server struct {
-	// contains filtered or unexported fields
+
+	// association settings beyond mmsOpts
+
 }
 ```
 
@@ -2540,6 +2709,23 @@ type ServerOptions struct {
 	// is disconnected after it. Zero means 30s; a negative value disables
 	// the limit.
 	AssociationTimeout time.Duration
+
+	// ReleaseTimeout bounds how long Serve waits, after answering a
+	// Conclude-Request, for the client's A-RELEASE (Session FINISH
+	// carrying an ACSE RLRQ), which it answers with DISCONNECT + RLRE
+	// (ISO 9506-2 Annex A.1.2.2). A client that closes the transport
+	// instead ends the association normally. Zero means 2s; a negative
+	// value does not wait (Serve returns right after the
+	// Conclude-Response, the behaviour before v1.8.0).
+	ReleaseTimeout time.Duration
+
+	// RespondingAPTitle and RespondingAEQualifier, when the AP-title is
+	// non-empty, are sent in the AARE as responding-AP-title [4] and
+	// responding-AE-qualifier [5] (ISO 8650-1; ISO 9506-2 Annex A.1.1
+	// maps them to the Responding Application Reference). Nil sends
+	// neither.
+	RespondingAPTitle     APTitle
+	RespondingAEQualifier int
 }
 ```
 
@@ -2579,10 +2765,24 @@ type ServiceError struct {
 	Class    ErrorClass
 	Code     int
 	InvokeID InvokeID
+
+	// AdditionalCode is the optional additionalCode [1]; nil when absent.
+	AdditionalCode *int
+	// AdditionalDescription is the optional additionalDescription [2]
+	// (a VisibleString); "" when absent.
+	AdditionalDescription string
+	// ServiceSpecific is the optional serviceSpecificInfo [3]; nil when
+	// absent.
+	ServiceSpecific *ServiceSpecificInfo
+	// ModifierPosition is the optional modifierPosition [1] of the
+	// Confirmed-ErrorPDU (clause 7.4); nil when absent. A server ignores it.
+	ModifierPosition *uint32
 }
 ```
 
 ServiceError represents a remote MMS service error received via ConfirmedErrorPDU. Use [errors.As](https://pkg.go.dev/errors#As) to extract it from wrapped errors.
+
+The optional ServiceError components of ISO 9506-2 clause 7.4.1 are carried when the peer sends them; a [Server](#type-server) handler may set them too. A Conclude-ErrorPDU (Conclude-ErrorPDU ::= ServiceError, clause 8.4.3) is returned by [Client.Close](#func-client-close) as a ServiceError with InvokeID 0.
 
 #### func (ServiceError) CodeName
 
@@ -2603,6 +2803,19 @@ func (e *ServiceError) Error() string
 ```go
 func (e *ServiceError) Unwrap() error
 ```
+
+### type ServiceSpecificInfo
+
+```go
+type ServiceSpecificInfo struct {
+	Kind     int
+	Raw      []byte
+	HasValue bool
+	Value    int
+}
+```
+
+ServiceSpecificInfo is the serviceSpecificInfo \[3] CHOICE of a ServiceError (ISO 9506-2 clause 7.4.1). Kind is the alternative's tag number: 0 obtainFile, 1 start, 2 stop, 3 resume, 4 reset, 5 deleteVariableAccess, 6 deleteNamedVariableList, 7 deleteNamedType, 8 defineEventEnrollment, 9 fileRename, 10 additionalService, 11 changeAccessControl. For the alternatives that are a single INTEGER or ENUMERATED (for example numberDeleted of DeleteNamedVariableList-Error) HasValue is set and Value holds it; Raw always holds the contents octets.
 
 ### type StatusRequest
 
@@ -2754,13 +2967,15 @@ TypeSpecElement represents a single element within a structure type specificatio
 type VMDLogicalStatus int
 ```
 
-VMDLogicalStatus represents the logical status of a VMD (Virtual Manufacturing Device).
+VMDLogicalStatus represents the logical status of a VMD (Virtual Manufacturing Device): vmdLogicalStatus of Status-Response, 0..3 (ISO 9506-2 clause 10.2).
 
 ```go
 const (
 	VMDLogicalStatusStateChangesAllowed VMDLogicalStatus = 0
 	VMDLogicalStatusNoStateChanges      VMDLogicalStatus = 1
 	VMDLogicalStatusLimited             VMDLogicalStatus = 2
+	// VMDLogicalStatusSupportServices is support-services-allowed (3).
+	VMDLogicalStatusSupportServices VMDLogicalStatus = 3
 )
 ```
 
@@ -2804,6 +3019,7 @@ type Value struct {
 
 	// Exactly one of these is populated based on typ.
 
+	// Float: 0 not declared (sent as 32-bit), 32 or 64
 	// OctetString, BitString
 	// BitString: number of valid bits
 	// VisibleString, MmsString
@@ -2903,7 +3119,25 @@ NewDataAccessError creates a [Value](#type-value) of type ValueTypeDataAccessErr
 func NewFloat(f float64) *Value
 ```
 
-NewFloat creates a [Value](#type-value) of type ValueTypeFloat.
+NewFloat creates a [Value](#type-value) of type ValueTypeFloat without a declared width. It is encoded as a single-precision floating-point (format width 32, exponent width 8: IEC 61850 FLOAT32) unless a [Server](#type-server) serves it for a variable whose [TypeSpec](#type-typespec) declares 64 bits. The MMS Floatingpoint width is a property of the variable's type (ISO 9506-2 clause 14.4, TypeDescription floating-point), not of the value. Use [NewFloat64](#func-newfloat64) to send double precision and [NewFloat32](#func-newfloat32) to state single precision.
+
+Up to v1.7.2 the width followed the value (9 octets whenever float32 could not represent it exactly), so a FLOAT32 attribute could be written with a double.
+
+#### func NewFloat32
+
+```go
+func NewFloat32(f float32) *Value
+```
+
+NewFloat32 creates a single-precision ValueTypeFloat (format width 32, exponent width 8; IEC 61850 FLOAT32).
+
+#### func NewFloat64
+
+```go
+func NewFloat64(f float64) *Value
+```
+
+NewFloat64 creates a double-precision ValueTypeFloat (format width 64, exponent width 11; IEC 61850 FLOAT64).
 
 #### func NewGeneralizedTime
 
@@ -3088,6 +3322,14 @@ func (v *Value) Float64() (val float64, ok bool)
 ```
 
 Float64 returns a 64-bit float. ok is false if the value is not ValueTypeFloat.
+
+#### func (Value) FloatWidth
+
+```go
+func (v *Value) FloatWidth() int
+```
+
+FloatWidth returns the declared width of a ValueTypeFloat in bits: 32 or 64 for a value decoded from the wire or made by [NewFloat32](#func-newfloat32) or [NewFloat64](#func-newfloat64), 0 for [NewFloat](#func-newfloat) (encoded as 32 bits). It returns 0 for any other type.
 
 #### func (Value) GeneralizedTime
 

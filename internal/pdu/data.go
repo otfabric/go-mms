@@ -85,7 +85,11 @@ func MarshalData(v *DataValue) ([]byte, error) {
 		return berutil.EncodeTLV(TagDataFloat, encodeFloat(v.Float, v.FloatWide)), nil
 
 	case TagDataBitString:
-		return berutil.EncodeTLV(TagDataBitString, encodeBitString(v.Bytes, v.BitLen)), nil
+		content, err := encodeBitString(v.Bytes, v.BitLen)
+		if err != nil {
+			return nil, fmt.Errorf("pdu: bit string: %w", err)
+		}
+		return berutil.EncodeTLV(TagDataBitString, content), nil
 
 	case TagDataOctetString:
 		return berutil.EncodeTLV(TagDataOctetString, v.Bytes), nil
@@ -117,7 +121,11 @@ func MarshalData(v *DataValue) ([]byte, error) {
 		return berutil.EncodeTLV(TagDataReal, encodeASN1Real(v.Float)), nil
 
 	case TagDataBooleanArray:
-		return berutil.EncodeTLV(TagDataBooleanArray, encodeBitString(v.Bytes, v.BitLen)), nil
+		content, err := encodeBitString(v.Bytes, v.BitLen)
+		if err != nil {
+			return nil, fmt.Errorf("pdu: boolean array: %w", err)
+		}
+		return berutil.EncodeTLV(TagDataBooleanArray, content), nil
 
 	case TagDataObjId:
 		content, err := berutil.EncodeObjectIdentifier(v.OID)
@@ -133,6 +141,11 @@ func MarshalData(v *DataValue) ([]byte, error) {
 		return berutil.EncodeTLV(TagDataGenTime, []byte(ts)), nil
 
 	case TagDataBCD:
+		// bcd [13] IMPLICIT INTEGER "shall not be negative" (ISO
+		// 9506-2 clause 14.4.2, Data).
+		if v.Int < 0 {
+			return nil, fmt.Errorf("pdu: bcd %d: a BCD value shall not be negative (ISO 9506-2 clause 14.4.2)", v.Int)
+		}
 		return berutil.EncodeTLV(TagDataBCD, encodeSignedInt(v.Int)), nil
 
 	case TagDataArray, TagDataStructure:
@@ -299,7 +312,7 @@ func decodeDataContentWithDepth(tag byte, content []byte, depth int) (*DataValue
 		return &DataValue{Tag: tag, OID: oid}, nil
 
 	case TagDataGenTime:
-		t, err := time.Parse("20060102150405Z", string(content))
+		t, err := ParseGeneralizedTime(string(content))
 		if err != nil {
 			return nil, fmt.Errorf("pdu: generalized time: %w", err)
 		}
@@ -309,6 +322,9 @@ func decodeDataContentWithDepth(tag byte, content []byte, depth int) (*DataValue
 		v, err := decodeSignedInt(content)
 		if err != nil {
 			return nil, fmt.Errorf("pdu: bcd integer: %w", err)
+		}
+		if v < 0 {
+			return nil, fmt.Errorf("pdu: bcd %d: a BCD value shall not be negative (ISO 9506-2 clause 14.4.2)", v)
 		}
 		return &DataValue{Tag: tag, Int: v}, nil
 
@@ -451,21 +467,29 @@ func decodeFloat(data []byte) (float64, bool, error) {
 
 // BitString encoding: [unused_bits] [data_bytes]
 
-func encodeBitString(data []byte, bitLen int) []byte {
-	if len(data) == 0 {
-		return []byte{0}
+// encodeBitString encodes BIT STRING contents (X.690 clause 8.6.2): the
+// initial octet gives the unused bits (0..7) of the last octet. bitLen 0
+// with data means every bit of data (len(data)*8); otherwise data must
+// hold exactly ceil(bitLen/8) octets, so the value and the encoding
+// agree. The unused bits are sent as zero (X.690 clause 11.2.1, which
+// BER permits and DER requires).
+func encodeBitString(data []byte, bitLen int) ([]byte, error) {
+	if bitLen < 0 {
+		return nil, fmt.Errorf("negative bit length %d", bitLen)
 	}
-	unused := byte(0)
-	if bitLen > 0 {
-		remainder := bitLen % 8
-		if remainder != 0 {
-			unused = byte(8 - remainder)
-		}
+	if bitLen == 0 {
+		bitLen = len(data) * 8
+	}
+	if need := (bitLen + 7) / 8; len(data) != need {
+		return nil, fmt.Errorf("bit length %d needs %d octets, got %d", bitLen, need, len(data))
 	}
 	content := make([]byte, 1+len(data))
-	content[0] = unused
 	copy(content[1:], data)
-	return content
+	if r := bitLen % 8; r != 0 {
+		content[0] = byte(8 - r)
+		content[len(content)-1] &= byte(0xff << (8 - r))
+	}
+	return content, nil
 }
 
 func decodeBitString(data []byte) ([]byte, int, error) {
@@ -484,6 +508,10 @@ func decodeBitString(data []byte) ([]byte, int, error) {
 	}
 	rawBytes := make([]byte, len(data)-1)
 	copy(rawBytes, data[1:])
+	// The unused bits carry no value; BER leaves them to the sender
+	// (zero only in DER, X.690 clause 11.2.1). They are cleared so a
+	// received value equals the one it re-encodes to.
+	rawBytes[len(rawBytes)-1] &= byte(0xff << unused)
 	bitLen := len(rawBytes)*8 - unused
 	return rawBytes, bitLen, nil
 }
@@ -529,8 +557,8 @@ func decodeUTCTime(data []byte) (time.Time, uint8, error) {
 //
 // TimeOfDay (ISO 9506-2:2003 §7.5.1) is four octets of milliseconds since
 // midnight, optionally followed by two octets of days since 1984-01-01.
-// "Bits twenty-eight through thirty-one shall always be set to zero", so
-// the millisecond field is 28 bits wide; nothing limits it to one day.
+// The top four bits of the first word are always zero, so the
+// millisecond field is 28 bits wide; nothing limits it to one day.
 //
 // go-mms represents the 4-octet form as the millisecond field itself,
 // 0..2^28-1, and the 6-octet form as milliseconds since the Unix epoch,

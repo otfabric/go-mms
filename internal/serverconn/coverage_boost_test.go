@@ -66,6 +66,7 @@ func TestServe_CancelRequest(t *testing.T) {
 	// Follow with conclude so Serve returns.
 	// The channel is buffered, so the conclude can be queued up front.
 	client.send <- isostack.EncodeDataRequest(codec.MarshalConcludeRequest())
+	client.send <- isostack.EncodeReleaseRequest()
 
 	if err := c.Serve(ctx); err != nil {
 		t.Fatalf("Serve: %v", err)
@@ -129,6 +130,7 @@ func TestServe_CancelRequestMalformed(t *testing.T) {
 
 	// The channel is buffered, so the conclude can be queued up front.
 	client.send <- isostack.EncodeDataRequest(codec.MarshalConcludeRequest())
+	client.send <- isostack.EncodeReleaseRequest()
 	if err := c.Serve(ctx); err != nil {
 		t.Fatalf("Serve: %v", err)
 	}
@@ -163,6 +165,7 @@ func TestServe_UnexpectedPDUKind(t *testing.T) {
 
 	// The channel is buffered, so the conclude can be queued up front.
 	client.send <- isostack.EncodeDataRequest(codec.MarshalConcludeRequest())
+	client.send <- isostack.EncodeReleaseRequest()
 	if err := c.Serve(ctx); err != nil {
 		t.Fatalf("Serve: %v", err)
 	}

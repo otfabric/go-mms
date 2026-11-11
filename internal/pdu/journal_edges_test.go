@@ -70,10 +70,12 @@ func TestUnmarshalReadJournalRequest_Edges(t *testing.T) {
 		t.Fatal("bad binary time in rangeStart")
 	}
 
-	// Only start, no stop.
+	// Only start, no stop: rangeStop is OPTIONAL and independent of
+	// rangeStart (ISO 9506-2 clause 23.2, IEC 61850-8-1 Table 124; this
+	// used to be rejected, MMS-PDU-12).
 	onlyStart := append(nameWrapped, berutil.EncodeTLV(0xa1, berutil.EncodeTLV(0x80, encodeBinaryTime(1)))...)
-	if _, err := UnmarshalReadJournalRequest(onlyStart); err == nil {
-		t.Fatal("time-range requires stop")
+	if r, err := UnmarshalReadJournalRequest(onlyStart); err != nil || !r.HasStartTime || r.HasStopTime || r.IsTimeRange {
+		t.Fatalf("start only = %+v, %v", r, err)
 	}
 
 	// Bad rangeStop.
@@ -101,20 +103,26 @@ func TestUnmarshalReadJournalRequest_Edges(t *testing.T) {
 	}
 }
 
-func TestDecodeTimeField_Direct(t *testing.T) {
-	if _, err := decodeTimeField([]byte{0x80, 0x05}); err == nil {
+func TestDecodeRangeStartStop_Direct(t *testing.T) {
+	req := &ReadJournalRequest{}
+	if err := decodeRangeStart([]byte{0x80, 0x05}, req); err == nil {
 		t.Fatal("truncated")
 	}
-	if _, err := decodeTimeField(berutil.EncodeTLV(0x81, []byte{1})); err == nil {
-		t.Fatal("missing 0x80")
+	if err := decodeRangeStart(berutil.EncodeTLV(0x82, []byte{1}), req); err == nil {
+		t.Fatal("unknown alternative")
 	}
-	if _, err := decodeTimeField(berutil.EncodeTLV(0x80, []byte{1, 2})); err == nil {
+	if err := decodeRangeStart(berutil.EncodeTLV(0x80, []byte{1, 2}), req); err == nil {
 		t.Fatal("bad binary time")
 	}
 	wantMS := time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC).UnixMilli()
-	got, err := decodeTimeField(berutil.EncodeTLV(0x80, encodeBinaryTime(wantMS)))
-	if err != nil || got.UnixMilli() != wantMS {
-		t.Fatalf("got %v wantMS=%d err=%v", got, wantMS, err)
+	if err := decodeRangeStart(berutil.EncodeTLV(0x80, encodeBinaryTime(wantMS)), req); err != nil || req.StartTime.UnixMilli() != wantMS {
+		t.Fatalf("got %v wantMS=%d err=%v", req.StartTime, wantMS, err)
+	}
+	for _, in := range [][]byte{{0x80, 0x05}, berutil.EncodeTLV(0x82, []byte{1}), berutil.EncodeTLV(0x80, []byte{1}),
+		berutil.EncodeTLV(0x81, []byte{0xff}), berutil.EncodeTLV(0x81, []byte{1, 2, 3, 4, 5})} {
+		if err := decodeRangeStop(in, req); err == nil {
+			t.Errorf("decodeRangeStop(%x) accepted", in)
+		}
 	}
 }
 

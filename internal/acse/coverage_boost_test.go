@@ -115,36 +115,45 @@ func TestParseExternalPayload_Edges(t *testing.T) {
 	}
 }
 
-func TestValidateRLRQAndABRT_Edges(t *testing.T) {
-	if err := validateRLRQ(nil); err != nil {
+// ISO 8650-1 RLRQ/RLRE/ABRT are extensible SEQUENCEs: optional and
+// unknown trailing elements are accepted (MMS-STK-16); malformed values
+// are not.
+func TestParseReleaseAndABRT_Edges(t *testing.T) {
+	r := &ParsedAPDU{Type: ApduRLRQ, Reason: -1}
+	if err := parseRelease(nil, r); err != nil || r.Reason != -1 {
 		t.Fatal(err)
 	}
-	if err := validateRLRQ([]byte{0xff}); err == nil {
+	if err := parseRelease([]byte{0xff}, r); err == nil {
 		t.Fatal("RLRQ TLV")
 	}
-	if err := validateRLRQ(berutil.EncodeTLV(0x81, nil)); err == nil {
-		t.Fatal("RLRQ wrong tag")
+	if err := parseRelease(berutil.EncodeTLV(0x80, nil), r); err == nil {
+		t.Fatal("RLRQ empty reason")
 	}
-	if err := validateRLRQ(append(berutil.EncodeTLV(0x80, []byte{0}), 0x00)); err == nil {
-		t.Fatal("RLRQ trailing")
+	if err := parseRelease(berutil.EncodeTLV(0xbe, []byte{0xff}), r); err == nil {
+		t.Fatal("RLRQ bad user-information")
 	}
-	if err := validateRLRQ(berutil.EncodeTLV(0x80, []byte{0})); err != nil {
-		t.Fatal(err)
+	if err := parseRelease(append(berutil.EncodeTLV(0x80, []byte{1}), berutil.EncodeTLV(0xad, nil)...), r); err != nil || r.Reason != 1 {
+		t.Fatalf("RLRQ with aso-qualifier: %v reason %d", err, r.Reason)
 	}
 
-	if err := validateABRT(nil); err == nil {
+	a := &ParsedAPDU{Type: ApduABRT, AbortSource: -1, AbortDiagnostic: -1}
+	if err := parseABRT(nil, a); err == nil {
 		t.Fatal("ABRT empty")
 	}
-	if err := validateABRT([]byte{0xff}); err == nil {
+	if err := parseABRT([]byte{0xff}, a); err == nil {
 		t.Fatal("ABRT TLV")
 	}
-	if err := validateABRT(berutil.EncodeTLV(0x81, nil)); err == nil {
-		t.Fatal("ABRT wrong tag")
+	if err := parseABRT(berutil.EncodeTLV(0x81, []byte{1}), a); err == nil {
+		t.Fatal("ABRT without source")
 	}
-	if err := validateABRT(append(berutil.EncodeTLV(0x80, []byte{0}), 0x00)); err == nil {
-		t.Fatal("ABRT trailing")
+	if err := parseABRT(berutil.EncodeTLV(0x80, nil), a); err == nil {
+		t.Fatal("ABRT empty source")
 	}
-	if err := validateABRT(berutil.EncodeTLV(0x80, []byte{0})); err != nil {
+	if err := parseABRT(append(berutil.EncodeTLV(0x80, []byte{0}), berutil.EncodeTLV(0xbe, []byte{0xff})...), a); err == nil {
+		t.Fatal("ABRT bad user-information")
+	}
+	a = &ParsedAPDU{Type: ApduABRT, AbortSource: -1, AbortDiagnostic: -1}
+	if err := parseABRT(append(berutil.EncodeTLV(0x80, []byte{0}), 0xa9, 0x00), a); err != nil || a.AbortSource != 0 {
 		t.Fatal(err)
 	}
 }

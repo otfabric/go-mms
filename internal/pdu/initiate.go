@@ -106,7 +106,7 @@ func MarshalInitiateRequest(req InitiateRequest) ([]byte, error) {
 // accepted: when the content already begins with 0x30 it is used as-is.
 func UnmarshalInitiateRequest(content []byte) (*InitiateRequest, error) {
 	var req InitiateRequest
-	seq := wrapSequenceIfNeeded(content)
+	seq := wrapSequenceIfNeeded(normalizeInitiate(content))
 	rest, err := asn1.Unmarshal(seq, &req)
 	if err != nil {
 		return nil, fmt.Errorf("pdu: unmarshal initiate request: %w", err)
@@ -130,7 +130,7 @@ func UnmarshalInitiateRequest(content []byte) (*InitiateRequest, error) {
 // accepted: when the content already begins with 0x30 it is used as-is.
 func UnmarshalInitiateResponse(content []byte) (*InitiateResponse, error) {
 	var resp InitiateResponse
-	seq := wrapSequenceIfNeeded(content)
+	seq := wrapSequenceIfNeeded(normalizeInitiate(content))
 	rest, err := asn1.Unmarshal(seq, &resp)
 	if err != nil {
 		return nil, fmt.Errorf("pdu: unmarshal initiate response: %w", err)

@@ -206,7 +206,11 @@ const (
 	// Deprecated: Use [DataAccessErrorTypeUnsupported].
 	DataAccessErrorTypeMismatch = DataAccessErrorTypeUnsupported
 
-	// Deprecated: Use [DataAccessErrorObjectAttributeInconsistent].
+	// Deprecated: Use [DataAccessErrorObjectAttributeInconsistent]. The
+	// name is misleading: object-exists is not a DataAccessError but the
+	// definition-class ServiceError code 5 (ISO 9506-2 clause 7.4.1);
+	// the alias keeps the value of object-attribute-inconsistent (8) for
+	// compatibility.
 	DataAccessErrorObjectExists = DataAccessErrorObjectAttributeInconsistent
 )
 
@@ -282,19 +286,23 @@ func (c ErrorClass) String() string {
 }
 
 // VMDLogicalStatus represents the logical status of a VMD (Virtual
-// Manufacturing Device).
+// Manufacturing Device): vmdLogicalStatus of Status-Response, 0..3 (ISO
+// 9506-2 clause 10.2).
 type VMDLogicalStatus int
 
 const (
 	VMDLogicalStatusStateChangesAllowed VMDLogicalStatus = 0
 	VMDLogicalStatusNoStateChanges      VMDLogicalStatus = 1
 	VMDLogicalStatusLimited             VMDLogicalStatus = 2
+	// VMDLogicalStatusSupportServices is support-services-allowed (3).
+	VMDLogicalStatusSupportServices VMDLogicalStatus = 3
 )
 
 var vmdLogicalStatusNames = [...]string{
 	"StateChangesAllowed",
 	"NoStateChanges",
 	"Limited",
+	"SupportServices",
 }
 
 // String returns the human-readable name of the VMDLogicalStatus.
@@ -697,11 +705,24 @@ type WriteAccessResult struct {
 // NegotiatedParameters holds the MMS parameters negotiated during
 // association establishment. Access via [Client.Negotiated].
 type NegotiatedParameters struct {
+	// MaxPDUSize is the smaller of this client's localDetailCalling and
+	// the server's localDetailCalled. Requests larger than the server's
+	// value are refused locally with [ErrInvalidArgument]; responses
+	// larger than this client's value are invalid.
 	MaxPDUSize    int
 	MaxOutCalling int
 	MaxOutCalled  int
 	NestingLevel  int
 	ServerVersion int
+
+	// ServicesSupportedCalled is the server's servicesSupportedCalled
+	// (ISO 9506-2 ServiceSupportOptions; bit n is the service whose
+	// ConfirmedServiceRequest tag is n, IEC 61850-8-1 Table 111).
+	ServicesSupportedCalled asn1.BitString
+	// ParameterCBB is the negotiated parameter CBB (ISO 9506-2
+	// ParameterSupportOptions: str1(0), str2(1), vnam(2), valt(3),
+	// vadr(4), vsca(5), tpy(6), vlis(7), real(8), cei(10)).
+	ParameterCBB asn1.BitString
 }
 
 // FileOpenOptions configures a [Client.FileOpen] call. The zero value
