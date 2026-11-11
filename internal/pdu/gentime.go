@@ -115,5 +115,12 @@ func parseGeneralizedTime(s string) (time.Time, error) {
 	if t.Day() != day {
 		return time.Time{}, errGeneralizedTime // e.g. 20240230
 	}
-	return t.Add(frac).UTC(), nil
+	// The offset can move the instant out of the four-digit years a
+	// GeneralizedTime can carry (0000 with +01 is year -1 in UTC); such a
+	// time could not be sent back.
+	u := t.Add(frac).UTC()
+	if u.Year() < 0 || u.Year() > 9999 {
+		return time.Time{}, errGeneralizedTime
+	}
+	return u, nil
 }
