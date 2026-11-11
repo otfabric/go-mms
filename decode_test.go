@@ -118,7 +118,9 @@ func TestDecodeTSDU_Association(t *testing.T) {
 	if sessions[0] != "connect" || sessions[1] != "accept" {
 		t.Errorf("sessions = %v", sessions)
 	}
-	if len(acses) != 2 || acses[0] != "AARQ" || acses[1] != "AARE" {
+	// Close releases the association after the Conclude (ISO 9506-2
+	// Annex A.1.2): RLRQ in a FINISH, RLRE in a DISCONNECT.
+	if len(acses) != 4 || acses[0] != "AARQ" || acses[1] != "AARE" || acses[2] != "RLRQ" || acses[3] != "RLRE" {
 		t.Errorf("ACSE = %v", acses)
 	}
 	if p := seen["initiate-request "]; p == nil || p.Initiate == nil || p.Initiate.Version != 1 {

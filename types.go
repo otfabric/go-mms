@@ -697,11 +697,24 @@ type WriteAccessResult struct {
 // NegotiatedParameters holds the MMS parameters negotiated during
 // association establishment. Access via [Client.Negotiated].
 type NegotiatedParameters struct {
+	// MaxPDUSize is the smaller of this client's localDetailCalling and
+	// the server's localDetailCalled. Requests larger than the server's
+	// value are refused locally with [ErrInvalidArgument]; responses
+	// larger than this client's value are invalid.
 	MaxPDUSize    int
 	MaxOutCalling int
 	MaxOutCalled  int
 	NestingLevel  int
 	ServerVersion int
+
+	// ServicesSupportedCalled is the server's servicesSupportedCalled
+	// (ISO 9506-2 ServiceSupportOptions; bit n is the service whose
+	// ConfirmedServiceRequest tag is n, IEC 61850-8-1 Table 111).
+	ServicesSupportedCalled asn1.BitString
+	// ParameterCBB is the negotiated parameter CBB (ISO 9506-2
+	// ParameterSupportOptions: str1(0), str2(1), vnam(2), valt(3),
+	// vadr(4), vsca(5), tpy(6), vlis(7), real(8), cei(10)).
+	ParameterCBB asn1.BitString
 }
 
 // FileOpenOptions configures a [Client.FileOpen] call. The zero value

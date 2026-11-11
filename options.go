@@ -56,6 +56,15 @@ type DialOptions struct {
 	// {ServiceIdentify, ServiceStatus, ServiceGetNameList, ServiceRead,
 	// ServiceGetVariableAccessAttributes, ServiceGetNamedVariableListAttributes}.
 	AllowedServices []Service
+
+	// ReleaseTimeout bounds the A-RELEASE that [Client.Close] performs
+	// after the Conclude-Response: Session FINISH carrying an ACSE RLRQ,
+	// answered by DISCONNECT carrying an RLRE (ISO 9506-2 Annex A.1.2.1).
+	// Zero means 2s. A server that closes the transport or does not
+	// answer in time still ends the association without an error. A
+	// negative value skips the A-RELEASE: Close only concludes and closes
+	// the transport (the behaviour before v1.8.0).
+	ReleaseTimeout time.Duration
 }
 
 // Directions passed to [DialOptions.RawHook].
@@ -99,6 +108,9 @@ type ISOOptions struct {
 	RemotePSelector   []byte
 	LocalSSelector    []byte
 	RemoteSSelector   []byte
+	// Selectors are at most 16 octets (ISO 8327-1 PI 51/52; IEC 61850-8-1
+	// SCL allows 8); a longer one fails NewClient with
+	// [ErrInvalidArgument] before anything is sent.
 
 	// Password, when non-nil, includes ACSE password authentication
 	// in the association request (AARQ). The server must be configured

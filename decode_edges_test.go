@@ -122,9 +122,13 @@ func TestDecodeTSDU_Layers(t *testing.T) {
 	if got, err := DecodeTSDU(must(session.EncodeConnect(session.ConnectParams{}, nil))); err != nil || got.Session != "connect" || got.Presentation != "" {
 		t.Errorf("bare connect = %+v, %v", got, err)
 	}
-	// An abort whose presentation PDU is not modelled.
-	if got, err := DecodeTSDU(must(session.EncodeAbort([]byte{0xa0, 0x00}))); err != nil || got.Session != "abort" || got.Presentation != "" {
+	// An abort carrying an empty ARU-PPDU (ISO 8823-1), and one whose
+	// presentation PDU does not decode.
+	if got, err := DecodeTSDU(must(session.EncodeAbort([]byte{0xa0, 0x00}))); err != nil || got.Session != "abort" || got.Presentation != "ARU" || got.ACSE != nil {
 		t.Errorf("abort with ARU = %+v, %v", got, err)
+	}
+	if got, err := DecodeTSDU(must(session.EncodeAbort([]byte{0xff}))); err != nil || got.Session != "abort" || got.Presentation != "" {
+		t.Errorf("abort with junk = %+v, %v", got, err)
 	}
 	// ACSE that does not decode, an MMS PDU that does not decode.
 	if _, err := DecodeTSDU(session.EncodeData(presentation.EncodeUserData(presentation.ContextIDACSE, garbage))); err == nil || !strings.Contains(err.Error(), "acse") {

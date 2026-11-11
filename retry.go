@@ -103,7 +103,8 @@ func randFloat64() float64 {
 // IsRetryable is the default [RetryPolicy.Retryable] classification. It
 // returns false for errors that another attempt cannot fix — context
 // cancellation, invalid arguments, authentication failures, and
-// associations rejected by the peer — and true for everything else
+// associations rejected by the peer (a [RejectionError] is retryable
+// only when Transient) — and true for everything else
 // (refused or dropped connections, timeouts including a per-attempt
 // context deadline, protocol failures during the handshake). [Retry]
 // stops on its own when its context is done.
@@ -113,6 +114,8 @@ func IsRetryable(err error) bool {
 		return false
 	case errors.Is(err, context.Canceled):
 		return false
+	case isRejection(err):
+		return transientRejection(err)
 	case errors.Is(err, ErrInvalidArgument),
 		errors.Is(err, ErrAuthenticationFailed),
 		errors.Is(err, ErrConnectionRejected):
@@ -175,4 +178,17 @@ func Retry(ctx context.Context, p RetryPolicy, fn func(ctx context.Context) erro
 		case <-t.C:
 		}
 	}
+}
+
+func isRejection(err error) bool {
+	_, ok := errors.AsType[*RejectionError](err)
+	return ok
+}
+
+// transientRejection reports a [RejectionError] for a temporary refusal
+// (congestion, ACSE rejected-transient), which a later attempt may
+// overcome.
+func transientRejection(err error) bool {
+	re, _ := errors.AsType[*RejectionError](err)
+	return re.Transient
 }

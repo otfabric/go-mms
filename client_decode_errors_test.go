@@ -10,7 +10,6 @@ import (
 
 	"github.com/otfabric/go-mms/internal/asn1util"
 	"github.com/otfabric/go-mms/internal/codec"
-	"github.com/otfabric/go-mms/internal/isostack"
 	"github.com/otfabric/go-mms/internal/pdu"
 )
 
@@ -74,10 +73,10 @@ func TestNewClient_BadAssociationResponse(t *testing.T) {
 		want  error
 	}{
 		{"not a session SPDU", []byte{0xff, 0x00}, ErrDecodeFailed},
-		{"no MMS payload", mustEncode(t)(isostack.EncodeAssociateResponse(nil)), ErrProtocol},
-		{"undecodable MMS payload", mustEncode(t)(isostack.EncodeAssociateResponse([]byte{0xff})), ErrDecodeFailed},
-		{"not an InitiateResponse", mustEncode(t)(isostack.EncodeAssociateResponse(identify)), ErrProtocol},
-		{"malformed InitiateResponse", mustEncode(t)(isostack.EncodeAssociateResponse([]byte{asn1util.TagInitiateResponse, 0x02, 0xff, 0x00})), ErrDecodeFailed},
+		{"no MMS payload", encodeAccept(t, nil), ErrProtocol},
+		{"undecodable MMS payload", encodeAccept(t, []byte{0xff}), ErrDecodeFailed},
+		{"not an InitiateResponse", encodeAccept(t, identify), ErrProtocol},
+		{"malformed InitiateResponse", encodeAccept(t, []byte{asn1util.TagInitiateResponse, 0x02, 0xff, 0x00}), ErrDecodeFailed},
 	}
 	for _, tc := range cases {
 		_, err := NewClient(context.Background(), &replyTransport{reply: tc.reply}, DialOptions{})

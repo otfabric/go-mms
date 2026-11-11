@@ -21,7 +21,7 @@ func unitClient(conn Transport) *Client {
 		logger:     slog.New(discardHandler{}),
 		conn:       conn,
 		tracker:    invoke.NewTracker(0),
-		concludeCh: make(chan struct{}, 1),
+		concludeCh: make(chan error, 1),
 		readerDone: make(chan struct{}),
 		maxPDUSize: 64,
 	}
@@ -256,7 +256,10 @@ func TestReaderLoop_Edges(t *testing.T) {
 			t.Fatal("conclude error should stop reader")
 		}
 		select {
-		case <-c.concludeCh:
+		case err := <-c.concludeCh:
+			if err == nil {
+				t.Fatal("Conclude-Error signaled as success")
+			}
 		default:
 			t.Fatal("concludeCh should be signaled")
 		}
