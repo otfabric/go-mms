@@ -80,7 +80,7 @@ coverage-clean: ## Remove coverage artifacts
 	@echo "Removing coverage artifacts"
 	rm -f coverage.out coverage.txt coverage.html
 
-fuzz: ## Run every fuzz target for FUZZTIME each (default 15s)
+fuzz: ## Run every fuzz target for FUZZTIME each (default 15s); FUZZ_SHARD=i/n runs every n-th target from the i-th
 	@scripts/fuzz.sh
 
 fuzz-short: ## Run every fuzz target for 2s (smoke test, part of check)
@@ -98,8 +98,8 @@ e2e: ## Run the end-to-end suite (go-mms client against go-mms server over TCP) 
 
 CHAOS_DURATION ?= 30s
 CHAOS_SEED     ?= 0
-# Four tests run for CHAOS_DURATION each, one after the other: keep this
-# above 4 x CHAOS_DURATION.
+# Six of the TestChaos_* and TestStress_* tests run for CHAOS_DURATION each, one
+# after the other: keep this above 6 x CHAOS_DURATION.
 CHAOS_TIMEOUT  ?= 30m
 
 chaos: ## Run chaos and stress tests under -race for CHAOS_DURATION each (default 30s) with a random seed (CHAOS_SEED=0)

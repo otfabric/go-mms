@@ -1,5 +1,20 @@
 # go-mms Releases
 
+## v1.9.1
+
+**Date:** 2026-11-11
+**Previous release:** v1.9.0
+
+No change to the library's behaviour or API.
+
+### CI
+
+- The nightly chaos job failed every night since 2026-11-04: six timed tests at 10 minutes each exceeded its 40-minute test timeout. It now runs them for 5 minutes each (`CHAOS_TIMEOUT=45m`).
+- The nightly fuzz job splits the 70 targets over three jobs (`FUZZ_SHARD=i/3`, new in `scripts/fuzz.sh`); one job at 2 minutes per target no longer fit its 150-minute limit.
+- Shared workflows `otfabric/.github` v3.6.0 (from v3.3.1 and v3.5.0), `otfabric-policy` v1.5.0, and golangci-lint v2.15.0 in CI instead of the shared default v2.1.6.
+
+---
+
 ## v1.9.0
 
 **Date:** 2026-11-11

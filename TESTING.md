@@ -35,7 +35,7 @@ inject faults. Under `go test` they run for 500 ms with seed 1.
 
 | Variable | Meaning |
 |---|---|
-| `MMS_CHAOS_DURATION` | run time of each timed test, a Go duration; `make chaos` sets it from `CHAOS_DURATION` (default 30s). Three tests run one after the other, so raise `CHAOS_TIMEOUT` (default 30m) above three times this value |
+| `MMS_CHAOS_DURATION` | run time of each timed test, a Go duration; `make chaos` sets it from `CHAOS_DURATION` (default 30s). Six tests run one after the other, so keep `CHAOS_TIMEOUT` (default 30m) above six times this value |
 | `MMS_CHAOS_SEED` | seed; `0` picks a time-based seed; `make chaos` sets it from `CHAOS_SEED` (default 0) |
 
 Each run logs its seed. Replay a failure with
@@ -69,10 +69,10 @@ dependency.
 
 ## Extended tier
 
-`.github/workflows/nightly.yml` runs every Fuzz target for 2 minutes
-(`make fuzz FUZZTIME=2m`) and the chaos suite under the race detector with a
-random seed, 10 minutes for each of its three timed tests
-(`make chaos CHAOS_DURATION=10m CHAOS_TIMEOUT=40m`).
+`.github/workflows/nightly.yml` runs every Fuzz target for 2 minutes, split
+over three jobs (`make fuzz FUZZTIME=2m FUZZ_SHARD=<i>/3`), and the chaos suite
+under the race detector with a random seed, 5 minutes for each of its six timed
+tests (`make chaos CHAOS_DURATION=5m CHAOS_TIMEOUT=45m`).
 
 ## Coverage policy
 
@@ -86,7 +86,8 @@ The only exclusion is `examples/`: example programs are not library code.
 
 `scripts/fuzz.sh` finds targets with `go test -list`, so a new target needs no
 registration. `make fuzz` uses `FUZZTIME` (default 15s); `make fuzz-short` uses
-2 s and is part of `make check`.
+2 s and is part of `make check`. `FUZZ_SHARD=i/n` runs the i-th of every n
+targets in discovery order, as the nightly jobs do.
 
 When a target fails, Go writes the input to `testdata/fuzz/<Target>/` in the
 package. Keep that file in the fix: `go test` then replays it on every run

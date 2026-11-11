@@ -13,29 +13,34 @@ env:
 
 jobs:
   fuzz:
+    name: fuzz (shard ${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
-    # 57 targets at 2 minutes each.
-    timeout-minutes: 150
+    # Every third of the 70 targets at 2 minutes each, plus the builds.
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - run: make fuzz FUZZTIME=2m
+      - run: make fuzz FUZZTIME=2m FUZZ_SHARD=${{ matrix.shard }}/3
       - if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: fuzz-corpus-nightly
+          name: fuzz-corpus-nightly-${{ matrix.shard }}
           path: "**/testdata/fuzz/"
 
   chaos:
     runs-on: ubuntu-latest
-    # Three tests at 10 minutes each, plus the build.
-    timeout-minutes: 45
+    # Six tests at 5 minutes each, one after the other, plus the build.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Chaos and stress (random seed)
-        run: make chaos CHAOS_DURATION=10m CHAOS_TIMEOUT=40m
+        run: make chaos CHAOS_DURATION=5m CHAOS_TIMEOUT=45m
