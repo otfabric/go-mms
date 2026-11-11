@@ -1313,6 +1313,15 @@ func (s *Server) handleWrite(ctx context.Context, body []byte) (int, bool, []byt
 
 	wireData := req.Values
 
+	// ISO 9506-2 clause 14.7: listOfData carries one Data per variable
+	// of variableAccessSpecification. With a named list the count is
+	// known only here; a mismatch makes the request invalid, Reject
+	// confirmed-requestPDU invalid-argument (clause 8.6, MMS-PDU-21).
+	// The listOfVariable form is checked by the decoder.
+	if len(wireData) != len(specs) {
+		return 0, false, nil, errInvalidRequest
+	}
+
 	// ISO 9506-2 clause 8.2: the negotiated dataStructureNestingLevel
 	// bounds the nesting of structured data the server must accept; a
 	// deeper listOfData is rejected (clause 8.6 confirmed-requestPDU
@@ -1327,10 +1336,6 @@ func (s *Server) handleWrite(ctx context.Context, body []byte) (int, bool, []byt
 
 	var results []pdu.WriteResult
 	for i, spec := range specs {
-		if i >= len(wireData) {
-			results = append(results, pdu.WriteResult{Code: wireErrCode(wireErrTypeInconsistent)})
-			continue
-		}
 		wn := spec.Name
 		entry, ok := s.lookupVariable(ctx, wn.Scope, wn.DomainID, wn.ItemID)
 		if !ok {

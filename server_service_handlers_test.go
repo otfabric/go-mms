@@ -443,15 +443,22 @@ func TestHandleWrite_Edges(t *testing.T) {
 		t.Fatal("missing nvl")
 	}
 
-	// Fewer values than NVL members → type inconsistent for second.
-	shortNVL, err := pdu.MarshalWriteRequestByListName(1, pdu.ObjectNameWire{
-		Scope: pdu.ScopeDomain, DomainID: "d", ItemID: "WL",
-	}, []*pdu.DataValue{{Tag: pdu.TagDataInteger, Int: 5}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, _, err := s.handleWrite(ctx, extractConfirmedBody(t, shortNVL)); err != nil {
-		t.Fatalf("short nvl write: %v", err)
+	// listOfData must carry one Data per NVL member (ISO 9506-2 clause
+	// 14.7): fewer or more values → Reject invalid-argument (MMS-PDU-21).
+	for _, n := range []int{1, 3} {
+		data := make([]*pdu.DataValue, n)
+		for i := range data {
+			data[i] = &pdu.DataValue{Tag: pdu.TagDataInteger, Int: 5}
+		}
+		badNVL, err := pdu.MarshalWriteRequestByListName(1, pdu.ObjectNameWire{
+			Scope: pdu.ScopeDomain, DomainID: "d", ItemID: "WL",
+		}, data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, _, err := s.handleWrite(ctx, extractConfirmedBody(t, badNVL)); !errors.Is(err, errInvalidRequest) {
+			t.Fatalf("nvl write with %d values: %v, want errInvalidRequest", n, err)
+		}
 	}
 
 	vars := []pdu.VariableSpecWire{
