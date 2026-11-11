@@ -40,6 +40,12 @@ var (
 	// service is not in [DialOptions.AllowedServices]. The request is not
 	// sent.
 	ErrServiceNotAllowed = errors.New("mms: service not allowed")
+
+	// ErrMaxOutstanding is returned for a confirmed request made while
+	// the negotiated max-services-outstanding-calling requests are
+	// outstanding, when [MMSOptions.FailFastOutstanding] is set. The
+	// request is not sent.
+	ErrMaxOutstanding = errors.New("mms: max outstanding requests")
 )
 
 // Phases reported in [ProtocolError.Phase].

@@ -53,7 +53,6 @@ but no client methods, server handlers, or PDU encoders/decoders exist.
 |-----------|:-----:|---------|
 | Data nesting depth | 64 levels | Recursive array/structure decoding in `DataValue` trees |
 | TypeSpec nesting depth | 32 levels | Recursive type specification decoding |
-| Negotiated nesting level (client) | not checked | The server rejects a Write nested deeper than the negotiated `dataStructureNestingLevel` (Reject max-recursion-exceeded); the client does not check received data against it and does not send Reject `[2]` max-recursion-exceeded |
 | Access results per response | 65,536 | Read/write response element cap |
 | File directory entries | 10,000 | Per-response cap for file listings |
 | Journal entries per response | 10,000 | Per-response cap for journal reads |
@@ -88,8 +87,10 @@ logs a warning and skips oversized PDUs.
 | Write cancellation | Request writes are detached from the request context: the caller returns when its context ends, an unstarted write is skipped, and a write in progress completes in the background (a half-written PDU would corrupt the stream). In `transport/iso` the context deadline still bounds the write. See [TIMEOUT_AND_CLOSE.md](TIMEOUT_AND_CLOSE.md). |
 | ListenAndServe cancellation | Cancelling the `ListenAndServe` context closes every association's transport without a protocol-level abort. Use `Server.Shutdown` to let in-flight requests finish and send ACSE ABRT. |
 | No automatic reconnect | A lost association is reported through `Client.Done`/`Client.Err`; the caller reconnects (e.g. with `mms.Retry`). Server-side state (association-scoped objects, open files) is not restored. |
-| Client write serialization | Transport writes are serialized via a send mutex so PDUs do not interleave. Concurrent callers may still have multiple confirmed requests outstanding (wait for response happens outside the write lock); responses are correlated by invoke ID. |
-| Negotiated outstanding not enforced | `MaxOutstandingCalling` / `MaxOutstandingCalled` are negotiated and exposed via `Client.Negotiated()` / server association state, but the client invoke tracker is not capped by those values today. Limit concurrency in the caller if needed. |
+| Client write serialization | Transport writes are serialized via a send mutex so PDUs do not interleave. Concurrent callers may have up to the negotiated max-services-outstanding-calling confirmed requests outstanding (wait for response happens outside the write lock); responses are correlated by invoke ID. Further callers wait for a slot (see [LIMITS.md](LIMITS.md)). |
+| Abandoned requests keep their slot | A request whose caller gave up after it was sent stays outstanding until the server answers it. A server that never answers keeps that slot taken until the association ends; the client sends no Cancel to free it. |
+| Negotiated nesting level 0 | A negotiated dataStructureNestingLevel of 0 (only simple data) is not enforced by the client or the server. |
+| Server reaction to excess outstanding requests | The server serves confirmed requests one at a time, so it never sees more than one outstanding and never sends Reject confirmed-requestPDU max-serv-outstanding-exceeded (6): requests a client pipelines beyond the negotiated value are answered in order. |
 | Server request handling | Confirmed requests within a single server connection are handled serially. Concurrent request handling per-connection is not supported. |
 | Server Abort PDU | The server sends an abort on its own only for a FINISH before Conclude, or a PDU other than FINISH + RLRQ after the Conclude-Response (ISO 9506-2 Annex A.1.2.2). Applications can abort a connection explicitly with `ServerConn.Abort`, which sends Session ABORT + ARU + ACSE ABRT and closes the connection. |
 | Parameter CBB insufficiency | The server answers the proposed parameter CBB AND its own (str1, str2, vnam, valt, vlis) and never refuses with Initiate-Error parameter-CBB-insufficient (6) or service-CBB-insufficient (5): a client that does not propose a CBB the server relies on gets errors from the services that need it. |
@@ -145,4 +146,3 @@ These are deliberate design boundaries, not implementation gaps.
 - **ASN.1 code generation** — PDU encoding/decoding is hand-rolled for control and performance. No ASN.1 schema compiler or code generator is used or provided.
 - **Protocol performance optimization** — No zero-copy I/O, buffer pooling, or arena allocation. The library prioritizes correctness and clarity over raw throughput.
 - **Backwards compatibility with non-MMS variants** — The library targets ISO 9506 MMS as used in IEC 61850 environments. Non-standard MMS extensions or vendor-specific protocol variants are not accommodated.
-- **Runtime enforcement of negotiated outstanding limits** — Initiate proposes and negotiates max outstanding calling/called; those values are stored and logged but not used to reject excess in-flight client requests. See Behavioral Limitations above and [LIMITS.md](LIMITS.md).

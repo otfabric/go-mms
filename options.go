@@ -136,19 +136,34 @@ type MMSOptions struct {
 	// initiation. Zero means use the library default (65000).
 	MaxPDUSize int
 
-	// MaxOutstandingCalling is the maximum number of outstanding
-	// requests this client proposes during Initiate. Zero means use the
-	// library default (5). The negotiated value is exposed via
-	// Client.Negotiated() but is not enforced as a runtime pending-request
-	// limit today.
+	// MaxOutstandingCalling is proposedMaxServOutstandingCalling: the
+	// number of confirmed requests this client proposes to have
+	// outstanding at a time (ISO 9506-2 clause 8.2). Zero means use the
+	// library default (5). The server answers a value up to it
+	// (Client.Negotiated().MaxOutCalling), and the client never has more
+	// requests outstanding than that: a further request waits for a
+	// response (honouring its context), or fails with
+	// [ErrMaxOutstanding] when FailFastOutstanding is set.
 	MaxOutstandingCalling int
 
-	// MaxOutstandingCalled is the maximum number of outstanding
-	// requests the peer is expected to support. Zero means use the
-	// library default (5). Negotiated only; not a runtime client cap.
+	// MaxOutstandingCalled is proposedMaxServOutstandingCalled: the
+	// number of confirmed requests the server may have outstanding
+	// towards this client. Zero means use the library default (5). The
+	// client serves no confirmed requests, so it is negotiated only.
 	MaxOutstandingCalled int
 
 	// DataStructureNestingLevel is the proposed maximum nesting level
 	// for structured data. Zero means use the library default (10).
+	// The negotiated level (Client.Negotiated().NestingLevel) bounds
+	// what the client sends — Data and AlternateAccess nested deeper
+	// fail with [ErrInvalidArgument] before anything is sent — and
+	// receives: a response nested deeper fails with [ErrDecodeFailed]
+	// and is rejected (RejectPDU max-recursion-exceeded).
 	DataStructureNestingLevel int
+
+	// FailFastOutstanding makes a confirmed request fail at once with
+	// [ErrMaxOutstanding] instead of waiting while the negotiated
+	// max-services-outstanding-calling requests are outstanding. Nothing
+	// is sent then.
+	FailFastOutstanding bool
 }

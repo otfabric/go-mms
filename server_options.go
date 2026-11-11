@@ -71,8 +71,9 @@ type ServerMMSOptions struct {
 
 	// MaxOutstandingCalling is proposed during Initiate as the max
 	// outstanding requests the server accepts from the client.
-	// Zero means 5. Negotiated; not a separate pending-queue cap
-	// (confirmed requests are handled serially per connection).
+	// Zero means 5. The server serves confirmed requests one at a time,
+	// so it never has more than one outstanding; a go-mms client keeps
+	// to the negotiated value.
 	MaxOutstandingCalling int
 
 	// MaxOutstandingCalled is proposed as the max outstanding

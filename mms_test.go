@@ -3,6 +3,7 @@
 package mms
 
 import (
+	"cmp"
 	"context"
 	"encoding/asn1"
 	"errors"
@@ -103,6 +104,9 @@ type mockServer struct {
 	vendor    string
 	model     string
 	revision  string
+	// outCalling, when non-zero, is the negotiatedMaxServOutstandingCalling
+	// answered in Initiate (5 otherwise).
+	outCalling int
 }
 
 func newMockServer(t *testing.T, mt *mockTransport) *mockServer {
@@ -154,7 +158,7 @@ func (s *mockServer) handleAssociation(ctx context.Context) {
 	// Build Initiate Response
 	initResp := pdu.InitiateResponse{
 		LocalDetailCalled:                  65000,
-		NegotiatedMaxServOutstandingCall:   5,
+		NegotiatedMaxServOutstandingCall:   cmp.Or(s.outCalling, 5),
 		NegotiatedMaxServOutstandingCalled: 5,
 		NegotiatedDataStructureNesting:     10,
 		InitResponseDetail: pdu.InitResponseDetail{

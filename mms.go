@@ -34,8 +34,9 @@ import (
 // a time). Concurrent callers may have multiple confirmed requests
 // outstanding; a background reader correlates responses by invoke ID
 // and delivers unconfirmed PDUs (InformationReport) to registered
-// handlers. Negotiated outstanding-request limits are not enforced at
-// runtime (see package doc Concurrency).
+// handlers. At most the negotiated max-services-outstanding-calling
+// requests are outstanding at a time; further callers wait for a slot
+// (see package doc Concurrency and [MMSOptions.FailFastOutstanding]).
 type Client struct {
 	mu      sync.Mutex
 	closed  bool
@@ -107,7 +108,10 @@ func newClient(ctx context.Context, conn Transport, opts DialOptions) (*Client, 
 		return nil, err
 	}
 
-	c.tracker = invoke.NewTracker(0)
+	// ISO 9506-2 clause 8.2: the client, as calling MMS-user, keeps at
+	// most negotiatedMaxServOutstandingCalling confirmed requests
+	// outstanding.
+	c.tracker = invoke.NewTracker(c.maxOutCalling)
 
 	readerCtx, cancel := context.WithCancel(context.Background())
 	c.readerCancel = cancel
@@ -291,7 +295,7 @@ func (c *Client) Close(ctx context.Context) error {
 	c.closed = true
 	c.mu.Unlock()
 
-	c.tracker.CancelAll(ErrClosed)
+	c.tracker.Close(ErrClosed)
 
 	err := c.conclude(ctx)
 
@@ -337,7 +341,7 @@ func (c *Client) Abort(ctx context.Context) error {
 	c.sendMu.Unlock()
 	stop()
 
-	c.tracker.CancelAll(ErrClosed)
+	c.tracker.Close(ErrClosed)
 	c.readerCancel()
 	<-c.readerDone
 
@@ -584,13 +588,15 @@ func (c *Client) doConfirmed(ctx context.Context, invokeID codec.InvokeID, mmsPd
 		return nil, invalidArgf("mms: request PDU size %d exceeds the server's localDetailCalled %d", len(mmsPdu), c.sendLimit)
 	}
 
-	_, ch, err := c.tracker.AllocateWithID(invokeID)
+	ch, err := c.reserve(ctx, invokeID)
 	if err != nil {
-		return nil, fmt.Errorf("mms: allocate invoke ID %d: %w", invokeID, err)
+		return nil, err
 	}
 
-	if err := c.send(ctx, isostack.EncodeDataRequest(mmsPdu)); err != nil {
-		c.tracker.Cancel(invokeID, err)
+	if onWire, err := c.sendRequest(ctx, isostack.EncodeDataRequest(mmsPdu)); err != nil {
+		if !onWire {
+			c.tracker.Cancel(invokeID, err)
+		}
 		if ctx.Err() != nil {
 			return nil, contextErr(invokeID, ctx.Err())
 		}
@@ -601,7 +607,8 @@ func (c *Client) doConfirmed(ctx context.Context, invokeID codec.InvokeID, mmsPd
 	select {
 	case resp = <-ch:
 	case <-ctx.Done():
-		c.tracker.Cancel(invokeID, ctx.Err())
+		// The request stays outstanding at the server until it answers:
+		// its slot is freed when the (discarded) response arrives.
 		return nil, contextErr(invokeID, ctx.Err())
 	case <-c.readerDone:
 		// The reader may have delivered this response just before exiting.
@@ -621,14 +628,45 @@ func (c *Client) doConfirmed(ctx context.Context, invokeID codec.InvokeID, mmsPd
 	return c.processConfirmedPDU(invokeID, pdu.PduKind(resp.Kind), resp.Data)
 }
 
-// send writes one request PDU. The write itself is not bound to ctx:
+// reserve registers invokeID as outstanding. At the negotiated
+// max-services-outstanding-calling it waits for a slot until ctx ends,
+// or fails with ErrMaxOutstanding when FailFastOutstanding is set.
+func (c *Client) reserve(ctx context.Context, invokeID codec.InvokeID) (<-chan invoke.Response, error) {
+	if c.opts.MMS.FailFastOutstanding {
+		_, ch, err := c.tracker.AllocateWithID(invokeID)
+		if errors.Is(err, invoke.ErrLimit) {
+			return nil, classify(fmt.Errorf("mms: invoke %d: %d requests outstanding, the negotiated max-services-outstanding-calling", invokeID, c.tracker.Limit()), ErrMaxOutstanding)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("mms: allocate invoke ID %d: %w", invokeID, err)
+		}
+		return ch, nil
+	}
+	ch, err := c.tracker.Reserve(ctx, invokeID)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, contextErr(invokeID, ctxErr)
+		}
+		return nil, fmt.Errorf("mms: allocate invoke ID %d: %w", invokeID, err)
+	}
+	return ch, nil
+}
+
+// send writes one PDU; see sendRequest.
+func (c *Client) send(ctx context.Context, data []byte) error {
+	_, err := c.sendRequest(ctx, data)
+	return err
+}
+
+// sendRequest writes one request PDU. The write itself is not bound to ctx:
 // abandoning a PDU half-written would corrupt the stream for every other
 // request on the association. Instead the write runs on its own goroutine
 // and send returns when ctx is done; a write that has not started by then
 // is skipped. A write that fails leaves the association unusable, so the
 // transport is closed, which stops the reader and fails the other pending
-// requests with ErrClosed.
-func (c *Client) send(ctx context.Context, data []byte) error {
+// requests with ErrClosed. onWire reports whether the PDU was (or may
+// still be) written: false only when the write was skipped.
+func (c *Client) sendRequest(ctx context.Context, data []byte) (onWire bool, err error) {
 	const (
 		pending int32 = iota
 		writing
@@ -652,12 +690,12 @@ func (c *Client) send(ctx context.Context, data []byte) error {
 	}()
 	select {
 	case err := <-done:
-		return err
+		return err == nil || state.Load() == writing, err
 	case <-ctx.Done():
 		// Either the write is skipped, or the PDU is on its way and the
 		// response will be discarded.
-		state.CompareAndSwap(pending, abandoned)
-		return ctx.Err()
+		skipped := state.CompareAndSwap(pending, abandoned)
+		return !skipped, ctx.Err()
 	}
 }
 
@@ -791,7 +829,7 @@ func (c *Client) stopReader(err error) {
 	c.mu.Lock()
 	c.readerErr = err
 	c.mu.Unlock()
-	c.tracker.CancelAll(err)
+	c.tracker.Close(err)
 	_ = c.conn.Close()
 }
 
@@ -870,7 +908,7 @@ func (c *Client) readerLoop(ctx context.Context) {
 			c.dispatchConfirmed(kind, content)
 
 		case pdu.PduUnconfirmed:
-			c.dispatchUnconfirmed(content)
+			c.dispatchUnconfirmed(ctx, content)
 
 		case pdu.PduConcludeResponse:
 			select {
@@ -985,10 +1023,18 @@ func (c *Client) sendReject(ctx context.Context, rejectPDU []byte) {
 // rejectSendTimeout bounds how long the reader waits to queue a Reject.
 const rejectSendTimeout = 5 * time.Second
 
-func (c *Client) dispatchUnconfirmed(content []byte) {
+func (c *Client) dispatchUnconfirmed(ctx context.Context, content []byte) {
 	report, err := pdu.UnmarshalInformationReport(content)
 	if err != nil {
 		c.logger.Warn("mms: reader cannot decode InformationReport", "error", err)
+		return
+	}
+	// A report nested deeper than the negotiated level is not delivered
+	// and is rejected (ISO 9506-2 clause 6.4; clause 8.6 unconfirmedPDU
+	// max-recursion-exceeded).
+	if limit, n := c.nestingLimit(), dataListNesting(report.Values); limit > 0 && n > limit {
+		c.logger.Warn("mms: rejecting InformationReport nested deeper than negotiated", "nesting", n, "max", limit)
+		c.sendReject(ctx, codec.MarshalRejectPDUNoInvokeID(int(RejectUnconfirmed), rejectUnconfirmedMaxRecursion))
 		return
 	}
 
@@ -1150,6 +1196,9 @@ func (c *Client) ReadMultiple(ctx context.Context, variables []ObjectName) ([]Ac
 	if err != nil {
 		return nil, decodeErrorf("mms: %w", err)
 	}
+	if err := c.checkResponseNesting(ctx, invokeID, "read", dataListNesting(dataValues)); err != nil {
+		return nil, err
+	}
 
 	if len(dataValues) != len(variables) {
 		return nil, &ProtocolError{
@@ -1217,6 +1266,9 @@ func (c *Client) Write(ctx context.Context, req WriteRequest) (*WriteResult, err
 	if err != nil {
 		return nil, invalidArgf("mms: marshal write value: %w", err)
 	}
+	if err := c.checkSendNesting("write", dv); err != nil {
+		return nil, err
+	}
 
 	reqBytes, err := pdu.MarshalWriteRequest(invokeID, []pdu.ObjectNameWire{wireVar}, []*pdu.DataValue{dv})
 	if err != nil {
@@ -1280,6 +1332,9 @@ func (c *Client) ReadVariables(ctx context.Context, variables []VariableSpec) ([
 		if err := validateAccessSelectors(v.AlternateAccess); err != nil {
 			return nil, invalidArgf("mms: read: variable [%d]: %w", i, err)
 		}
+		if err := c.checkAccessNesting("read", i, v.AlternateAccess); err != nil {
+			return nil, err
+		}
 	}
 
 	invokeID := c.nextInvokeID()
@@ -1309,6 +1364,9 @@ func (c *Client) ReadVariables(ctx context.Context, variables []VariableSpec) ([
 	dataValues, err := pdu.UnmarshalReadResponse(confirmed.ServiceData)
 	if err != nil {
 		return nil, decodeErrorf("mms: %w", err)
+	}
+	if err := c.checkResponseNesting(ctx, invokeID, "read", dataListNesting(dataValues)); err != nil {
+		return nil, err
 	}
 
 	if len(dataValues) != len(variables) {
@@ -1359,6 +1417,9 @@ func (c *Client) WriteVariables(ctx context.Context, variables []VariableSpec, v
 		if err := validateAccessSelectors(v.AlternateAccess); err != nil {
 			return nil, invalidArgf("mms: write: variable [%d]: %w", i, err)
 		}
+		if err := c.checkAccessNesting("write", i, v.AlternateAccess); err != nil {
+			return nil, err
+		}
 	}
 	for i, val := range values {
 		if val == nil {
@@ -1380,6 +1441,9 @@ func (c *Client) WriteVariables(ctx context.Context, variables []VariableSpec, v
 			return nil, invalidArgf("mms: marshal write value [%d]: %w", i, err)
 		}
 		wireValues[i] = dv
+	}
+	if err := c.checkSendNesting("write", wireValues...); err != nil {
+		return nil, err
 	}
 
 	reqBytes, err := pdu.MarshalWriteRequestWithAccess(invokeID, wireVars, wireValues)
@@ -1569,6 +1633,9 @@ func (c *Client) WriteObject(ctx context.Context, name ObjectName, value *Value)
 	if err != nil {
 		return nil, invalidArgf("mms: marshal write value: %w", err)
 	}
+	if err := c.checkSendNesting("write", dv); err != nil {
+		return nil, err
+	}
 
 	reqBytes, err := pdu.MarshalWriteRequest(invokeID, []pdu.ObjectNameWire{wireVar}, []*pdu.DataValue{dv})
 	if err != nil {
@@ -1658,6 +1725,9 @@ func (c *Client) ReadNamedVariableList(ctx context.Context, listName ObjectName,
 	if err != nil {
 		return nil, decodeErrorf("mms: %w", err)
 	}
+	if err := c.checkResponseNesting(ctx, invokeID, "read", dataListNesting(dataValues)); err != nil {
+		return nil, err
+	}
 
 	results := make([]AccessResult, len(dataValues))
 	for i, dv := range dataValues {
@@ -1708,6 +1778,9 @@ func (c *Client) WriteNamedVariableList(ctx context.Context, listName ObjectName
 			return nil, invalidArgf("mms: write NVL: marshal value [%d]: %w", i, err)
 		}
 		wireValues[i] = dv
+	}
+	if err := c.checkSendNesting("write NVL", wireValues...); err != nil {
+		return nil, err
 	}
 
 	reqBytes, err := pdu.MarshalWriteRequestByListName(invokeID, objectNameToWire(listName), wireValues)
@@ -1990,6 +2063,9 @@ func (c *Client) GetVariableAccessAttributes(ctx context.Context, name ObjectNam
 	if err != nil {
 		return nil, decodeErrorf("mms: %w", err)
 	}
+	if err := c.checkResponseNesting(ctx, invokeID, "getvaraccess", typeSpecNesting(&result.TypeSpec)); err != nil {
+		return nil, err
+	}
 
 	ts, err := typeSpecFromWire(result.TypeSpec)
 	if err != nil {
@@ -2028,6 +2104,9 @@ func (c *Client) DefineNamedVariableList(ctx context.Context, req DefineNamedVar
 	for i, v := range req.Variables {
 		if err := validateObjectName(v.Name); err != nil {
 			return invalidArgf("mms: define named variable list: variable [%d]: %w", i, err)
+		}
+		if err := c.checkAccessNesting("define named variable list", i, v.AlternateAccess); err != nil {
+			return err
 		}
 	}
 

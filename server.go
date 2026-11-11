@@ -1509,19 +1509,6 @@ func (s *Server) nestingBudget(ctx context.Context) int {
 	return 0
 }
 
-// dataNesting is the number of structure/array levels of dv: 0 for a
-// simple value, 1 for a structure or array of simple values.
-func dataNesting(dv *pdu.DataValue) int {
-	if dv == nil || (dv.Tag != pdu.TagDataArray && dv.Tag != pdu.TagDataStructure) {
-		return 0
-	}
-	deepest := 0
-	for _, e := range dv.Elements {
-		deepest = max(deepest, dataNesting(e))
-	}
-	return deepest + 1
-}
-
 // lookupVariable resolves a variable by scope. For association scope,
 // it checks the per-connection storage first. For VMD/domain scope,
 // it uses the shared registry.

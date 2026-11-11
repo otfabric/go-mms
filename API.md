@@ -69,6 +69,13 @@ localDetailCalling and the server's localDetailCalled), `MaxOutCalling`,
 larger than the server's localDetailCalled fails with `ErrInvalidArgument`
 before it is sent.
 
+The client keeps at most `MaxOutCalling` confirmed requests outstanding; a
+further request waits for a slot (bounded by its context) or, with
+`MMSOptions.FailFastOutstanding`, fails with `ErrMaxOutstanding`.
+`NestingLevel` bounds Data and AlternateAccess the client sends
+(`ErrInvalidArgument`) and Data and TypeSpecifications it receives
+(`ErrDecodeFailed`, the response is rejected with max-recursion-exceeded).
+
 ### Read and write
 
 ```go
@@ -852,9 +859,10 @@ qualifier becomes 12.
 ```go
 type MMSOptions struct {
     MaxPDUSize                int // default 65000
-    MaxOutstandingCalling     int // default 5 (proposed; not runtime-enforced)
-    MaxOutstandingCalled      int // default 5 (proposed; not runtime-enforced)
-    DataStructureNestingLevel int // default 10
+    MaxOutstandingCalling     int  // default 5; the negotiated value caps outstanding requests
+    MaxOutstandingCalled      int  // default 5 (negotiated only; the client serves no requests)
+    DataStructureNestingLevel int  // default 10; the negotiated value bounds sent and received data
+    FailFastOutstanding       bool // fail with ErrMaxOutstanding instead of waiting at the limit
 }
 ```
 

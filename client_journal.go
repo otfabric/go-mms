@@ -83,6 +83,15 @@ func (c *Client) sendJournalRequest(ctx context.Context, invokeID codec.InvokeID
 	if err != nil {
 		return nil, decodeErrorf("mms: %w", err)
 	}
+	depth := 0
+	for _, we := range wireEntries {
+		for _, wv := range we.Variables {
+			depth = max(depth, dataNesting(wv.Value))
+		}
+	}
+	if err := c.checkResponseNesting(ctx, invokeID, "readjournal", depth); err != nil {
+		return nil, err
+	}
 
 	entries := make([]JournalEntry, len(wireEntries))
 	for i, we := range wireEntries {

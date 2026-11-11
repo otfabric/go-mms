@@ -82,7 +82,7 @@ Or broadcast to all connected clients:
 
 A [Client](#type-client) is safe for concurrent use from multiple goroutines. Transport writes are serialized (sendMu) so encoded PDUs cannot interleave. Concurrent callers may still have multiple confirmed requests outstanding: after a send completes, the caller waits for its response while other goroutines may send. A background reader correlates confirmed responses by invoke ID and independently dispatches unconfirmed PDUs (InformationReport) to the registered handler.
 
-Negotiated MaxOutstandingCalling / MaxOutstandingCalled (see [Client.Negotiated](#func-client-negotiated)) are proposed during Initiate and exposed for inspection, but are not enforced as a runtime pending-request limit today. Callers that need back-pressure should limit concurrency themselves. Details: LIMITS.md, KNOWN\_LIMITATIONS.md, RACE\_NOTES.md.
+The client never has more confirmed requests outstanding than the negotiated max-services-outstanding-calling ([Client.Negotiated](#func-client-negotiated) MaxOutCalling, ISO 9506-2 clause 8.2). A request made at the limit waits for a response to free a slot, first come first served, bounded by its context; with [MMSOptions.FailFastOutstanding](#func-mmsoptions-failfastoutstanding) it fails with ErrMaxOutstanding instead. Details: LIMITS.md, TIMEOUT\_AND\_CLOSE.md, RACE\_NOTES.md.
 
 A [Server](#type-server) is safe for concurrent use. Each [Server.Serve](#func-server-serve) call handles one association; multiple connections are served in parallel by calling Serve in separate goroutines. Within a single connection, confirmed requests are handled serially. Unconfirmed PDUs (InformationReport) can be sent concurrently via [ServerConn](#type-serverconn).
 
@@ -287,6 +287,12 @@ var (
 	// service is not in [DialOptions.AllowedServices]. The request is not
 	// sent.
 	ErrServiceNotAllowed = errors.New("mms: service not allowed")
+
+	// ErrMaxOutstanding is returned for a confirmed request made while
+	// the negotiated max-services-outstanding-calling requests are
+	// outstanding, when [MMSOptions.FailFastOutstanding] is set. The
+	// request is not sent.
+	ErrMaxOutstanding = errors.New("mms: max outstanding requests")
 )
 ```
 
@@ -820,7 +826,7 @@ A Client is created via [NewClient](#func-newclient) (or the convenience iso.Dia
 
 Close is idempotent: calling it multiple times is safe and subsequent calls return nil.
 
-Concurrency: the Client serializes transport writes (one PDU write at a time). Concurrent callers may have multiple confirmed requests outstanding; a background reader correlates responses by invoke ID and delivers unconfirmed PDUs (InformationReport) to registered handlers. Negotiated outstanding-request limits are not enforced at runtime (see package doc Concurrency).
+Concurrency: the Client serializes transport writes (one PDU write at a time). Concurrent callers may have multiple confirmed requests outstanding; a background reader correlates responses by invoke ID and delivers unconfirmed PDUs (InformationReport) to registered handlers. At most the negotiated max-services-outstanding-calling requests are outstanding at a time; further callers wait for a slot (see package doc Concurrency and [MMSOptions.FailFastOutstanding](#func-mmsoptions-failfastoutstanding)).
 
 #### func NewClient
 
@@ -1938,21 +1944,36 @@ type MMSOptions struct {
 	// initiation. Zero means use the library default (65000).
 	MaxPDUSize int
 
-	// MaxOutstandingCalling is the maximum number of outstanding
-	// requests this client proposes during Initiate. Zero means use the
-	// library default (5). The negotiated value is exposed via
-	// Client.Negotiated() but is not enforced as a runtime pending-request
-	// limit today.
+	// MaxOutstandingCalling is proposedMaxServOutstandingCalling: the
+	// number of confirmed requests this client proposes to have
+	// outstanding at a time (ISO 9506-2 clause 8.2). Zero means use the
+	// library default (5). The server answers a value up to it
+	// (Client.Negotiated().MaxOutCalling), and the client never has more
+	// requests outstanding than that: a further request waits for a
+	// response (honouring its context), or fails with
+	// [ErrMaxOutstanding] when FailFastOutstanding is set.
 	MaxOutstandingCalling int
 
-	// MaxOutstandingCalled is the maximum number of outstanding
-	// requests the peer is expected to support. Zero means use the
-	// library default (5). Negotiated only; not a runtime client cap.
+	// MaxOutstandingCalled is proposedMaxServOutstandingCalled: the
+	// number of confirmed requests the server may have outstanding
+	// towards this client. Zero means use the library default (5). The
+	// client serves no confirmed requests, so it is negotiated only.
 	MaxOutstandingCalled int
 
 	// DataStructureNestingLevel is the proposed maximum nesting level
 	// for structured data. Zero means use the library default (10).
+	// The negotiated level (Client.Negotiated().NestingLevel) bounds
+	// what the client sends — Data and AlternateAccess nested deeper
+	// fail with [ErrInvalidArgument] before anything is sent — and
+	// receives: a response nested deeper fails with [ErrDecodeFailed]
+	// and is rejected (RejectPDU max-recursion-exceeded).
 	DataStructureNestingLevel int
+
+	// FailFastOutstanding makes a confirmed request fail at once with
+	// [ErrMaxOutstanding] instead of waiting while the negotiated
+	// max-services-outstanding-calling requests are outstanding. Nothing
+	// is sent then.
+	FailFastOutstanding bool
 }
 ```
 
@@ -2655,8 +2676,9 @@ type ServerMMSOptions struct {
 
 	// MaxOutstandingCalling is proposed during Initiate as the max
 	// outstanding requests the server accepts from the client.
-	// Zero means 5. Negotiated; not a separate pending-queue cap
-	// (confirmed requests are handled serially per connection).
+	// Zero means 5. The server serves confirmed requests one at a time,
+	// so it never has more than one outstanding; a go-mms client keeps
+	// to the negotiated value.
 	MaxOutstandingCalling int
 
 	// MaxOutstandingCalled is proposed as the max outstanding

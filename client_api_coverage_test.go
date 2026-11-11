@@ -87,7 +87,7 @@ func TestDispatchUnconfirmed_AndInfoReport(t *testing.T) {
 	c := unitClient(newMockTransport())
 
 	// Bad unconfirmed body.
-	c.dispatchUnconfirmed([]byte{0xff})
+	c.dispatchUnconfirmed(context.Background(), []byte{0xff})
 
 	// Valid report, no handler.
 	report, err := pdu.MarshalInformationReport(&pdu.InformationReportWire{
@@ -103,7 +103,7 @@ func TestDispatchUnconfirmed_AndInfoReport(t *testing.T) {
 	if err != nil || kind != pdu.PduUnconfirmed {
 		t.Fatalf("kind=%v err=%v", kind, err)
 	}
-	c.dispatchUnconfirmed(content)
+	c.dispatchUnconfirmed(context.Background(), content)
 
 	// Conversion error: bad list name scope (craft wire after unmarshal path via infoReportToIndication).
 	if _, err := c.infoReportToIndication(&pdu.InformationReportWire{
@@ -142,7 +142,7 @@ func TestDispatchUnconfirmed_AndInfoReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.dispatchUnconfirmed(badContent) // logs convert error, no panic
+	c.dispatchUnconfirmed(context.Background(), badContent) // logs convert error, no panic
 
 	// Handler + panic recovery.
 	called := make(chan struct{}, 1)
@@ -150,7 +150,7 @@ func TestDispatchUnconfirmed_AndInfoReport(t *testing.T) {
 		called <- struct{}{}
 		panic("boom")
 	})
-	c.dispatchUnconfirmed(content)
+	c.dispatchUnconfirmed(context.Background(), content)
 	select {
 	case <-called:
 	case <-time.After(time.Second):

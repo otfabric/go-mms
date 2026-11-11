@@ -22,8 +22,14 @@ random seed; a failure prints `MMS_CHAOS_SEED` to replay it.
   down the association. A failed write closes the association.
 - **mu**: protects `closed` and the reader handles.
 - **invoke tracker**: thread-safe map of pending request channels
-  (`Allocate`, `Complete`, `Cancel`, `CancelAll`). No `maxPending` cap;
-  negotiated MaxOutstanding* is not enforced.
+  (`Reserve`, `AllocateWithID`, `Complete`, `Cancel`, `CancelAll`,
+  `Close`), capped at the negotiated max-services-outstanding-calling.
+  `Reserve` queues callers FIFO under the tracker mutex and hands a freed
+  slot to the first waiter in `Complete`/`Cancel`/`CancelAll`; a waiter
+  whose context ends after its slot was granted gives the slot back.
+  `Close` (on `Close`, `Abort` and reader exit) fails pending requests and
+  waiters and every later allocation. `TestChaos_OutstandingLimit` drives
+  32 goroutines against a limit of 2 under `-race`.
 - **readerLoop**: one goroutine dispatches incoming PDUs; confirmed
   responses are routed by invoke ID, unconfirmed PDUs go to the report
   handler. `Client.Done` is closed when it exits; `Client.Err` reports
