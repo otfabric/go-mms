@@ -206,7 +206,11 @@ const (
 	// Deprecated: Use [DataAccessErrorTypeUnsupported].
 	DataAccessErrorTypeMismatch = DataAccessErrorTypeUnsupported
 
-	// Deprecated: Use [DataAccessErrorObjectAttributeInconsistent].
+	// Deprecated: Use [DataAccessErrorObjectAttributeInconsistent]. The
+	// name is misleading: object-exists is not a DataAccessError but the
+	// definition-class ServiceError code 5 (ISO 9506-2 clause 7.4.1);
+	// the alias keeps the value of object-attribute-inconsistent (8) for
+	// compatibility.
 	DataAccessErrorObjectExists = DataAccessErrorObjectAttributeInconsistent
 )
 
@@ -282,19 +286,23 @@ func (c ErrorClass) String() string {
 }
 
 // VMDLogicalStatus represents the logical status of a VMD (Virtual
-// Manufacturing Device).
+// Manufacturing Device): vmdLogicalStatus of Status-Response, 0..3 (ISO
+// 9506-2 clause 10.2).
 type VMDLogicalStatus int
 
 const (
 	VMDLogicalStatusStateChangesAllowed VMDLogicalStatus = 0
 	VMDLogicalStatusNoStateChanges      VMDLogicalStatus = 1
 	VMDLogicalStatusLimited             VMDLogicalStatus = 2
+	// VMDLogicalStatusSupportServices is support-services-allowed (3).
+	VMDLogicalStatusSupportServices VMDLogicalStatus = 3
 )
 
 var vmdLogicalStatusNames = [...]string{
 	"StateChangesAllowed",
 	"NoStateChanges",
 	"Limited",
+	"SupportServices",
 }
 
 // String returns the human-readable name of the VMDLogicalStatus.
