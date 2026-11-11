@@ -54,3 +54,20 @@ func TestEnvelopeError(t *testing.T) {
 		t.Fatalf("2^31: err = %v, want InvalidInvokeID", err)
 	}
 }
+
+// TestSpec_9506_2_7_1_ServiceChoiceContextClass: the service of a
+// Confirmed-Request/Response is a CHOICE of context-specific alternatives
+// (ISO 9506-2 clauses 7.1, 7.2); a universal or application tag is not
+// one of them.
+func TestSpec_9506_2_7_1_ServiceChoiceContextClass(t *testing.T) {
+	for _, svc := range [][]byte{{0x30, 0x00}, {0x61, 0x00}, {0x04, 0x00}} {
+		_, _, err := UnmarshalConfirmedResponse(append([]byte{0x02, 0x01, 0x07}, svc...))
+		var envErr *EnvelopeError
+		if !errors.As(err, &envErr) || !envErr.HasInvokeID || envErr.InvokeID != 7 {
+			t.Errorf("service %x: err = %v, want EnvelopeError with invokeID 7", svc, err)
+		}
+	}
+	if _, _, err := UnmarshalConfirmedResponse([]byte{0x02, 0x01, 0x07, 0xa4, 0x00}); err != nil {
+		t.Errorf("context-specific service: %v", err)
+	}
+}

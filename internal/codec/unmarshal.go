@@ -139,6 +139,11 @@ func unmarshalConfirmedEnvelope(content []byte) (InvokeID, asn1.RawValue, error)
 		return 0, asn1.RawValue{}, &EnvelopeError{InvokeID: invokeID, HasInvokeID: true, Err: fmt.Errorf("codec: %d trailing bytes after confirmed envelope", len(content)-n-m)}
 	}
 
+	// ConfirmedServiceRequest / ConfirmedServiceResponse are CHOICEs of
+	// context-specific alternatives only (ISO 9506-2 clauses 7.1, 7.2).
+	if svc.Class != asn1util.ClassContext {
+		return 0, asn1.RawValue{}, &EnvelopeError{InvokeID: invokeID, HasInvokeID: true, Err: fmt.Errorf("codec: service tag 0x%02x is not context-specific", svc.Full[0])}
+	}
 	serviceRaw := asn1.RawValue{
 		Class:      int(svc.Class >> 6),
 		Tag:        svc.Tag,
