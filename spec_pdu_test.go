@@ -602,7 +602,9 @@ func TestSpec_8_1_Table111_InitializeJournal(t *testing.T) {
 		t.Fatalf("provider got %q %q %+v", p.domain, p.journal, p.limit)
 	}
 	tod := hex.EncodeToString(journalTOD(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)))
-	srv.handleInitializeJournal(context.Background(), hx(t, name+"a10b8006"+tod+"810109"))
+	if _, _, _, err := srv.handleInitializeJournal(context.Background(), hx(t, name+"a10b8006"+tod+"810109")); err != nil {
+		t.Fatal(err)
+	}
 	if p.limit == nil || !p.limit.Time.Equal(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)) || !bytes.Equal(p.limit.EntryID, []byte{9}) {
 		t.Fatalf("limit = %+v", p.limit)
 	}

@@ -63,7 +63,7 @@ const (
 	RejectPDUError         = 5
 	RejectCancelRequest    = 6
 
-	// confirmed-requestPDU reasons
+	// confirmed-requestPDU reasons.
 	ReasonOther                = 0
 	ReasonUnrecognizedService  = 1
 	ReasonInvalidInvokeID      = 3
@@ -71,11 +71,11 @@ const (
 	ReasonMaxRecursionExceeded = 8
 	ReasonValueOutOfRange      = 9
 
-	// pdu-error reasons
+	// pdu-error reasons.
 	ReasonUnknownPDUType = 0
 	ReasonInvalidPDU     = 1
 
-	// cancel-requestPDU reasons
+	// cancel-requestPDU reasons.
 	ReasonCancelOther           = 0
 	ReasonCancelInvalidInvokeID = 1
 )

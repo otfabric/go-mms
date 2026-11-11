@@ -2336,6 +2336,16 @@ func validateObjectName(n ObjectName) error {
 // (8-1 Annex F.3.2): an Identifier has 1 to 64 characters.
 const MaxIdentifierLength = 64
 
+// isIdentifierChar reports whether c is in the Identifier character set
+// A-Z a-z 0-9 $ _ (ISO 9506-2 clause 7.5.2).
+func isIdentifierChar(c byte) bool {
+	switch {
+	case 'A' <= c && c <= 'Z', 'a' <= c && c <= 'z', '0' <= c && c <= '9', c == '$', c == '_':
+		return true
+	}
+	return false
+}
+
 // validateIdentifier checks an outbound or registered Identifier
 // (ISO 9506-2 clause 7.5.2): Identifier ::= VisibleString
 // (FROM ("A".."Z" | "a".."z" | "0".."9" | "$" | "_")) (SIZE
@@ -2346,8 +2356,7 @@ func validateIdentifier(what, s string) error {
 		return invalidArgf("%s %q: an Identifier has 1..%d characters (ISO 9506-2 clause 7.5.2)", what, s, MaxIdentifierLength)
 	}
 	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if !('A' <= c && c <= 'Z' || 'a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '$' || c == '_') {
+		if c := s[i]; !isIdentifierChar(c) {
 			return invalidArgf("%s %q: character %q is outside the Identifier character set A-Z a-z 0-9 $ _ (ISO 9506-2 clause 7.5.2)", what, s, c)
 		}
 	}
