@@ -1,5 +1,38 @@
 # go-mms Releases
 
+## v1.9.0
+
+**Date:** 2026-11-11
+**Previous release:** v1.8.0
+
+The client enforces what Initiate negotiated (ISO 9506-2 clause 8.2): the number of confirmed requests outstanding and the data structure nesting level. Both were listed as not enforced in KNOWN_LIMITATIONS.md. New exported API: `ErrMaxOutstanding` and `MMSOptions.FailFastOutstanding`; no signature changes, nothing removed.
+
+### Changed
+
+**Outstanding requests (negotiatedMaxServOutstandingCalling)**
+
+- The client never has more confirmed requests outstanding than `Client.Negotiated().MaxOutCalling`. A request made at the limit waits for a response to free a slot, first come first served, bounded by its context and `DialOptions.RequestTimeout`; a request whose context ends while it waits is not sent. Before this release every concurrent caller's request was sent at once.
+- `MMSOptions.FailFastOutstanding` makes such a request fail at once with the new `ErrMaxOutstanding` instead of waiting.
+- A request whose caller gave up after it was sent keeps its invoke ID and slot until the server answers it (the late response is discarded at Debug instead of logged as an unknown invoke ID). `Close`, `Abort` and a lost association end waiting requests with `ErrClosed`.
+- The server is unchanged: it serves confirmed requests one at a time, so it never has more than one outstanding and never sends Reject max-serv-outstanding-exceeded; requests pipelined beyond the negotiated value are answered in order.
+
+**Nesting level (negotiatedDataStructureNestingLevel)**
+
+- The client refuses a Write, WriteObject, WriteVariables or WriteNamedVariableList whose data, and a ReadVariables, WriteVariables or DefineNamedVariableList whose AlternateAccess chain, nests deeper than `Client.Negotiated().NestingLevel`, with `ErrInvalidArgument`; nothing is sent. The server would answer such a Write with Reject max-recursion-exceeded.
+- A Read, GetVariableAccessAttributes or ReadJournal response whose Data or TypeSpecification nests deeper fails with `ErrDecodeFailed` (it was accepted), and the client answers it with Reject confirmed-responsePDU max-recursion-exceeded (5) (clauses 6.4 and 8.6). An InformationReport nested deeper is not delivered and is answered with Reject unconfirmedPDU max-recursion-exceeded (3). The association continues.
+- The nesting count is the one the server already applied to Write: a simple value is 0, a structure or array of simple values 1, one level per AlternateAccess selection. A negotiated level of 0 is not enforced.
+
+### On the wire
+
+- New client PDUs: RejectPDU `a4 06 80 01 <invokeID> 82 01 05` for a too-deep response (invoke ID below 128; longer IDs lengthen the `80` element), and `a4 03 84 01 03` for a too-deep InformationReport.
+- Requests over the negotiated outstanding limit or nesting level are held back or not sent; no other encoding changes.
+
+### Testing
+
+- `TestSpec_9506_2_8_2_*` and `TestSpec_9506_2_8_6_*` for the limit, waiting, fail-fast, abandoned requests, Close, nesting on send and on receive, and the server's serial handling; `TestChaos_OutstandingLimit` drives 32 goroutines against a limit of 2 through chaos connections and checks the peak on the client's wire, under goleak.
+
+---
+
 ## v1.8.0
 
 **Date:** 2026-11-11

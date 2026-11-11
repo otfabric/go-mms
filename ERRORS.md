@@ -20,6 +20,9 @@ original chain (transport errors, `context` errors, typed errors):
 | Initiate response outside the proposal (version not 1..proposed, max-services-outstanding not 1..proposed, nesting above the proposal) | `ErrNegotiationFailed`, `ErrAssociationFailed`, `*ProtocolError` (phase `mms`) |
 | Session or presentation selector longer than 16 octets | `ErrInvalidArgument`, `ErrAssociationFailed` (nothing is sent) |
 | Request larger than the server's localDetailCalled | `ErrInvalidArgument` (nothing is sent) |
+| Request Data or AlternateAccess nested deeper than the negotiated dataStructureNestingLevel | `ErrInvalidArgument` (nothing is sent) |
+| Response Data or TypeSpecification nested deeper than the negotiated level | `ErrDecodeFailed`; the client sends Reject confirmed-responsePDU max-recursion-exceeded (5) and the association continues |
+| Request at the negotiated max-services-outstanding-calling with `MMSOptions.FailFastOutstanding` | `ErrMaxOutstanding` (nothing is sent); without it the request waits and its context error is returned if it ends first |
 | Conclude-ErrorPDU during `Close` | `*ServiceError` (class `conclude`), `ErrServiceRejected`; the association is aborted |
 | Request after `Close`/`Abort`, or after the association ended | `ErrClosed` |
 | Pending request failed because the connection was lost | `ErrClosed` (plus the transport error) |
@@ -57,6 +60,7 @@ original chain (transport errors, `context` errors, typed errors):
 | `ErrDataAccess` | Per-variable access error in Read/Write; also unwrapped from `*DataAccessError` | `errors.Is(err, mms.ErrDataAccess)` |
 | `ErrProtocol` | Protocol-level error; also unwrapped from `*ProtocolError` and `*RejectError` | `errors.Is(err, mms.ErrProtocol)` |
 | `ErrServerConnClosed` | `ServerConn` methods after the connection is closed | `errors.Is(err, mms.ErrServerConnClosed)` |
+| `ErrMaxOutstanding` | A confirmed request while the negotiated max-services-outstanding-calling requests are outstanding, with `MMSOptions.FailFastOutstanding`; nothing is sent | `errors.Is(err, mms.ErrMaxOutstanding)` |
 | `ErrAuthenticationFailed` | Server-side `Serve` when the authenticator rejects the client; also unwrapped from `*AuthenticationError`. Client-side from a `*RejectionError` whose AARE diagnostic is an authentication one (11–14) | `errors.Is(err, mms.ErrAuthenticationFailed)` |
 | `ErrFileAccessDenied` | `FileProvider`/`JournalProvider` implementations signal permission errors; server maps it to MMS error class "file", code "file-access-denied" | `errors.Is(err, mms.ErrFileAccessDenied)` |
 | `ErrServerClosed` | `Server.Serve` and `Server.ListenAndServe` after `Server.Shutdown` | `errors.Is(err, mms.ErrServerClosed)` |

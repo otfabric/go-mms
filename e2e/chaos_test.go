@@ -446,3 +446,104 @@ func TestChaos_RejectsKeepAssociation(t *testing.T) {
 	}
 	t.Logf("%d rejects, %d service errors, %d reads", rejects.Load(), refusals.Load(), oks.Load())
 }
+
+// outstandingMeter counts the confirmed requests a client has
+// outstanding, from its own wire: +1 for each Confirmed-Request it sends
+// (the hook runs before the write), -1 for each answer it receives.
+type outstandingMeter struct {
+	mu          sync.Mutex
+	now, peak   int
+	sent, recvd int
+}
+
+func (m *outstandingMeter) hook(dir string, raw []byte) {
+	c, err := mms.DecodeTSDU(raw)
+	if err != nil || c.PDU == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	switch {
+	case dir == mms.RawHookSend && c.PDU.Kind == "confirmed-request":
+		m.now++
+		m.sent++
+		m.peak = max(m.peak, m.now)
+	case dir == mms.RawHookRecv && c.PDU.HasInvokeID &&
+		(c.PDU.Kind == "confirmed-response" || c.PDU.Kind == "confirmed-error" || c.PDU.Kind == "reject"):
+		m.now--
+		m.recvd++
+	}
+}
+
+// Many goroutines share one client against a server that negotiates
+// max-services-outstanding-calling 2 (ISO 9506-2 clause 8.2), through
+// delays and fragmented reads and writes, with some requests abandoned
+// by short deadlines: the client never has more than 2 confirmed
+// requests outstanding on the wire, every caller returns, and no
+// goroutine is left behind (goleak in TestMain).
+func TestChaos_OutstandingLimit(t *testing.T) {
+	const limit, workers = 2, 32
+	cfg := chaos.Config{Seed: chaosSeed(t), ChunkReads: true, ChunkWrites: true, MaxDelay: 200 * time.Microsecond}
+	cs := startChaosServer(t, cfg, mms.ServerOptions{MMS: mms.ServerMMSOptions{MaxOutstandingCalling: limit}})
+	for _, failFast := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failFast=%v", failFast), func(t *testing.T) {
+			m := &outstandingMeter{}
+			c, err := iso.Dial(timeout(t), cs.addr, iso.WithDialer(chaos.Dialer(cfg)),
+				iso.WithClientDialOptions(mms.DialOptions{RawHook: m.hook, MMS: mms.MMSOptions{FailFastOutstanding: failFast}}))
+			if err != nil {
+				t.Fatalf("Dial: %v", err)
+			}
+			if got := c.Negotiated().MaxOutCalling; got != limit {
+				t.Fatalf("negotiated MaxOutCalling %d, want %d", got, limit)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), chaosDuration())
+			defer cancel()
+			var ok, refused, abandoned atomic.Int64
+			var wg sync.WaitGroup
+			for g := range workers {
+				wg.Go(func() {
+					for i := 0; ctx.Err() == nil; i++ {
+						d := 2 * time.Second
+						if (g+i)%7 == 0 {
+							d = 50 * time.Microsecond // abandoned while waiting or outstanding
+						}
+						reqCtx, reqCancel := context.WithTimeout(ctx, d)
+						_, err := c.ReadObject(reqCtx, domName(fmt.Sprintf("v%d", (g+i)%8)))
+						reqCancel()
+						switch {
+						case err == nil:
+							ok.Add(1)
+						case failFast && errors.Is(err, mms.ErrMaxOutstanding):
+							refused.Add(1)
+							time.Sleep(50 * time.Microsecond)
+						case errors.Is(err, mms.ErrInvokeTimeout) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled):
+							abandoned.Add(1)
+						default:
+							t.Errorf("worker %d: %v", g, err)
+							return
+						}
+					}
+				})
+			}
+			wg.Wait()
+			if err := c.Err(); err != nil {
+				t.Fatalf("association lost: %v", err)
+			}
+			if err := c.Close(timeout(t)); err != nil {
+				t.Errorf("Close: %v", err)
+			}
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			t.Logf("%d ok, %d refused, %d abandoned; %d sent, %d answered, peak %d outstanding", ok.Load(), refused.Load(), abandoned.Load(), m.sent, m.recvd, m.peak)
+			if m.peak > limit {
+				t.Errorf("peak %d confirmed requests outstanding, negotiated %d", m.peak, limit)
+			}
+			if ok.Load() == 0 {
+				t.Error("no request completed")
+			}
+			if failFast && refused.Load() == 0 {
+				t.Error("FailFastOutstanding refused nothing with 32 workers and a limit of 2")
+			}
+		})
+	}
+}

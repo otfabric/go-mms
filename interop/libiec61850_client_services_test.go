@@ -120,6 +120,50 @@ func TestClient_Negotiated(t *testing.T) {
 	}
 }
 
+// The go-mms client keeps at most the negotiated
+// max-services-outstanding-calling requests outstanding (ISO 9506-2 clause
+// 8.2) against the peer server: 16 concurrent Reads with 2 proposed all
+// succeed and never have more than the negotiated value on the wire.
+func TestClient_OutstandingLimit(t *testing.T) {
+	var mu sync.Mutex
+	now, peak := 0, 0
+	hook := func(dir string, raw []byte) {
+		pc, err := mms.DecodeTSDU(raw)
+		if err != nil || pc.PDU == nil {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case dir == mms.RawHookSend && pc.PDU.Kind == "confirmed-request":
+			now++
+			peak = max(peak, now)
+		case dir == mms.RawHookRecv && pc.PDU.HasInvokeID && pc.PDU.Kind != "unconfirmed":
+			now--
+		}
+	}
+	ctx, c := session(t, iso.WithClientDialOptions(mms.DialOptions{RawHook: hook, MMS: mms.MMSOptions{MaxOutstandingCalling: 2}}))
+	limit := c.Negotiated().MaxOutCalling
+	if limit < 1 || limit > 2 {
+		t.Fatalf("negotiated MaxOutCalling = %d, want 1..2", limit)
+	}
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Go(func() {
+			if _, err := c.Read(ctx, mms.ReadRequest{DomainID: "interop", ItemID: "boolean"}); err != nil {
+				t.Errorf("Read: %v", err)
+			}
+		})
+	}
+	wg.Wait()
+	mu.Lock()
+	defer mu.Unlock()
+	if peak > limit {
+		t.Errorf("peak %d requests outstanding, negotiated %d", peak, limit)
+	}
+	t.Logf("negotiated %d, peak %d", limit, peak)
+}
+
 func TestClient_Conclude(t *testing.T) {
 	h := startAdapter(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

@@ -158,6 +158,7 @@ The go-mms→libIEC column is the go-mms client against `libiec61850-mms-server`
 |-----------|:---:|:---:|-------|
 | Associate / conclude | ✓ | ✓ | |
 | Negotiated parameters | ✓ | n/a | `Client.Negotiated` |
+| Negotiated outstanding limit | ✓ | n/a | `TestClient_OutstandingLimit`: 16 concurrent Reads with max-services-outstanding-calling 2 proposed; the client's wire never has more than the negotiated value outstanding |
 | Abort (client-initiated) | ✓ | ✓ | |
 | Abort (server-initiated) | n/a | ✓ | `ServerConn.Abort`; the peer observes the connection loss |
 | Reconnect after close | ✓ | ✓ | |

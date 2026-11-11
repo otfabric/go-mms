@@ -105,11 +105,13 @@
 // dispatches unconfirmed PDUs (InformationReport) to the registered
 // handler.
 //
-// Negotiated MaxOutstandingCalling / MaxOutstandingCalled (see
-// [Client.Negotiated]) are proposed during Initiate and exposed for
-// inspection, but are not enforced as a runtime pending-request limit
-// today. Callers that need back-pressure should limit concurrency
-// themselves. Details: LIMITS.md, KNOWN_LIMITATIONS.md, RACE_NOTES.md.
+// The client never has more confirmed requests outstanding than the
+// negotiated max-services-outstanding-calling ([Client.Negotiated]
+// MaxOutCalling, ISO 9506-2 clause 8.2). A request made at the limit
+// waits for a response to free a slot, first come first served, bounded
+// by its context; with [MMSOptions.FailFastOutstanding] it fails with
+// [ErrMaxOutstanding] instead. Details: LIMITS.md, TIMEOUT_AND_CLOSE.md,
+// RACE_NOTES.md.
 //
 // A [Server] is safe for concurrent use. Each [Server.Serve] call
 // handles one association; multiple connections are served in parallel

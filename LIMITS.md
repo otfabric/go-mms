@@ -22,7 +22,7 @@ This document lists all hard limits enforced by go-mms to protect against malfor
 
 These limits apply to recursive decoding of `DataValue` and `TypeSpec` trees. The limits are enforced internally; public API signatures are unchanged.
 
-The server also enforces the negotiated `dataStructureNestingLevel` (ISO 9506-2 clause 8.2): a Write whose data nests deeper gets Reject confirmed-requestPDU max-recursion-exceeded. The client does not check received data against the negotiated level; only the fixed bounds above apply.
+Both sides also enforce the negotiated `dataStructureNestingLevel` (ISO 9506-2 clause 8.2; `Client.Negotiated().NestingLevel`). It counts structure and array levels: a simple value is 0, a structure or array of simple values 1; an AlternateAccess chain counts one level per selection. The server answers a Write whose data nests deeper with Reject confirmed-requestPDU max-recursion-exceeded. The client refuses to send Data or AlternateAccess nested deeper (`ErrInvalidArgument`, nothing is sent), fails a Read, GetVariableAccessAttributes or ReadJournal response whose Data or TypeSpecification nests deeper with `ErrDecodeFailed` and answers it with Reject confirmed-responsePDU max-recursion-exceeded (5), and drops an InformationReport nested deeper with Reject unconfirmedPDU max-recursion-exceeded (3); the association continues. A negotiated level of 0 is not enforced on either side.
 
 ## Collection sizes
 
@@ -70,8 +70,8 @@ The server also enforces the negotiated `dataStructureNestingLevel` (ISO 9506-2 
 
 | Limit | Configured by | Enforced? |
 |-------|---------------|-----------|
-| Client outstanding requests | Proposed via `DialOptions.MMS.MaxOutstandingCalling` (default 5); negotiated value in `Client.Negotiated()` | **Not enforced** at runtime (tracker created with no pending cap) |
-| Server outstanding requests | Proposed via `ServerMMSOptions.MaxOutstandingCalled` (default 5); negotiated per association | Server handles confirmed requests **serially** per connection (natural bound of 1 in-flight handler); negotiated value is not a separate pending queue cap |
+| Client outstanding requests | Proposed via `DialOptions.MMS.MaxOutstandingCalling` (default 5); negotiated value in `Client.Negotiated().MaxOutCalling` | **Enforced**: at most that many confirmed requests are outstanding. A further request waits for a slot, first come first served, until its context ends (`ErrInvokeTimeout` / `context.Canceled`, nothing sent); with `MMSOptions.FailFastOutstanding` it fails at once with `ErrMaxOutstanding`. A request whose caller gave up after it was sent keeps its slot until the server answers it. |
+| Server outstanding requests | Negotiated per association from `ServerMMSOptions.MaxOutstandingCalling` (requests the client may issue, default 5) | The server serves confirmed requests **serially** per connection, so at most one indication is outstanding and the negotiated value (at least 1) cannot be exceeded; requests a client pipelines beyond it wait in the transport and are answered in order. `MaxOutstandingCalled` bounds requests the server issues; it issues none. |
 
 Canonical concurrency wording: package `doc.go` (Concurrency) and [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md).
 

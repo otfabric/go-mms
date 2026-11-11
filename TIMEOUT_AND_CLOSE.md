@@ -54,6 +54,10 @@ With `iso.WithRetry`, one attempt covers TCP connect, TLS and COTP handshakes an
 
 `DialOptions.RequestTimeout`, when positive, bounds every confirmed request; an earlier deadline on the request context still wins. A request whose deadline expires fails with an error matching both `ErrInvokeTimeout` and `context.DeadlineExceeded`. A cancelled request context yields `context.Canceled`. Zero (default) means requests wait until their context is done or the association ends.
 
+### Waiting for an outstanding-request slot
+
+The client keeps at most the negotiated max-services-outstanding-calling confirmed requests outstanding (ISO 9506-2 clause 8.2). A request made at the limit waits for a slot, first come first served; the wait is part of the request and bounded by the same context (and `RequestTimeout`). A request whose context ends while it waits is never sent. `Close`, `Abort` and a lost association end the waiters with `ErrClosed`. With `MMSOptions.FailFastOutstanding` a request at the limit fails at once with `ErrMaxOutstanding` instead.
+
 ### During confirmed request send
 
 Request writes are detached from the request context. Abandoning a PDU half-written would corrupt the stream for every other request on the association, so:
@@ -67,11 +71,13 @@ A request's context ending mid-write therefore no longer tears down the associat
 
 ### While waiting for response
 
-`sendConfirmed` selects on the response channel, `ctx.Done()` and the reader's exit. On `ctx` done the invoke ID is removed from the tracker and the context error is returned (`ErrInvokeTimeout` + `context.DeadlineExceeded`, or `context.Canceled`). If the reader exits, the request fails with the reader's error (matching `ErrClosed`).
+`sendConfirmed` selects on the response channel, `ctx.Done()` and the reader's exit. On `ctx` done the context error is returned (`ErrInvokeTimeout` + `context.DeadlineExceeded`, or `context.Canceled`). If the reader exits, the request fails with the reader's error (matching `ErrClosed`).
+
+A request that was sent stays outstanding at the server until the server answers it (ISO 9506-2 clause 6.3.1), so its invoke ID and its outstanding-request slot are kept after the caller returns. A request whose write was skipped frees its slot at once.
 
 ### Late responses
 
-If a response arrives after the request was cancelled, `tracker.Complete` returns false (the ID was already removed by `Cancel`). The late response is discarded with a log entry (debug during shutdown, warn otherwise).
+A response to a request whose caller gave up completes the kept invoke ID: the response is discarded and the slot frees for the next request. A server that never answers such a request keeps its slot until the association ends. A response for an invoke ID that is not outstanding is discarded with a log entry (debug during shutdown, warn otherwise).
 
 ### Server-side sends
 

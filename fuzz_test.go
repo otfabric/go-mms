@@ -5,6 +5,7 @@ package mms
 import (
 	"bytes"
 	"context"
+	"encoding/asn1"
 	"errors"
 	"io"
 	"log/slog"
@@ -230,4 +231,57 @@ func TestFuzzSeedsDecode(t *testing.T) {
 	if err != nil || tag != asn1util.TagNumRead || !bytes.Contains(resp, []byte{0xa2}) {
 		t.Fatalf("Read seed: tag=%d resp=%x err=%v", tag, resp, err)
 	}
+}
+
+// FuzzResponseNesting decodes a Read response and a TypeSpecification
+// and checks the nesting count the client compares with the negotiated
+// dataStructureNestingLevel: it never exceeds the decoders' own bounds,
+// and a value re-encoded from the decoded tree has the same nesting.
+func FuzzResponseNesting(f *testing.F) {
+	for depth := range 4 {
+		dv, err := valueToDataValue(nested(depth))
+		if err != nil {
+			f.Fatal(err)
+		}
+		body, err := pdu.MarshalReadResponse([]*pdu.AccessResult{{Data: dv}})
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(body)
+		ts, err := typeSpecToWire(nestedType(depth))
+		if err != nil {
+			f.Fatal(err)
+		}
+		enc, err := pdu.EncodeTypeSpec(ts)
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(enc)
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if dvs, err := pdu.UnmarshalReadResponse(asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 4, IsCompound: true, Bytes: data}); err == nil {
+			n := dataListNesting(dvs)
+			if n > 65 {
+				t.Fatalf("data nesting %d beyond the decoder bound", n)
+			}
+			for _, dv := range dvs {
+				enc, err := pdu.MarshalData(dv)
+				if err != nil {
+					continue
+				}
+				back, _, err := pdu.UnmarshalDataElement(enc, 0)
+				if err != nil {
+					t.Fatalf("re-decode: %v", err)
+				}
+				if dataNesting(back) != dataNesting(dv) {
+					t.Fatalf("nesting %d after re-encoding, was %d", dataNesting(back), dataNesting(dv))
+				}
+			}
+		}
+		if ts, err := pdu.DecodeTypeSpec(data); err == nil {
+			if n := typeSpecNesting(&ts); n > 33 {
+				t.Fatalf("typespec nesting %d beyond the decoder bound", n)
+			}
+		}
+	})
 }
