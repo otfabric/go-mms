@@ -47,8 +47,8 @@ MMS_INTEROP_STACK=dscsystems make interop
 # Every stack
 make interop-all
 
-# Published images (CI pins the iec61850-interop v1.5.0 digests in .github/workflows/interop.yml)
-MMS_INTEROP_STACK=iec61850-rust IEC61850RUST_IMAGE=ghcr.io/otfabric/iec61850-interop-iec61850-rust:v1.5.0 make interop
+# Published images (CI pins the iec61850-interop v1.6.1 digests in .github/workflows/interop.yml)
+MMS_INTEROP_STACK=iec61850-rust IEC61850RUST_IMAGE=ghcr.io/otfabric/iec61850-interop-iec61850-rust:v1.6.1 make interop
 
 # Against the latest published go-mms (the Self-interop workflow, run by hand)
 MMS_INTEROP_STACK=otfabric MMS_INTEROP_OTFABRIC_IMAGE=ghcr.io/otfabric/iec61850-interop-otfabric:latest make interop
@@ -219,12 +219,12 @@ The go-mms→libIEC column is the go-mms client against `libiec61850-mms-server`
 | ReadJournal, unknown journal (negative) | ✓ | ✓ | |
 | Cancel | — | — | the go-mms client does not send Cancel |
 
-The ◐ rows are listed with the test that pins the peer behaviour in the iec61850-interop [`docs/CAPABILITIES.md`](https://github.com/otfabric/iec61850-interop/blob/v1.5.0/docs/CAPABILITIES.md) (v1.5.0, the release CI pins).
+The ◐ rows are listed with the test that pins the peer behaviour in the iec61850-interop [`docs/CAPABILITIES.md`](https://github.com/otfabric/iec61850-interop/blob/v1.6.1/docs/CAPABILITIES.md) (v1.6.1, the release CI pins).
 
 ### Association, release and refusal
 
 `make interop-all` against the four pinned peers (libiec61850, dscsystems,
-iec61850-rust, iec61850bean; images from iec61850-interop v1.5.0) passes
+iec61850-rust, iec61850bean; images from iec61850-interop v1.6.1) passes
 with the upper-layer conformance changes of v1.8.0 (run on 2026-11-11, local
 Docker on arm64). The behaviour the suite exercises and what the peer
 sources show for the rest:
