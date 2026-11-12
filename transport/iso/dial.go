@@ -5,6 +5,7 @@ package iso
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -12,6 +13,10 @@ import (
 	"github.com/otfabric/go-cotp"
 	mms "github.com/otfabric/go-mms"
 )
+
+// errNilConn fails a dial whose dialer returned neither a connection nor
+// an error.
+var errNilConn = errors.New("dialer returned no connection and no error")
 
 // DialTCP establishes a TCP connection to addr, performs the TP0 handshake
 // via go-cotp, and returns a [mms.Transport] ready for MMS communication.
@@ -71,7 +76,13 @@ func dialOnce(ctx context.Context, addr string, o Options) (mms.Transport, error
 	}
 	tcpConn, err := dial(ctx, "tcp", addr)
 	if err != nil {
+		if tcpConn != nil {
+			_ = tcpConn.Close()
+		}
 		return nil, fmt.Errorf("iso: tcp dial %s: %w", addr, err)
+	}
+	if tcpConn == nil {
+		return nil, fmt.Errorf("iso: tcp dial %s: %w", addr, errNilConn)
 	}
 
 	conn := tcpConn

@@ -55,6 +55,15 @@ coverage, but no independent security evaluation has been performed.
 TLS transport support relies on Go's standard `crypto/tls` implementation.
 This is not equivalent to IEC 62351 conformance or certification.
 
+## Restricting which hosts a client can reach
+
+An application that limits which IEDs its users can reach enforces the
+allowlist in the dialer it passes to `iso.WithDialer`, for example a
+`net.Dialer` with a `Control` hook, which sees the resolved IP right before
+the connection is made. Checking the host name before calling `iso.Dial`
+leaves a DNS-rebinding gap. `iso.DialTCP` and `iso.Dial` are the only paths
+that open a connection, and both use the dialer on every retry attempt.
+
 ## Disclosure policy
 
 We follow coordinated disclosure. We request that you allow a reasonable fix
