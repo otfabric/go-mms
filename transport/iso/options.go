@@ -167,8 +167,22 @@ func WithRetry(p mms.RetryPolicy) Option {
 
 // WithDialer replaces the function [DialTCP] and [Dial] use to open the
 // TCP connection (by default a zero [net.Dialer]'s DialContext). Use it
-// for proxies, custom socket options, or fault injection in tests. The
-// returned connection is owned by the transport. Ignored by [Listen].
+// for a destination allowlist checked against the resolved IP (for
+// example a [net.Dialer] with a Control hook), a SOCKS or HTTP proxy, a
+// jump host, a source address, custom socket options, or an in-memory
+// connection and fault injection in tests. A [*net.Dialer]'s or a proxy's
+// DialContext fits as a method value. With [WithTLS], the TLS handshake
+// runs over the connection it returns.
+//
+// It is called once per attempt (see [WithRetry]) with network "tcp" and
+// the address given to [DialTCP] or [Dial]. The context carries the
+// caller's deadline and cancellation; a custom dialer must honour it.
+// Like [net.Dialer], it returns a non-nil connection exactly when the
+// error is nil: a connection returned together with an error is closed,
+// and a nil connection with a nil error fails the dial.
+// Its error is wrapped, so [errors.Is] reaches it, for example an
+// allowlist's refusal. The returned connection is owned and closed by
+// the transport. Nil keeps the default. Ignored by [Listen].
 func WithDialer(dial func(ctx context.Context, network, addr string) (net.Conn, error)) Option {
 	return func(o *Options) {
 		o.dialer = dial

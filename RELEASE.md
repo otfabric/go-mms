@@ -1,5 +1,29 @@
 # go-mms Releases
 
+## v1.9.2
+
+**Date:** 2026-11-12
+**Previous release:** v1.9.1
+
+No API change. The dialer set with `iso.WithDialer` now follows the `net.Dialer` contract (policy 1.5, API-R03).
+
+### Fixed
+
+- A dialer that returns neither a connection nor an error fails the dial with an error. Before, `DialTCP` and `Dial` panicked on the nil connection.
+- A connection a dialer returns together with an error is closed. Before, it leaked.
+
+### Documentation
+
+- `iso.WithDialer`: the uses (allowlist against the resolved IP, proxy, jump host, source address, in-memory connection), one call per retry attempt with network `tcp` and the given address, the context carrying the caller's deadline and cancellation that a custom dialer must honour, the connection/error contract and error wrapping.
+- SECURITY.md: an address allowlist belongs in the dialer (`net.Dialer.Control`), not in a host-name check before dialling.
+- AGENTS.md names policy 1.5, the version `.otfabric/policy.yaml` pins.
+
+### Testing
+
+- `transport/iso/dialer_test.go`: the network, address and deadline the dialer receives, cancellation reaching the dialer, error wrapping (`errors.Is`), the nil-connection case, a connection returned with an error being closed, and a fault injected through the dialer (the peer cuts the connection after the CR).
+
+---
+
 ## v1.9.1
 
 **Date:** 2026-11-11
