@@ -713,7 +713,11 @@ type InformationReportIndication struct {
 // unsolicited InformationReport from the server.
 //
 // The handler is called on the client's internal reader goroutine.
-// Long-running work should be dispatched to a separate goroutine.
+// Long-running work should be dispatched to a separate goroutine. While
+// the handler runs no response is read, so it must not call a confirmed
+// service of the same [Client]; such a call fails when its context ends.
+// It may call [Client.Abort]; [Client.Close] returns only when its
+// context is done.
 type InformationReportHandler func(report *InformationReportIndication)
 
 // InformationReportRequest is used to send an InformationReport from the

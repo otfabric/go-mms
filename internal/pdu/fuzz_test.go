@@ -3,13 +3,16 @@
 package pdu
 
 import (
+	"bytes"
 	"encoding/asn1"
 	"encoding/hex"
 	"math"
+	"math/big"
 	"testing"
 	"time"
 
 	"github.com/otfabric/go-mms/internal/berutil"
+	"github.com/otfabric/go-mms/internal/codec"
 )
 
 // FuzzDecodeTypeSpec fuzzes the TypeSpecification decoder with arbitrary bytes.
@@ -113,7 +116,17 @@ func FuzzUnmarshalDataElement(f *testing.F) {
 	f.Add([]byte{0x85, 0x10})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _, _ = UnmarshalDataElement(data, 0)
+		v, n, err := UnmarshalDataElement(data, 0)
+		if err != nil {
+			return
+		}
+		if v == nil || n <= 0 || n > len(data) {
+			t.Fatalf("UnmarshalDataElement = %v, %d of %d octets, nil error", v, n, len(data))
+		}
+		if !encodableData(v) {
+			return
+		}
+		reencodes(t, v, MarshalData, decodeOneElement)
 	})
 }
 
@@ -126,7 +139,15 @@ func FuzzUnmarshalAccessResults(f *testing.F) {
 	f.Add([]byte{0x83, 0x01, 0xff, 0x85}) // truncated second element
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _ = UnmarshalAccessResults(data)
+		vs, err := UnmarshalAccessResults(data)
+		if err != nil {
+			return
+		}
+		noNil(t, vs)
+		if !encodableData(vs...) {
+			return
+		}
+		reencodes(t, vs, MarshalDataList, UnmarshalAccessResults)
 	})
 }
 
@@ -142,7 +163,15 @@ func FuzzDecodePdu(f *testing.F) {
 	f.Add([]byte{0xff})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _, _ = DecodePdu(data)
+		kind, content, err := DecodePdu(data)
+		if err != nil {
+			return
+		}
+		// The contents wrapped in the same identifier decode the same.
+		again, content2, err := DecodePdu(berutil.EncodeTLV(data[0], content))
+		if err != nil || again != kind || !bytes.Equal(content2, content) {
+			t.Fatalf("re-wrapped contents decode as %v, % x, %v; want %v, % x", again, content2, err, kind, content)
+		}
 	})
 }
 
@@ -157,7 +186,23 @@ func FuzzDecodeConfirmedError(f *testing.F) {
 	f.Add([]byte{0x80, 0x01, 0x00}) // invokeID only
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _ = DecodeConfirmedError(data)
+		ce, err := DecodeConfirmedError(data)
+		if err != nil {
+			return
+		}
+		if ce.ErrorClass != ce.Detail.ErrorClass || ce.ErrorCode != ce.Detail.ErrorCode {
+			t.Fatalf("class %d, code %d do not repeat the ServiceError's %d, %d", ce.ErrorClass, ce.ErrorCode, ce.Detail.ErrorClass, ce.Detail.ErrorCode)
+		}
+		reencodes(t, ce, func(ce *ConfirmedError) ([]byte, error) {
+			f := codec.ServiceErrorFields{AdditionalCode: ce.Detail.AdditionalCode}
+			if d := ce.Detail.AdditionalDescription; d != nil {
+				f.AdditionalDescription = *d
+			}
+			if s := ce.Detail.ServiceSpecific; s != nil {
+				f.HasSpecific, f.SpecificKind, f.SpecificContent = true, s.Kind, s.Raw
+			}
+			return pduContent(codec.MarshalConfirmedErrorFields(ce.InvokeID, ce.ErrorClass, ce.ErrorCode, f))
+		}, DecodeConfirmedError)
 	})
 }
 
@@ -170,7 +215,19 @@ func FuzzDecodeRejectPDU(f *testing.F) {
 	f.Add(reason) // no invokeID
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _ = DecodeRejectPDU(data)
+		r, err := DecodeRejectPDU(data)
+		if err != nil {
+			return
+		}
+		if r.RejectType < 1 || r.RejectType > 11 || !r.HasInvokeID && r.InvokeID != 0 {
+			t.Fatalf("DecodeRejectPDU = %+v", r)
+		}
+		reencodes(t, r, func(r *RejectPDU) ([]byte, error) {
+			if r.HasInvokeID {
+				return pduContent(codec.MarshalRejectPDU(r.InvokeID, r.RejectType, r.RejectReason))
+			}
+			return pduContent(codec.MarshalRejectPDUNoInvokeID(r.RejectType, r.RejectReason))
+		}, DecodeRejectPDU)
 	})
 }
 
@@ -180,7 +237,20 @@ func FuzzDecodeConfirmedResponse(f *testing.F) {
 	f.Add([]byte{})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _ = DecodeConfirmedResponse(data)
+		r, err := DecodeConfirmedResponse(data)
+		if err != nil {
+			return
+		}
+		if r.ServiceKind != ClassifyServiceTag(r.ServiceData.Tag) {
+			t.Fatalf("service kind %v for tag %d", r.ServiceKind, r.ServiceData.Tag)
+		}
+		reencodes(t, r, func(r *ConfirmedResponse) ([]byte, error) {
+			b, err := codec.MarshalConfirmedResponse(r.InvokeID, r.ServiceData.Tag, r.ServiceData.IsCompound, r.ServiceData.Bytes)
+			if err != nil {
+				return nil, err
+			}
+			return pduContent(b)
+		}, DecodeConfirmedResponse)
 	})
 }
 
@@ -195,7 +265,17 @@ func FuzzUnmarshalReadResponse(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		raw := asn1.RawValue{Tag: 4, Class: 2, IsCompound: true, Bytes: data}
-		_, _ = UnmarshalReadResponse(raw)
+		vs, err := UnmarshalReadResponse(raw)
+		if err != nil {
+			return
+		}
+		noNil(t, vs)
+		if !encodableData(vs...) {
+			return
+		}
+		reencodes(t, vs, marshalReadResults, func(b []byte) ([]*DataValue, error) {
+			return UnmarshalReadResponse(serviceResponse(4, b))
+		})
 	})
 }
 
@@ -207,7 +287,19 @@ func FuzzUnmarshalWriteResponse(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		raw := asn1.RawValue{Tag: 5, Class: 2, IsCompound: true, Bytes: data}
-		_, _ = UnmarshalWriteResponse(raw)
+		items, err := UnmarshalWriteResponse(raw)
+		if err != nil {
+			return
+		}
+		reencodes(t, items, func(items []WriteResultItem) ([]byte, error) {
+			results := make([]WriteResult, len(items))
+			for i, it := range items {
+				results[i] = WriteResult{Success: it.Success, Code: it.ErrCode}
+			}
+			return MarshalWriteResponse(results)
+		}, func(b []byte) ([]WriteResultItem, error) {
+			return UnmarshalWriteResponse(serviceResponse(5, b))
+		})
 	})
 }
 
@@ -220,7 +312,15 @@ func FuzzUnmarshalGetNameListResponse(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		raw := asn1.RawValue{Tag: 1, Class: 2, IsCompound: true, Bytes: data}
-		_, _ = UnmarshalGetNameListResponse(raw)
+		r, err := UnmarshalGetNameListResponse(raw)
+		if err != nil {
+			return
+		}
+		reencodes(t, r, func(r *GetNameListResult) ([]byte, error) {
+			return MarshalGetNameListResponse(r.Names, r.MoreFollows)
+		}, func(b []byte) (*GetNameListResult, error) {
+			return UnmarshalGetNameListResponse(serviceResponse(1, b))
+		})
 	})
 }
 
@@ -233,7 +333,17 @@ func FuzzUnmarshalGetVarAccessResponse(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		raw := asn1.RawValue{Tag: 6, Class: 2, IsCompound: true, Bytes: data}
-		_, _ = UnmarshalGetVarAccessResponse(raw)
+		r, err := UnmarshalGetVarAccessResponse(raw)
+		if err != nil || r.TypeSpec.Tag == tsTagTypeName {
+			// A top-level typeName is decoded but not encoded (see
+			// MarshalGetVarAccessResponse).
+			return
+		}
+		reencodes(t, r, func(r *GetVarAccessResult) ([]byte, error) {
+			return MarshalGetVarAccessResponse(r.Deletable, r.TypeSpec)
+		}, func(b []byte) (*GetVarAccessResult, error) {
+			return UnmarshalGetVarAccessResponse(serviceResponse(6, b))
+		})
 	})
 }
 
@@ -249,7 +359,15 @@ func FuzzUnmarshalGetNamedVarListAttrsResponse(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		raw := asn1.RawValue{Tag: 12, Class: 2, IsCompound: true, Bytes: data}
-		_, _ = UnmarshalGetNamedVarListAttrsResponse(raw)
+		r, err := UnmarshalGetNamedVarListAttrsResponse(raw)
+		if err != nil {
+			return
+		}
+		reencodes(t, r, func(r *NamedVarListAttrsResult) ([]byte, error) {
+			return MarshalGetNVLAttrsResponse(r.Deletable, r.Variables)
+		}, func(b []byte) (*NamedVarListAttrsResult, error) {
+			return UnmarshalGetNamedVarListAttrsResponse(serviceResponse(12, b))
+		})
 	})
 }
 
@@ -262,7 +380,15 @@ func FuzzUnmarshalDeleteNamedVarListResponse(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		raw := asn1.RawValue{Tag: 13, Class: 2, IsCompound: true, Bytes: data}
-		_, _ = UnmarshalDeleteNamedVarListResponse(raw)
+		r, err := UnmarshalDeleteNamedVarListResponse(raw)
+		if err != nil {
+			return
+		}
+		reencodes(t, r, func(r *DeleteNamedVarListResult) ([]byte, error) {
+			return MarshalDeleteNVLResponse(r.NumberMatched, r.NumberDeleted)
+		}, func(b []byte) (*DeleteNamedVarListResult, error) {
+			return UnmarshalDeleteNamedVarListResponse(serviceResponse(13, b))
+		})
 	})
 }
 
@@ -276,7 +402,13 @@ func FuzzUnmarshalFileOpenRequest(f *testing.F) {
 	f.Add([]byte{0xff})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _ = UnmarshalFileOpenRequest(data)
+		r, err := UnmarshalFileOpenRequest(data)
+		if err != nil {
+			return
+		}
+		reencodes(t, r, func(r *FileOpenRequest) ([]byte, error) {
+			return requestBody(MarshalFileOpenRequest(1, r.FileName, r.InitialPosition))
+		}, UnmarshalFileOpenRequest)
 	})
 }
 
@@ -287,7 +419,13 @@ func FuzzUnmarshalFileOpenResponse(f *testing.F) {
 	f.Add([]byte{0x80, 0x01, 0x01}) // frsmID only, no attributes
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _ = UnmarshalFileOpenResponse(data)
+		r, err := UnmarshalFileOpenResponse(data)
+		if err != nil {
+			return
+		}
+		reencodes(t, r, func(r *FileOpenResult) ([]byte, error) {
+			return MarshalFileOpenResponse(r.FrsmID, r.Size, r.LastModified)
+		}, UnmarshalFileOpenResponse)
 	})
 }
 
@@ -299,7 +437,13 @@ func FuzzUnmarshalFileReadResponse(f *testing.F) {
 	f.Add([]byte{})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _ = UnmarshalFileReadResponse(data)
+		r, err := UnmarshalFileReadResponse(data)
+		if err != nil {
+			return
+		}
+		reencodes(t, r, func(r *FileReadResult) ([]byte, error) {
+			return MarshalFileReadResponse(r.Data, r.MoreFollows)
+		}, UnmarshalFileReadResponse)
 	})
 }
 
@@ -311,7 +455,13 @@ func FuzzUnmarshalFileDirectoryRequest(f *testing.F) {
 	f.Add([]byte{})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _ = UnmarshalFileDirectoryRequest(data)
+		r, err := UnmarshalFileDirectoryRequest(data)
+		if err != nil {
+			return
+		}
+		reencodes(t, r, func(r *FileDirectoryRequest) ([]byte, error) {
+			return requestBody(MarshalFileDirectoryRequest(1, r.FileSpec, r.ContinueAfter))
+		}, UnmarshalFileDirectoryRequest)
 	})
 }
 
@@ -326,7 +476,16 @@ func FuzzUnmarshalFileDirectoryResponse(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _, _ = UnmarshalFileDirectoryResponse(data)
+		entries, more, err := UnmarshalFileDirectoryResponse(data)
+		if err != nil {
+			return
+		}
+		reencodes(t, page[FileDirectoryEntry]{entries, more}, func(p page[FileDirectoryEntry]) ([]byte, error) {
+			return MarshalFileDirectoryResponse(p.items, p.more)
+		}, func(b []byte) (page[FileDirectoryEntry], error) {
+			entries, more, err := UnmarshalFileDirectoryResponse(b)
+			return page[FileDirectoryEntry]{entries, more}, err
+		})
 	})
 }
 
@@ -347,7 +506,21 @@ func FuzzUnmarshalReadJournalRequest(f *testing.F) {
 	f.Add([]byte{})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _ = UnmarshalReadJournalRequest(data)
+		r, err := UnmarshalReadJournalRequest(data)
+		if err != nil {
+			return
+		}
+		// rangeStart and rangeStop are CHOICEs (ISO 9506-2 clause 23.7.1).
+		switch {
+		case r.Journal == "",
+			r.HasStartTime && r.HasStartEntry,
+			r.HasStopTime && r.HasNumberOfEntries,
+			r.IsTimeRange != (r.HasStartTime && r.HasStopTime),
+			r.NumberOfEntries < 0,
+			!r.HasNumberOfEntries && r.NumberOfEntries != 0,
+			!r.HasStartEntry && r.StartEntry != nil:
+			t.Fatalf("UnmarshalReadJournalRequest = %+v", r)
+		}
 	})
 }
 
@@ -366,7 +539,23 @@ func FuzzUnmarshalReadJournalResponse(f *testing.F) {
 	f.Add([]byte{})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _, _ = UnmarshalReadJournalResponse(data)
+		entries, more, err := UnmarshalReadJournalResponse(data)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			for _, v := range e.Variables {
+				if !encodableData(v.Value) {
+					return
+				}
+			}
+		}
+		reencodes(t, page[JournalEntryWire]{entries, more}, func(p page[JournalEntryWire]) ([]byte, error) {
+			return MarshalReadJournalResponse(p.items, p.more)
+		}, func(b []byte) (page[JournalEntryWire], error) {
+			entries, more, err := UnmarshalReadJournalResponse(b)
+			return page[JournalEntryWire]{entries, more}, err
+		})
 	})
 }
 
@@ -388,7 +577,16 @@ func FuzzUnmarshalGetNameListRequest(f *testing.F) {
 	f.Add([]byte{})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _ = UnmarshalGetNameListRequest(data)
+		r, err := UnmarshalGetNameListRequest(data)
+		if err != nil || r.ObjectClass < 0 {
+			// The decoder keeps any INTEGER as the object class;
+			// MarshalGetNameListRequest encodes only one that is not
+			// negative.
+			return
+		}
+		reencodes(t, r, func(r *GetNameListRequest) ([]byte, error) {
+			return requestBody(MarshalGetNameListRequest(1, r.ObjectClass, r.Scope, r.DomainID, r.ContinueAfter))
+		}, UnmarshalGetNameListRequest)
 	})
 }
 
@@ -402,9 +600,24 @@ func FuzzUnmarshalReadRequestParsed(f *testing.F) {
 	varListName := berutil.EncodeTLV(0xa1, listNameBytes)
 	f.Add(varListName)
 	f.Add([]byte{})
+	// AlternateAccess chains at and beyond the depth limit.
+	f.Add(readRequestWithSelection(maxAlternateAccessDepth))
+	f.Add(readRequestWithSelection(maxAlternateAccessDepth + 1))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _ = UnmarshalReadRequestParsed(data)
+		r, err := UnmarshalReadRequestParsed(data)
+		if err != nil {
+			return
+		}
+		if r.ListName != nil && r.Variables != nil {
+			t.Fatalf("both a list name and variables: %+v", r)
+		}
+		reencodes(t, r, func(r *ReadRequestWire) ([]byte, error) {
+			if r.ListName != nil {
+				return requestBody(MarshalReadRequestByListNameWithSpec(1, *r.ListName, r.SpecWithResult))
+			}
+			return requestBody(MarshalReadRequestWithAccess(1, r.Variables))
+		}, UnmarshalReadRequestParsed)
 	})
 }
 
@@ -418,7 +631,23 @@ func FuzzUnmarshalWriteRequestParsed(f *testing.F) {
 	f.Add([]byte{})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _ = UnmarshalWriteRequestParsed(data)
+		r, err := UnmarshalWriteRequestParsed(data)
+		if err != nil {
+			return
+		}
+		if r.ListName != nil && r.Variables != nil {
+			t.Fatalf("both a list name and variables: %+v", r)
+		}
+		noNil(t, r.Values)
+		if !encodableData(r.Values...) {
+			return
+		}
+		reencodes(t, r, func(r *WriteRequestWire) ([]byte, error) {
+			if r.ListName != nil {
+				return requestBody(MarshalWriteRequestByListName(1, *r.ListName, r.Values))
+			}
+			return requestBody(MarshalWriteRequestWithAccess(1, r.Variables, r.Values))
+		}, UnmarshalWriteRequestParsed)
 	})
 }
 
@@ -432,7 +661,13 @@ func FuzzUnmarshalDefineNVLRequest(f *testing.F) {
 	f.Add([]byte{})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _ = UnmarshalDefineNVLRequest(data)
+		r, err := UnmarshalDefineNVLRequest(data)
+		if err != nil {
+			return
+		}
+		reencodes(t, r, func(r *DefineNVLRequest) ([]byte, error) {
+			return requestBody(MarshalDefineNamedVarListRequest(1, r.ListName, r.Variables))
+		}, UnmarshalDefineNVLRequest)
 	})
 }
 
@@ -465,7 +700,24 @@ func FuzzUnmarshalInformationReport(f *testing.F) {
 	f.Add([]byte{})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _ = UnmarshalInformationReport(data)
+		r, err := UnmarshalInformationReport(data)
+		if err != nil {
+			return
+		}
+		if r.ListName != nil && r.Variables != nil {
+			t.Fatalf("both a list name and variables: %+v", r)
+		}
+		noNil(t, r.Values)
+		if !encodableData(r.Values...) {
+			return
+		}
+		reencodes(t, r, func(r *InformationReportWire) ([]byte, error) {
+			b, err := MarshalInformationReport(r)
+			if err != nil {
+				return nil, err
+			}
+			return pduContent(b)
+		}, UnmarshalInformationReport)
 	})
 }
 
@@ -550,12 +802,19 @@ func FuzzDecodeReal(f *testing.F) {
 	// exponents whose product with the base shift overflows int64
 	f.Add(realWithExponent(false, 0x40, 0, 0, 0, 0, 0, 0, 0))
 	f.Add(realWithExponent(true, 0xc0, 0, 0, 0, 0, 0, 0, 0))
+	// a zero mantissa with a large exponent; a full mantissa whose
+	// product is subnormal
+	f.Add([]byte{0x81, 0x7f, 0xff, 0x00})
+	f.Add([]byte{0x81, 0xfb, 0x8f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff})
 
 	f.Fuzz(func(t *testing.T, content []byte) {
 		data := berutil.EncodeTLV(TagDataReal, content)
 		dv, _, err := UnmarshalDataElement(data, 0)
 		if err != nil {
 			return
+		}
+		if want, ok := realReference(content); ok && math.Float64bits(dv.Float) != math.Float64bits(want) {
+			t.Fatalf("% x decodes as %v, want %v", content, dv.Float, want)
 		}
 		encoded, err := MarshalData(dv)
 		if err != nil {
@@ -572,6 +831,49 @@ func FuzzDecodeReal(f *testing.F) {
 			t.Fatalf("round-trip Real mismatch: %v vs %v", dv.Float, dv2.Float)
 		}
 	})
+}
+
+// realReference is the value of binary REAL content, M × 2^F × B^E
+// (X.690 §8.5), computed apart from the decoder: the exponent in a
+// big.Int, the scaling with math.Ldexp. ok is false for the other forms.
+func realReference(content []byte) (v float64, ok bool) {
+	if len(content) < 2 || content[0]&0x80 == 0 {
+		return 0, false
+	}
+	info := content[0]
+	shift := [...]int64{1, 3, 4, 0}[(info>>4)&0x03]
+	if shift == 0 {
+		return 0, false
+	}
+	rest := content[1:]
+	n := int(info&0x03) + 1
+	if info&0x03 == 0x03 {
+		n, rest = int(rest[0]), rest[1:]
+	}
+	if n == 0 || len(rest) <= n || len(rest)-n > 8 {
+		return 0, false
+	}
+	e := new(big.Int).SetBytes(rest[:n])
+	if rest[0]&0x80 != 0 {
+		e.Sub(e, new(big.Int).Lsh(big.NewInt(1), uint(8*n)))
+	}
+	e.Mul(e, big.NewInt(shift))
+	e.Add(e, big.NewInt(int64((info>>2)&0x03)))
+	// Beyond ±2^20 every non-zero mantissa gives ±Inf or zero.
+	if bound := big.NewInt(1 << 20); e.Cmp(bound) > 0 {
+		e = bound
+	} else if e.Cmp(new(big.Int).Neg(bound)) < 0 {
+		e = new(big.Int).Neg(bound)
+	}
+	var m uint64
+	for _, b := range rest[n:] {
+		m = m<<8 | uint64(b)
+	}
+	v = math.Ldexp(float64(m), int(e.Int64()))
+	if info&0x40 != 0 {
+		v = -v
+	}
+	return v, true
 }
 
 // FuzzDecodeBooleanArray fuzzes the BooleanArray data element decoder.

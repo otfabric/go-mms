@@ -8,6 +8,7 @@ package servermodel
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 )
@@ -141,12 +142,30 @@ func (r *Registry) RegisterVariable(entry *VarEntry) error {
 	return nil
 }
 
-// LookupVariable returns the variable entry for the given scope/domain/itemID.
+// LookupVariable returns a copy of the variable entry for the given
+// scope/domain/itemID, taken under the registry lock: SetVariableRead may
+// change the registered entry while the caller uses the copy.
 func (r *Registry) LookupVariable(scope int, domain, itemID string) (*VarEntry, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	v, ok := r.vars[varKey(scope, domain, itemID)]
-	return v, ok
+	if !ok {
+		return nil, false
+	}
+	e := *v
+	return &e, true
+}
+
+// SetVariableRead replaces the ReadFunc of a registered variable under the
+// registry lock. It reports whether the variable exists.
+func (r *Registry) SetVariableRead(scope int, domain, itemID string, fn any) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	v, ok := r.vars[varKey(scope, domain, itemID)]
+	if ok {
+		v.ReadFunc = fn
+	}
+	return ok
 }
 
 // NameListResult holds a page of names for GetNameList.
@@ -320,6 +339,9 @@ func (r *Registry) ListVMDNVLs(continueAfter string, maxNames int) NameListResul
 	return paginate(r.vmdNVLOrder, continueAfter, maxNames)
 }
 
+// paginate returns one page of sorted. The page is a copy: the registry
+// shifts its sorted slices in place when an entry is added or removed,
+// and the caller reads the page after the registry lock is released.
 func paginate(sorted []string, continueAfter string, maxNames int) NameListResult {
 	if maxNames <= 0 {
 		maxNames = defaultPageSize
@@ -340,7 +362,7 @@ func paginate(sorted []string, continueAfter string, maxNames int) NameListResul
 
 	remaining := sorted[start:]
 	if len(remaining) <= maxNames {
-		return NameListResult{Names: remaining, MoreFollows: false}
+		return NameListResult{Names: slices.Clone(remaining), MoreFollows: false}
 	}
-	return NameListResult{Names: remaining[:maxNames], MoreFollows: true}
+	return NameListResult{Names: slices.Clone(remaining[:maxNames]), MoreFollows: true}
 }

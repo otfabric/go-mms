@@ -277,11 +277,17 @@ func appendBase128(buf []byte, v int) []byte {
 	return append(buf, tmp[i:]...)
 }
 
+// decodeBase128 decodes a base-128 integer of at most six octets. A value
+// that does not fit an int on this platform is an error, checked before
+// each shift.
 func decodeBase128(data []byte, offset int) (int, int, error) {
 	v := 0
 	n := 0
 	for i := offset; i < len(data); i++ {
 		n++
+		if v > math.MaxInt>>7 {
+			return 0, 0, fmt.Errorf("base128 integer too large")
+		}
 		v = (v << 7) | int(data[i]&0x7f)
 		if data[i]&0x80 == 0 {
 			return v, n, nil

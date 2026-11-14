@@ -123,3 +123,35 @@ func TestSelectRangeBounds(t *testing.T) {
 		}
 	}
 }
+
+// The server's range patch gets its start and count from the peer: a sum
+// that does not fit an int is refused, not wrapped.
+func TestPatchRangeBounds(t *testing.T) {
+	elems := func(n int) *Value {
+		vs := make([]*Value, n)
+		for i := range vs {
+			vs[i] = NewInteger(int64(10 + i))
+		}
+		return NewArray(vs)
+	}
+	for _, tc := range []struct {
+		start, count int
+		ok           bool
+	}{
+		{0, 3, true}, {1, 2, true}, {2, 1, true}, {3, 0, true}, {0, 0, true},
+		{-1, 1, false}, {0, -1, false}, {4, 0, false}, {1, 3, false}, {3, 1, false},
+		{math.MaxInt, 1, false}, {1, math.MaxInt, false}, {math.MaxInt, math.MaxInt, false},
+		{math.MaxInt32, 1, false}, {math.MinInt, 1, false},
+	} {
+		arr := elems(3)
+		// The written array has count elements where that is possible, so
+		// that only the range check decides.
+		n := tc.count
+		if n < 0 || n > 3 {
+			n = 1
+		}
+		if got := patchRange(arr, tc.start, tc.count, nil, elems(n)); got != tc.ok {
+			t.Errorf("patchRange(%d, %d) = %v, want %v", tc.start, tc.count, got, tc.ok)
+		}
+	}
+}

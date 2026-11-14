@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -115,6 +116,9 @@ func wireErrCode(code DataAccessErrorCode) int {
 // Active server connections can be iterated via [Server.Connections] and
 // used to send unconfirmed PDUs such as InformationReport.
 type Server struct {
+	// mu guards identifyHandler and statusHandler. It is never held
+	// while a handler, callback or provider runs: they may call back
+	// into the Server.
 	mu              sync.RWMutex
 	logger          *slog.Logger
 	mmsOpts         ServerMMSOptions
@@ -134,6 +138,12 @@ type Server struct {
 	conns     map[*ServerConn]struct{}
 	listeners map[TransportListener]struct{}
 	shutdown  bool
+	// serving holds every running Serve, from entry to return, with the
+	// cancel function of its context; conns only the associated ones.
+	serving map[*ServerConn]context.CancelCauseFunc
+	// servingDone is made by the first Shutdown and closed when serving
+	// is empty.
+	servingDone chan struct{}
 }
 
 // ServerConn represents an active server-side MMS association. It can
@@ -188,17 +198,20 @@ func NewServer(opts ServerOptions) *Server {
 		},
 		conns:     make(map[*ServerConn]struct{}),
 		listeners: make(map[TransportListener]struct{}),
+		serving:   make(map[*ServerConn]context.CancelCauseFunc),
 	}
 }
 
-// HandleIdentify registers a handler for the MMS Identify service.
+// HandleIdentify registers a handler for the MMS Identify service. It may
+// be called while the server serves, also from a handler or callback.
 func (s *Server) HandleIdentify(h func(context.Context, IdentifyRequest) (*ServerIdentity, error)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.identifyHandler = h
 }
 
-// HandleStatus registers a handler for the MMS Status service.
+// HandleStatus registers a handler for the MMS Status service. It may be
+// called while the server serves, also from a handler or callback.
 func (s *Server) HandleStatus(h func(context.Context, StatusRequest) (*ServerStatus, error)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -249,13 +262,12 @@ func (s *Server) RegisterVariable(v Variable) error {
 // on CO attributes after the server model has been fully built.
 //
 // Returns an error if no domain-scoped variable with the given domain
-// and itemID exists.
+// and itemID exists. It may be called while the server serves: a Read
+// uses the handler set before the request looked the variable up.
 func (s *Server) SetVariableRead(domain, itemID string, fn func(context.Context) (*Value, error)) error {
-	entry, ok := s.registry.LookupVariable(int(ObjectScopeDomain), domain, itemID)
-	if !ok {
+	if !s.registry.SetVariableRead(int(ObjectScopeDomain), domain, itemID, fn) {
 		return invalidArgf("mms: SetVariableRead: variable %s/%s not found", domain, itemID)
 	}
-	entry.ReadFunc = fn
 	return nil
 }
 
@@ -332,11 +344,17 @@ func (s *Server) Serve(ctx context.Context, conn Transport) error {
 	if remote != "" {
 		logger = logger.With("remote_addr", remote)
 	}
-	if s.isShutdown() {
-		return ErrServerClosed
-	}
 
 	sc := &ServerConn{busy: make(chan struct{}, 1), remote: remote, frsmTable: newFRSMTable()}
+	// Shutdown cancels the context of a Serve that is not associated yet,
+	// with the cause ErrServerClosed, and waits for every Serve to return.
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	if !s.trackServe(sc, cancel) {
+		return ErrServerClosed
+	}
+	defer s.untrackServe(sc)
+
 	connOpts := s.assocOpts
 	connOpts.MaxPDUSize = s.mmsOpts.MaxPDUSize
 	connOpts.MaxOutstandingCalling = s.mmsOpts.MaxOutstandingCalling
@@ -351,7 +369,9 @@ func (s *Server) Serve(ctx context.Context, conn Transport) error {
 
 	authToken, err := s.associate(ctx, conn, c, logger)
 	if err != nil {
-		if ctx.Err() != nil {
+		if cause := context.Cause(ctx); errors.Is(cause, ErrServerClosed) {
+			err = errors.Join(ErrServerClosed, err)
+		} else if ctx.Err() != nil {
 			err = errors.Join(ctx.Err(), err)
 		}
 		logger.Info("mms: association failed", "error", err)
@@ -565,19 +585,50 @@ func (s *Server) isShutdown() bool {
 	return s.shutdown
 }
 
+// trackServe records a running Serve; it reports false after Shutdown.
+func (s *Server) trackServe(sc *ServerConn, cancel context.CancelCauseFunc) bool {
+	s.connsMu.Lock()
+	defer s.connsMu.Unlock()
+	if s.shutdown {
+		return false
+	}
+	s.serving[sc] = cancel
+	return true
+}
+
+func (s *Server) untrackServe(sc *ServerConn) {
+	s.connsMu.Lock()
+	defer s.connsMu.Unlock()
+	delete(s.serving, sc)
+	if s.servingDone != nil && len(s.serving) == 0 {
+		close(s.servingDone)
+	}
+}
+
 // Shutdown stops the server gracefully: it closes the listeners of every
 // running [Server.ListenAndServe] (which then return [ErrServerClosed]),
-// lets each association finish the request it is handling, and then
-// aborts it (ACSE ABRT and transport close). MMS has no server-initiated
-// orderly release, so idle associations are aborted right away.
+// ends every connection that is not associated yet (its Serve returns an
+// error matching [ErrServerClosed]), lets each association finish the
+// request it is handling, and then aborts it (ACSE ABRT and transport
+// close). MMS has no server-initiated orderly release, so idle
+// associations are aborted right away. Shutdown returns when every
+// [Server.Serve] has returned.
 //
 // If ctx is done before all in-flight requests finish, the remaining
-// associations are aborted immediately and Shutdown returns ctx.Err().
+// associations are aborted immediately and Shutdown returns ctx.Err()
+// without waiting further for Serve to return.
 // After Shutdown, [Server.Serve] and [Server.ListenAndServe] return
 // [ErrServerClosed]. Shutdown is safe to call more than once.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.connsMu.Lock()
 	s.shutdown = true
+	if s.servingDone == nil {
+		s.servingDone = make(chan struct{})
+		if len(s.serving) == 0 {
+			close(s.servingDone)
+		}
+	}
+	servingDone := s.servingDone
 	lns := make([]TransportListener, 0, len(s.listeners))
 	for ln := range s.listeners {
 		lns = append(lns, ln)
@@ -586,10 +637,22 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	for sc := range s.conns {
 		conns = append(conns, sc)
 	}
+	var associating []context.CancelCauseFunc
+	for sc, cancel := range s.serving {
+		if _, ok := s.conns[sc]; !ok {
+			associating = append(associating, cancel)
+		}
+	}
 	s.connsMu.Unlock()
 
 	for _, ln := range lns {
 		_ = ln.Close()
+	}
+	// Not associated yet: cancelling the context of Serve closes its
+	// transport, which ends ReceiveAssociation, and registerConn refuses
+	// the association after Shutdown.
+	for _, cancel := range associating {
+		cancel(ErrServerClosed)
 	}
 
 	var wg sync.WaitGroup
@@ -608,6 +671,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}(sc)
 	}
 	wg.Wait()
+	select {
+	case <-servingDone:
+	case <-ctx.Done():
+	}
 	s.logger.Info("mms: server shut down", "aborted", len(conns))
 	return ctx.Err()
 }
@@ -698,11 +765,13 @@ func (sc *ServerConn) listAssocNVLs(continueAfter string, maxNames int) servermo
 			}
 		}
 	}
+	// A copy: the order slice is shifted in place when an entry is added
+	// or removed, and the page is read after sc.mu is released.
 	remaining := sorted[start:]
 	if len(remaining) > maxNames {
-		return servermodel.NameListResult{Names: remaining[:maxNames], MoreFollows: true}
+		return servermodel.NameListResult{Names: slices.Clone(remaining[:maxNames]), MoreFollows: true}
 	}
-	return servermodel.NameListResult{Names: remaining, MoreFollows: false}
+	return servermodel.NameListResult{Names: slices.Clone(remaining), MoreFollows: false}
 }
 
 func (sc *ServerConn) deleteAllAssocNVLs() (matched, deleted int) {
@@ -781,11 +850,13 @@ func (sc *ServerConn) listAssocVars(continueAfter string, maxNames int) servermo
 			}
 		}
 	}
+	// A copy: the order slice is shifted in place when an entry is added
+	// or removed, and the page is read after sc.mu is released.
 	remaining := sorted[start:]
 	if len(remaining) > maxNames {
-		return servermodel.NameListResult{Names: remaining[:maxNames], MoreFollows: true}
+		return servermodel.NameListResult{Names: slices.Clone(remaining[:maxNames]), MoreFollows: true}
 	}
-	return servermodel.NameListResult{Names: remaining, MoreFollows: false}
+	return servermodel.NameListResult{Names: slices.Clone(remaining), MoreFollows: false}
 }
 
 // Abort sends a protocol-level MMS Abort PDU (ACSE ABRT wrapped in a
@@ -815,6 +886,8 @@ func (sc *ServerConn) Abort(ctx context.Context) error {
 // the connected client. This provides the client with VMD status
 // without a preceding Status request.
 // Returns [ErrServerConnClosed] if the connection has been closed.
+// The deadline of ctx bounds the write; a write that fails, or that the
+// deadline cuts, ends the association.
 func (sc *ServerConn) SendUnsolicitedStatus(ctx context.Context, status ServerStatus) error {
 	sc.mu.RLock()
 	if sc.closed {
@@ -832,7 +905,8 @@ func (sc *ServerConn) SendUnsolicitedStatus(ctx context.Context, status ServerSt
 
 // SendInformationReport sends an InformationReport to a specific
 // connected client. Returns [ErrServerConnClosed] if the connection
-// has been closed.
+// has been closed. The deadline of ctx bounds the write; a write that
+// fails, or that the deadline cuts, ends the association.
 func (sc *ServerConn) SendInformationReport(ctx context.Context, req *InformationReportRequest) error {
 	sc.mu.RLock()
 	if sc.closed {
@@ -946,7 +1020,11 @@ func infoReportRequestToWire(req *InformationReportRequest) (*pdu.InformationRep
 // Each accepted connection is handled by [Server.Serve] in its own
 // goroutine. Connection-level serve errors are logged but do not stop
 // the accept loop. Temporary accept errors (e.g. transient network
-// issues) are logged and retried. Fatal accept errors stop the server.
+// issues) are logged and retried. Fatal accept errors stop the server:
+// the connections it accepted are ended as by a cancelled ctx.
+//
+// ListenAndServe returns when every Serve goroutine it started has
+// returned; after a [Server.Shutdown], when Shutdown has ended them.
 func (s *Server) ListenAndServe(ctx context.Context, ln TransportListener) error {
 	s.connsMu.Lock()
 	if s.shutdown {
@@ -956,6 +1034,13 @@ func (s *Server) ListenAndServe(ctx context.Context, ln TransportListener) error
 	}
 	s.listeners[ln] = struct{}{}
 	s.connsMu.Unlock()
+
+	// Deferred in this order: the listener is closed first, then the
+	// connection goroutines are waited for.
+	connCtx, cancelConns := context.WithCancel(ctx)
+	defer cancelConns()
+	var conns sync.WaitGroup
+	defer conns.Wait()
 	defer func() {
 		s.connsMu.Lock()
 		delete(s.listeners, ln)
@@ -977,14 +1062,15 @@ func (s *Server) ListenAndServe(ctx context.Context, ln TransportListener) error
 				s.logger.Warn("mms: temporary accept error, retrying", "error", err)
 				continue
 			}
+			cancelConns()
 			return fmt.Errorf("mms: accept: %w", err)
 		}
 
-		go func(c Transport) {
-			defer func() { _ = c.Close() }()
+		conns.Go(func() {
+			defer func() { _ = conn.Close() }()
 			// Serve logs and reports the outcome itself.
-			_ = s.Serve(ctx, c)
-		}(conn)
+			_ = s.Serve(connCtx, conn)
+		})
 	}
 }
 
@@ -1000,9 +1086,6 @@ func isTemporary(err error) bool {
 // dispatch routes a confirmed service request to the appropriate handler.
 // serviceTag is the CHOICE tag number from the confirmed request PDU.
 func (s *Server) dispatch(ctx context.Context, invokeID codec.InvokeID, serviceTag int, serviceBody []byte) (int, bool, []byte, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	switch serviceTag {
 	case asn1util.TagNumIdentify:
 		return s.handleIdentify(ctx)
@@ -1069,7 +1152,9 @@ func (s *Server) handleGetDomainAttributes(body []byte) (int, bool, []byte, erro
 // --- Identify ---
 
 func (s *Server) handleIdentify(ctx context.Context) (int, bool, []byte, error) {
+	s.mu.RLock()
 	h := s.identifyHandler
+	s.mu.RUnlock()
 	if h == nil {
 		return 0, false, nil, errServiceUnsupported
 	}
@@ -1089,7 +1174,9 @@ func (s *Server) handleIdentify(ctx context.Context) (int, bool, []byte, error) 
 
 //nolint:unparam // TagNumStatus is 0; signature required by dispatch pattern
 func (s *Server) handleStatus(ctx context.Context, body []byte) (int, bool, []byte, error) {
+	s.mu.RLock()
 	h := s.statusHandler
+	s.mu.RUnlock()
 	if h == nil {
 		return 0, false, nil, errServiceUnsupported
 	}

@@ -125,7 +125,16 @@ func (s *Server) handleFileOpen(ctx context.Context, body []byte) (int, bool, []
 	frsmID := sc.frsmTable.alloc(req.FileName, handle)
 
 	payload, err := pdu.MarshalFileOpenResponse(frsmID, attrs.Size, attrs.LastModified)
+	if err == nil && len(payload) > s.responseBudget(ctx) {
+		// The client cannot learn the handle: it is not kept open.
+		err = errPDUSize
+	}
 	if err != nil {
+		sc.frsmTable.remove(frsmID)
+		_ = s.fileProvider.Close(ctx, handle)
+		if errors.Is(err, errPDUSize) {
+			return 0, false, nil, err
+		}
 		return 0, false, nil, fmt.Errorf("marshal file-open response: %w", err)
 	}
 	return asn1util.TagNumFileOpen, true, payload, nil
@@ -171,8 +180,13 @@ func (s *Server) handleFileRead(ctx context.Context, body []byte) (int, bool, []
 	}
 
 	// FileRead-Response payload: fileData [0] (tag + up to 4 length
-	// bytes) and moreFollows [1] (3 bytes).
+	// bytes) and moreFollows [1] (3 bytes). A PDU size without room for
+	// one octet of data is answered with ServiceError service pdu-size;
+	// the provider is never asked for fewer than one octet.
 	maxBytes := s.responseBudget(ctx) - 8
+	if maxBytes < 1 {
+		return 0, false, nil, errPDUSize
+	}
 	data, moreFollows, err := s.fileProvider.Read(ctx, f.handle, maxBytes)
 	if err != nil {
 		return 0, false, nil, fileError(err)
@@ -363,6 +377,9 @@ type FileProvider interface {
 	Open(ctx context.Context, path string) (FileHandle, FileAttributes, error)
 
 	// Read returns the next chunk of data from handle, up to maxBytes.
+	// maxBytes is at least 1: the server answers a FileRead with
+	// ServiceError service pdu-size, without calling Read, when the
+	// negotiated PDU size leaves no room for file data.
 	// On the final (or only) chunk the implementation must return
 	// moreFollows=false with a nil error. Returning io.EOF is treated
 	// as a provider error; use moreFollows=false to signal end-of-file.

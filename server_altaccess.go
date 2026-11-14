@@ -111,8 +111,8 @@ func patchRange(val *Value, start, count int, remaining []pdu.AccessSelectorWire
 	if val.typ != ValueTypeArray {
 		return false
 	}
-	end := start + count
-	if start < 0 || end > len(val.elementsVal) {
+	// Compared with what remains, so that the check cannot overflow.
+	if start < 0 || count < 0 || start > len(val.elementsVal) || count > len(val.elementsVal)-start {
 		return false
 	}
 	if len(remaining) > 0 {

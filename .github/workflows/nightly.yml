@@ -44,3 +44,17 @@ jobs:
           go-version-file: go.mod
       - name: Chaos and stress (random seed)
         run: make chaos CHAOS_DURATION=5m CHAOS_TIMEOUT=45m
+
+  test-386:
+    name: test (linux/386)
+    runs-on: ubuntu-latest
+    # An int is 32 bits on 386: a conversion that only wraps there fails
+    # here. 386 binaries run natively on the amd64 runner.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Unit and e2e tests (GOARCH=386)
+        run: GOARCH=386 go test ./...

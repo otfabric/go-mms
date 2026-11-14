@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"math"
 	"time"
 )
 
@@ -30,13 +31,14 @@ type RetryPolicy struct {
 	MaxBackoff time.Duration
 
 	// Multiplier is the factor applied to the delay after each attempt.
-	// Values below 1 mean 2.
+	// Values below 1, NaN and infinity mean 2.
 	Multiplier float64
 
 	// Jitter randomizes each delay by up to this fraction, downwards: a
 	// delay d becomes a random value in [d*(1-Jitter), d]. It must be in
-	// [0, 1]; 0 disables jitter. Jitter spreads reconnect storms when
-	// many clients lose the same server.
+	// [0, 1]; 0 disables jitter, and so do NaN and infinite values.
+	// Jitter spreads reconnect storms when many clients lose the same
+	// server.
 	Jitter float64
 
 	// Retryable reports whether err is worth another attempt. Nil means
@@ -73,17 +75,23 @@ func (p RetryPolicy) Backoff(attempt int) time.Duration {
 		maxD = 30 * time.Second
 	}
 	mult := p.Multiplier
-	if mult < 1 {
+	if !(mult >= 1) || math.IsInf(mult, 1) { // also NaN
 		mult = 2
 	}
 	for i := 1; i < attempt && d < maxD; i++ {
-		d = time.Duration(float64(d) * mult)
+		// Capped in float64: a product beyond MaxBackoff is never
+		// converted to a Duration.
+		d = time.Duration(min(float64(d)*mult, float64(maxD)))
 	}
 	return min(d, maxD)
 }
 
 func (p RetryPolicy) jittered(d time.Duration) time.Duration {
-	j := min(max(p.Jitter, 0), 1)
+	j := p.Jitter
+	if math.IsNaN(j) || math.IsInf(j, 0) {
+		j = 0
+	}
+	j = min(max(j, 0), 1)
 	if j == 0 || d <= 0 {
 		return d
 	}

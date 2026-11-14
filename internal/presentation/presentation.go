@@ -481,14 +481,25 @@ func parseCPR(data []byte) (*ParsedPPDU, error) {
 	return result, nil
 }
 
+// maxProposedContexts bounds the presentation-context-definition-list
+// of a CP (ISO 8823-1). An MMS association uses two contexts, ACSE and
+// MMS, and the stacks in INTEROP.md propose two; a longer list is
+// refused, so that the answer (one result per proposed context) always
+// fits a Session REFUSE or ACCEPT.
+const maxProposedContexts = 16
+
 // parseContextDefList decodes a presentation-context-definition-list:
 // SEQUENCE OF SEQUENCE { presentation-context-identifier INTEGER,
 // abstract-syntax-name OID, transfer-syntax-name-list SEQUENCE OF OID }.
+// A list of more than maxProposedContexts definitions is an error.
 func parseContextDefList(data []byte) ([]ContextDef, error) {
 	var defs []ContextDef
 	err := walkTLVs(data, func(tag byte, inner []byte) error {
 		if tag != 0x30 {
 			return fmt.Errorf("presentation: context definition tag 0x%02x", tag)
+		}
+		if len(defs) == maxProposedContexts {
+			return fmt.Errorf("presentation: more than %d proposed presentation contexts", maxProposedContexts)
 		}
 		d := ContextDef{ID: -1}
 		err := walkTLVs(inner, func(t byte, v []byte) error {

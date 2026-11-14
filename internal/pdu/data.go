@@ -800,10 +800,20 @@ func decodeASN1Real(content []byte) (float64, error) {
 		mantissa = (mantissa << 8) | uint64(b)
 	}
 
+	// The value is mantissa × 2^F × B^E (X.690 §8.5): a zero mantissa is
+	// zero whatever the exponent.
+	if mantissa == 0 {
+		if negative {
+			return math.Copysign(0, -1), nil
+		}
+		return 0, nil
+	}
+
 	// A float64 has exponents of about ±1074 and the mantissa adds at most 64
 	// bits, so beyond ±maxRealExponent the result is ±Inf or zero whatever
 	// the rest says. Clamp before the multiplication below can overflow: an
 	// 8-octet exponent would otherwise wrap and decode as a finite number.
+	// The clamped value fits an int on every platform.
 	const maxRealExponent = 4096
 	if exp > maxRealExponent {
 		exp = maxRealExponent
@@ -811,7 +821,9 @@ func decodeASN1Real(content []byte) (float64, error) {
 		exp = -maxRealExponent
 	}
 	effectiveExp := int64(scalingFactor) + exp*int64(baseShift)
-	result := float64(mantissa) * math.Pow(2, float64(effectiveExp))
+	// Scaled in one step: a separate power of two would overflow or
+	// underflow where the product does not.
+	result := math.Ldexp(float64(mantissa), int(effectiveExp))
 	if negative {
 		result = -result
 	}

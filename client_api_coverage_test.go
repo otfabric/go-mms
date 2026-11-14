@@ -4,6 +4,7 @@ package mms
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"testing"
@@ -255,13 +256,18 @@ func TestReaderLoop_Edges(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			t.Fatal("conclude error should stop reader")
 		}
+		// No Conclude-Request was sent: the Conclude-Error ends the
+		// association with a protocol error and answers nothing.
+		c.mu.Lock()
+		readerErr := c.readerErr
+		c.mu.Unlock()
+		if !errors.Is(readerErr, ErrProtocol) {
+			t.Fatalf("reader stopped with %v, want ErrProtocol", readerErr)
+		}
 		select {
 		case err := <-c.concludeCh:
-			if err == nil {
-				t.Fatal("Conclude-Error signaled as success")
-			}
+			t.Fatalf("concludeCh signaled (%v) without a Conclude-Request", err)
 		default:
-			t.Fatal("concludeCh should be signaled")
 		}
 	})
 }

@@ -125,7 +125,10 @@ func workload(ctx context.Context, c *mms.Client, id int) (int, error) {
 	ok := 0
 	for i := 0; ctx.Err() == nil; i++ {
 		name := domName(fmt.Sprintf("v%d", (id+i)%8))
-		reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		// The end of the run stops the loop between requests, not a
+		// request: a deadline that ends during a write ends the
+		// association (TIMEOUT_AND_CLOSE.md).
+		reqCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 		var err error
 		switch i % 4 {
 		case 0:
@@ -289,9 +292,11 @@ func TestStress_Concurrent(t *testing.T) {
 					}
 				})
 			}
-			// The server pushes reports while requests are in flight.
+			// The server pushes reports while requests are in flight. The
+			// end of the run stops the loop, not a report being written.
+			reportCtx := timeout(t)
 			for ctx.Err() == nil {
-				_ = cs.srv.Broadcast(ctx, &mms.InformationReportRequest{
+				_ = cs.srv.Broadcast(reportCtx, &mms.InformationReportRequest{
 					Variables: []mms.ObjectName{domName("v0")},
 					Values:    []*mms.Value{mms.NewInteger(1)},
 				})
@@ -398,7 +403,9 @@ func TestChaos_RejectsKeepAssociation(t *testing.T) {
 			}
 			defer func() { _ = c.Close(timeout(t)) }()
 			for i := 0; ctx.Err() == nil; i++ {
-				reqCtx, cancelReq := context.WithTimeout(ctx, 2*time.Second)
+				// The end of the run stops the loop, not a request (see
+				// workload).
+				reqCtx, cancelReq := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 				switch i % 3 {
 				case 0:
 					_, err = c.ReadJournalTimeRange(reqCtx, dom, "j", time.Unix(0, 0), time.Now())
@@ -478,9 +485,12 @@ func (m *outstandingMeter) hook(dir string, raw []byte) {
 // Many goroutines share one client against a server that negotiates
 // max-services-outstanding-calling 2 (ISO 9506-2 clause 8.2), through
 // delays and fragmented reads and writes, with some requests abandoned
-// by short deadlines: the client never has more than 2 confirmed
-// requests outstanding on the wire, every caller returns, and no
-// goroutine is left behind (goleak in TestMain).
+// by a cancellation shortly after they start: the client never has more
+// than 2 confirmed requests outstanding on the wire, every caller
+// returns, the association stays up, and no goroutine is left behind
+// (goleak in TestMain). Cancellation abandons a request without cutting
+// its write; a deadline that ends during a write ends the association
+// (TIMEOUT_AND_CLOSE.md).
 func TestChaos_OutstandingLimit(t *testing.T) {
 	const limit, workers = 2, 32
 	cfg := chaos.Config{Seed: chaosSeed(t), ChunkReads: true, ChunkWrites: true, MaxDelay: 200 * time.Microsecond}
@@ -503,11 +513,11 @@ func TestChaos_OutstandingLimit(t *testing.T) {
 			for g := range workers {
 				wg.Go(func() {
 					for i := 0; ctx.Err() == nil; i++ {
-						d := 2 * time.Second
+						reqCtx, reqCancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 						if (g+i)%7 == 0 {
-							d = 50 * time.Microsecond // abandoned while waiting or outstanding
+							// Abandoned while waiting or outstanding.
+							time.AfterFunc(50*time.Microsecond, reqCancel)
 						}
-						reqCtx, reqCancel := context.WithTimeout(ctx, d)
 						_, err := c.ReadObject(reqCtx, domName(fmt.Sprintf("v%d", (g+i)%8)))
 						reqCancel()
 						switch {

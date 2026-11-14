@@ -262,6 +262,15 @@ func (c *Conn) clearPending() {
 	c.pendingNesting = false
 }
 
+// minLocalDetailCalling is the smallest localDetailCalling the server
+// accepts. It leaves room for every answer whose size is fixed: the
+// largest is a FileOpen-Response (at most 32 octets of service payload,
+// 43 with the confirmed-response framing), and a FileRead-Response needs
+// 24 octets of framing around its first octet of file data. Answers whose
+// size the application or the peer chooses (names, values) are answered
+// with ServiceError service pdu-size when they do not fit.
+const minLocalDetailCalling = 64
+
 // negotiate answers an Initiate-Request (ISO 9506-2 8.2, IEC 61850-8-1
 // Tables 109/110/13):
 //   - negotiated values never exceed the proposal; there is no upward
@@ -272,7 +281,8 @@ func (c *Conn) clearPending() {
 //     the negotiated version is 1;
 //   - a proposed max-services-outstanding of 0 is refused with
 //     max-services-outstanding-calling/called-insufficient (3/4), a
-//     localDetailCalling below 1 with max-segment-insufficient (2);
+//     localDetailCalling below minLocalDetailCalling with
+//     max-segment-insufficient (2);
 //   - the parameter CBB is proposed AND supported. A proposal missing
 //     bits the server needs is not refused (parameter-CBB-insufficient
 //     is not sent): the services that need them fail individually.
@@ -287,7 +297,7 @@ func (c *Conn) negotiate(req pdu.InitiateRequest, hasLocalDetail, hasNesting boo
 	case req.ProposedMaxServOutstandingCalled < 1:
 		return MMSOptions{}, &InitiateError{Code: pdu.InitiateErrMaxOutstandingCalledInsuff,
 			Reason: fmt.Sprintf("proposed max-services-outstanding-called %d", req.ProposedMaxServOutstandingCalled)}
-	case hasLocalDetail && req.LocalDetailCalling < 1:
+	case hasLocalDetail && req.LocalDetailCalling < minLocalDetailCalling:
 		return MMSOptions{}, &InitiateError{Code: pdu.InitiateErrMaxSegmentInsufficient,
 			Reason: fmt.Sprintf("localDetailCalling %d", req.LocalDetailCalling)}
 	}

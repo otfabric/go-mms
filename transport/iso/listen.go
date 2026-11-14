@@ -43,6 +43,10 @@ type Listener struct {
 	err       error              // why the accept loop stopped; set before done is closed
 	closeOnce sync.Once
 	closed    chan struct{}
+
+	mu         sync.Mutex
+	started    bool           // the accept loop was started
+	handshakes sync.WaitGroup // handshake goroutines; Add from the accept loop or a running handshake
 }
 
 // Listen creates a new [Listener] bound to the given TCP address.
@@ -80,7 +84,12 @@ func NewListener(ln net.Listener, opts ...Option) *Listener {
 // (see [WithLogger]); they never cause Accept to return. Only
 // listener-level or context-level errors do.
 func (l *Listener) Accept(ctx context.Context) (mms.Transport, error) {
-	l.start.Do(func() { go l.acceptLoop() })
+	l.start.Do(func() {
+		l.mu.Lock()
+		l.started = true
+		l.mu.Unlock()
+		go l.acceptLoop()
+	})
 	select {
 	case tr := <-l.ready:
 		return tr, nil
@@ -118,7 +127,7 @@ func (l *Listener) acceptLoop() {
 			close(l.done)
 			return
 		}
-		go l.handshake(conn)
+		l.handshakes.Go(func() { l.handshake(conn) })
 	}
 }
 
@@ -149,13 +158,13 @@ func (l *Listener) handshake(conn net.Conn) {
 		_ = conn.SetDeadline(time.Unix(1, 0))
 	})
 	defer stop()
-	go func() {
+	l.handshakes.Go(func() {
 		select {
 		case <-l.closed:
 			cancel()
 		case <-ctx.Done():
 		}
-	}()
+	})
 
 	tr, err := l.handshakeConn(ctx, conn)
 	if err != nil {
@@ -208,13 +217,23 @@ func (l *Listener) logWarn(msg string, conn net.Conn, err error) {
 }
 
 // Close closes the underlying TCP listener and any connection still
-// handshaking or waiting for Accept. A blocked [Listener.Accept] returns
-// an error. Close is idempotent.
+// handshaking or waiting for Accept, and returns when the goroutines of
+// the listener have stopped. A blocked [Listener.Accept] returns an
+// error. Close is idempotent.
 func (l *Listener) Close() error {
 	err := net.ErrClosed
 	l.closeOnce.Do(func() {
 		close(l.closed)
 		err = l.ln.Close()
+		l.mu.Lock()
+		started := l.started
+		l.mu.Unlock()
+		if started {
+			// The accept loop stops on the closed listener; after it,
+			// no handshake starts.
+			<-l.done
+		}
+		l.handshakes.Wait()
 	})
 	if errors.Is(err, net.ErrClosed) {
 		return nil

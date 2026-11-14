@@ -2269,34 +2269,50 @@ func TestConcurrentReadWrite(t *testing.T) {
 	wg.Wait()
 }
 
+// Close while requests are outstanding and waiting for a slot: every one
+// fails with ErrClosed, and Close completes once the server answers.
 func TestCloseWhileConcurrentRequests(t *testing.T) {
-	srv := testServer(t)
-	client := connectClientServer(t, srv)
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	srv := NewServer(ServerOptions{})
+	srv.HandleIdentify(func(context.Context, IdentifyRequest) (*ServerIdentity, error) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+		return &ServerIdentity{}, nil
+	})
+	client, served := serveLoopback(t, srv, DialOptions{})
 
+	const goroutines = 10 // more than the outstanding limit
 	var wg sync.WaitGroup
-	const goroutines = 10
-
+	errs := make(chan error, goroutines)
 	for range goroutines {
 		wg.Go(func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			client.Identify(ctx) //nolint:errcheck
+			_, err := client.Identify(ctx)
+			errs <- err
 		})
 	}
+	<-entered // the server holds the first request
 
-	time.Sleep(5 * time.Millisecond)
-	client.Close(context.Background()) //nolint:errcheck
-
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("goroutines stuck after Close")
+	closed := make(chan error, 1)
+	go func() { closed <- client.Close(context.Background()) }()
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if !errors.Is(err, ErrClosed) {
+			t.Errorf("request during Close = %v, want ErrClosed", err)
+		}
+	}
+	close(release)
+	if err := <-closed; err != nil {
+		t.Errorf("Close: %v", err)
+	}
+	if err := waitServe(t, served); err != nil {
+		t.Errorf("Serve = %v", err)
 	}
 }
 

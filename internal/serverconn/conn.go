@@ -307,10 +307,12 @@ func (c *Conn) sendData(ctx context.Context, mmsPdu []byte) error {
 // InformationReport) over the connection. Safe for concurrent use with
 // the Serve loop.
 //
-// ctx bounds how long the caller waits, not the write: abandoning a PDU
-// half-written would corrupt the stream and end the association. A write
-// that has not started when ctx is done is skipped; one in progress
-// completes in the background.
+// Cancelling ctx ends the caller's wait, not the write: abandoning a PDU
+// half-written would corrupt the stream. A write that has not started when
+// ctx is done is skipped; one in progress continues in the background,
+// bounded by the deadline of ctx when it has one. A write that fails, or
+// that the deadline cuts, leaves the stream unusable, so the transport is
+// closed, which ends Serve.
 func (c *Conn) SendUnconfirmed(ctx context.Context, mmsPdu []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -325,11 +327,27 @@ func (c *Conn) SendUnconfirmed(ctx context.Context, mmsPdu []byte) error {
 	go func() {
 		c.sendMu.Lock()
 		defer c.sendMu.Unlock()
+		// A write whose context ended while it waited is skipped: nothing
+		// of it is on the wire and the stream stays usable.
+		if err := contextEnded(ctx); err != nil {
+			done <- err
+			return
+		}
 		if !state.CompareAndSwap(pending, writing) {
 			done <- nil
 			return
 		}
-		done <- c.transport.Send(context.WithoutCancel(ctx), isostack.EncodeData(c.contexts, mmsPdu))
+		wctx := context.WithoutCancel(ctx)
+		if dl, ok := ctx.Deadline(); ok {
+			var cancel context.CancelFunc
+			wctx, cancel = context.WithDeadline(wctx, dl)
+			defer cancel()
+		}
+		err := c.transport.Send(wctx, isostack.EncodeData(c.contexts, mmsPdu))
+		if err != nil {
+			_ = c.transport.Close()
+		}
+		done <- err
 	}()
 	select {
 	case err := <-done:
@@ -338,6 +356,18 @@ func (c *Conn) SendUnconfirmed(ctx context.Context, mmsPdu []byte) error {
 		state.CompareAndSwap(pending, abandoned)
 		return ctx.Err()
 	}
+}
+
+// contextEnded returns ctx.Err(), or context.DeadlineExceeded once the
+// deadline of ctx has passed, also before its timer has fired.
+func contextEnded(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if dl, ok := ctx.Deadline(); ok && !time.Now().Before(dl) {
+		return context.DeadlineExceeded
+	}
+	return nil
 }
 
 // Close closes the transport, ending Serve.

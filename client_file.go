@@ -258,25 +258,57 @@ func (c *Client) FileDirectory(ctx context.Context, req FileDirectoryRequest) (*
 	}, nil
 }
 
+// Bounds of the helpers that accumulate what the server sends.
+const (
+	// maxFileReadAll is the most file data FileReadAll and DownloadFile
+	// accumulate: sizeOfFile is Unsigned32 (ISO 9506-2 FileOpen,
+	// FileAttributes), so no file holds more.
+	maxFileReadAll = 1<<32 - 1
+	// maxListAll is the most names GetNameListAll, and directory entries
+	// FileDirectoryAll, accumulate over all pages.
+	maxListAll = 1_000_000
+)
+
 // FileReadAll reads all remaining data from a previously opened file handle.
 // It repeatedly calls [Client.FileRead] until MoreFollows is false and
 // returns the concatenated data.
+//
+// It accumulates the data in memory, at most 2^32−1 octets (the largest
+// file size MMS describes). A chunk without data that announces more, or
+// data beyond that size, ends it with an error matching [ErrProtocol].
 func (c *Client) FileReadAll(ctx context.Context, frsmID int32) ([]byte, error) {
+	return c.fileReadAll(ctx, frsmID, maxFileReadAll)
+}
+
+func (c *Client) fileReadAll(ctx context.Context, frsmID int32, limit int64) ([]byte, error) {
 	var buf []byte
 	for {
 		chunk, err := c.FileRead(ctx, frsmID)
 		if err != nil {
 			return nil, err
 		}
+		if int64(len(chunk.Data)) > limit-int64(len(buf)) {
+			return nil, &ProtocolError{
+				Phase:   PhaseMMS,
+				Message: fmt.Sprintf("file read: more than %d octets of file data", limit),
+			}
+		}
 		buf = append(buf, chunk.Data...)
 		if !chunk.MoreFollows {
 			return buf, nil
+		}
+		if len(chunk.Data) == 0 {
+			return nil, &ProtocolError{
+				Phase:   PhaseMMS,
+				Message: "file read: a chunk without data announces more data",
+			}
 		}
 	}
 }
 
 // DownloadFile is a convenience method that opens a file, reads all its
 // content, and closes the handle. It returns the file data and metadata.
+// The data is read as by [Client.FileReadAll].
 func (c *Client) DownloadFile(ctx context.Context, fileName string) ([]byte, *FileOpenResult, error) {
 	openResult, err := c.FileOpen(ctx, fileName)
 	if err != nil {
@@ -299,26 +331,40 @@ func (c *Client) DownloadFile(ctx context.Context, fileName string) ([]byte, *Fi
 // FileDirectoryAll retrieves all file directory entries by automatically
 // handling continuation. It repeatedly calls [Client.FileDirectory]
 // until MoreFollows is false.
+//
+// It accumulates at most 1,000,000 entries. More entries, or a
+// continuation point the server already sent, end it with an error
+// matching [ErrProtocol].
 func (c *Client) FileDirectoryAll(ctx context.Context, fileSpec string) ([]FileDirectoryEntry, error) {
+	return c.fileDirectoryAll(ctx, fileSpec, maxListAll)
+}
+
+func (c *Client) fileDirectoryAll(ctx context.Context, fileSpec string, limit int) ([]FileDirectoryEntry, error) {
 	var all []FileDirectoryEntry
 	req := FileDirectoryRequest{FileSpec: fileSpec}
-	prevToken := ""
+	seen := map[string]bool{"": true}
 	for {
 		result, err := c.FileDirectory(ctx, req)
 		if err != nil {
 			return nil, err
 		}
+		if len(result.Entries) > limit-len(all) {
+			return nil, &ProtocolError{
+				Phase:   PhaseMMS,
+				Message: fmt.Sprintf("file directory: more than %d entries", limit),
+			}
+		}
 		all = append(all, result.Entries...)
 		if !result.MoreFollows || len(result.Entries) == 0 {
 			return all, nil
 		}
-		if result.ContinueAfter == prevToken {
+		if seen[result.ContinueAfter] {
 			return nil, &ProtocolError{
 				Phase:   PhaseMMS,
-				Message: fmt.Sprintf("file directory: pagination stalled (continuation token %q did not advance)", result.ContinueAfter),
+				Message: fmt.Sprintf("file directory: pagination stalled (continuation token %q sent before)", result.ContinueAfter),
 			}
 		}
-		prevToken = result.ContinueAfter
+		seen[result.ContinueAfter] = true
 		req.ContinueAfter = result.ContinueAfter
 	}
 }

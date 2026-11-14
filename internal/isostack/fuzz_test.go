@@ -5,6 +5,7 @@ package isostack
 import (
 	"bytes"
 	"encoding/asn1"
+	"errors"
 	"testing"
 
 	"github.com/otfabric/go-mms/internal/acse"
@@ -79,9 +80,20 @@ func FuzzDecodeAssociateRequest(f *testing.F) {
 		f.Add(v)
 	}
 	addMalformed(f, valid)
+	// Context lists at and above the bound of the presentation layer, and
+	// one whose answer would not fit a REFUSE.
+	for _, n := range []int{proposedContextLimit, proposedContextLimit + 1, 8400} {
+		f.Add(connectWithContexts(f, repeatDef(unknownContextDef, n)))
+	}
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		req, err := DecodeAssociateRequest(data)
+		if re, ok := errors.AsType[*RefusedError](err); ok {
+			// A refusal is always a REFUSE that can be sent.
+			if spdu, perr := session.Parse(re.Response); perr != nil || spdu.Type != session.SpduRefuse {
+				t.Fatalf("refusal %x is not a REFUSE: %v", re.Response, perr)
+			}
+		}
 		if err != nil {
 			return
 		}

@@ -154,16 +154,32 @@ func encodeIndexRange(tag byte, ir *IndexRangeWire) ([]byte, error) {
 	return berutil.EncodeTLV(tag, content), nil
 }
 
+// maxAlternateAccessDepth bounds the levels of one selection chain: a
+// selection cannot descend deeper than the Data it selects, which nests
+// at most maxDataNestingDepth levels.
+const maxAlternateAccessDepth = maxDataNestingDepth
+
 // decodeAlternateAccess decodes an AlternateAccess SEQUENCE OF from
 // raw BER content (without the outer [5] wrapper tag) into a selection
 // chain: each level is one AlternateAccessSelection, a
 // selectAlternateAccess descending into its nested AlternateAccess.
+// A chain of more than maxAlternateAccessDepth levels is an error.
 //
 // ISO 9506-2 clause 14.2.2.9: the SEQUENCE OF elements are sibling
 // selections, not a path. Exactly one element is modelled; several
 // siblings, the named [5] alternative and allElements yield
 // ErrUnsupportedAlternateAccess (MMS-PDU-05).
 func decodeAlternateAccess(data []byte) ([]AccessSelectorWire, error) {
+	return appendAlternateAccess(nil, data)
+}
+
+// appendAlternateAccess decodes one AlternateAccess level and appends it,
+// and the levels below it, to chain. Every level appends to the same
+// slice, so a chain of n levels costs O(n).
+func appendAlternateAccess(chain []AccessSelectorWire, data []byte) ([]AccessSelectorWire, error) {
+	if len(chain) >= maxAlternateAccessDepth {
+		return nil, fmt.Errorf("alternate access nesting exceeds maximum %d", maxAlternateAccessDepth)
+	}
 	if len(data) == 0 {
 		return nil, fmt.Errorf("empty alternate access")
 	}
@@ -180,13 +196,13 @@ func decodeAlternateAccess(data []byte) ([]AccessSelectorWire, error) {
 
 	switch tag {
 	case tagSelectAltAccess:
-		return decodeSelectAlternateAccess(content)
+		return appendSelectAlternateAccess(chain, content)
 	case tagSSComponent:
 		name, err := decodeComponentName(content)
 		if err != nil {
 			return nil, err
 		}
-		return []AccessSelectorWire{{Component: name}}, nil
+		return append(chain, AccessSelectorWire{Component: name}), nil
 	case tagSSIndex:
 		idx, err := berutil.DecodeUnsigned(content)
 		if err != nil {
@@ -196,13 +212,13 @@ func decodeAlternateAccess(data []byte) ([]AccessSelectorWire, error) {
 		if err != nil {
 			return nil, err
 		}
-		return []AccessSelectorWire{{HasIndex: true, Index: i}}, nil
+		return append(chain, AccessSelectorWire{HasIndex: true, Index: i}), nil
 	case tagSSIndexRange:
 		ir, err := decodeIndexRange(content)
 		if err != nil {
 			return nil, fmt.Errorf("selectAccess indexRange: %w", err)
 		}
-		return []AccessSelectorWire{{IndexRange: ir}}, nil
+		return append(chain, AccessSelectorWire{IndexRange: ir}), nil
 	case tagSSAllElements:
 		return nil, fmt.Errorf("%w: allElements", ErrUnsupportedAlternateAccess)
 	case tagAltAccessWrapper:
@@ -224,6 +240,12 @@ func decodeComponentName(content []byte) (string, error) {
 
 // decodeSelectAlternateAccess decodes selectAlternateAccess [0] content.
 func decodeSelectAlternateAccess(data []byte) ([]AccessSelectorWire, error) {
+	return appendSelectAlternateAccess(nil, data)
+}
+
+// appendSelectAlternateAccess decodes selectAlternateAccess [0] content
+// and appends its selection and the nested levels to chain.
+func appendSelectAlternateAccess(chain []AccessSelectorWire, data []byte) ([]AccessSelectorWire, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("selectAlternateAccess: empty content")
 	}
@@ -265,7 +287,7 @@ func decodeSelectAlternateAccess(data []byte) ([]AccessSelectorWire, error) {
 		return nil, fmt.Errorf("selectAlternateAccess: unexpected accessSelection tag 0x%02x", tag)
 	}
 
-	chain := []AccessSelectorWire{sel}
+	chain = append(chain, sel)
 
 	// The nested alternateAccess is mandatory and untagged (0x30). A [5]
 	// (0xa5) wrapper, as go-mms up to v1.7.2 sent it, cannot be any valid
@@ -273,26 +295,21 @@ func decodeSelectAlternateAccess(data []byte) ([]AccessSelectorWire, error) {
 	if offset >= len(data) {
 		return nil, fmt.Errorf("selectAlternateAccess: missing nested alternateAccess")
 	}
-	{
-		tag2, content2, n2, err := berutil.DecodeTLVAt(data, offset)
-		if err != nil {
-			return nil, fmt.Errorf("selectAlternateAccess nested: %w", err)
-		}
-		offset += n2
-		if tag2 != tagNestedAltAccess && tag2 != tagAltAccessWrapper {
-			return nil, fmt.Errorf("selectAlternateAccess: expected nested SEQUENCE OF (0x30), got 0x%02x", tag2)
-		}
-		nested, err := decodeAlternateAccess(content2)
-		if err != nil {
-			return nil, fmt.Errorf("selectAlternateAccess nested: %w", err)
-		}
-		chain = append(chain, nested...)
+	tag2, content2, n2, err := berutil.DecodeTLVAt(data, offset)
+	if err != nil {
+		return nil, fmt.Errorf("selectAlternateAccess nested: %w", err)
 	}
-
+	offset += n2
+	if tag2 != tagNestedAltAccess && tag2 != tagAltAccessWrapper {
+		return nil, fmt.Errorf("selectAlternateAccess: expected nested SEQUENCE OF (0x30), got 0x%02x", tag2)
+	}
 	if offset != len(data) {
 		return nil, fmt.Errorf("selectAlternateAccess: %d trailing bytes", len(data)-offset)
 	}
-
+	chain, err = appendAlternateAccess(chain, content2)
+	if err != nil {
+		return nil, fmt.Errorf("selectAlternateAccess nested: %w", err)
+	}
 	return chain, nil
 }
 

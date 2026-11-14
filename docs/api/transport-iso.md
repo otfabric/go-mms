@@ -120,6 +120,9 @@ type Listener struct {
 	// closed when the accept loop stops
 	// why the accept loop stopped; set before done is closed
 
+	// the accept loop was started
+	// handshake goroutines; Add from the accept loop or a running handshake
+
 }
 ```
 
@@ -171,7 +174,7 @@ Addr returns the listener's network address.
 func (l *Listener) Close() error
 ```
 
-Close closes the underlying TCP listener and any connection still handshaking or waiting for Accept. A blocked [Listener.Accept](#func-listener-accept) returns an error. Close is idempotent.
+Close closes the underlying TCP listener and any connection still handshaking or waiting for Accept, and returns when the goroutines of the listener have stopped. A blocked [Listener.Accept](#func-listener-accept) returns an error. Close is idempotent.
 
 ### type Option
 

@@ -754,7 +754,8 @@ type CapturedPDU struct {
 	NamedListMembers []CapturedVariable // GetNamedVariableListAttributes response
 
 	// Raw is the service content of a service this decoder does not
-	// model, and DecodeError why a modelled service did not decode.
+	// model, and DecodeError why a modelled service did not decode. Raw
+	// is a copy: it does not change when the decoded buffer does.
 	Raw         []byte
 	DecodeError string
 }
@@ -812,6 +813,9 @@ type Client struct {
 	// why the reader loop exited; guarded by mu
 	// receives the Conclude outcome (nil: Conclude-Response)
 
+	// inReportHandler is set while the reader goroutine runs the report
+	// handler: Close and Abort called then do not wait for the reader.
+
 	// Negotiated parameters from MMS Initiate handshake.
 
 	// own localDetailCalling: largest PDU accepted
@@ -848,7 +852,7 @@ Abort performs a hard, immediate association abort without the graceful Conclude
 
 After Abort returns, the Client is closed and all pending requests are cancelled with ErrClosed.
 
-The ABRT PDU is sent best-effort and bounded by ctx; the transport is closed even when the send fails or ctx expires.
+The ABRT PDU is sent best-effort and bounded by ctx; the transport is closed even when the send fails or ctx expires. Abort may be called from an [InformationReportHandler](#type-informationreporthandler); it then does not wait for the reader goroutine, which stops when the handler returns.
 
 #### func (Client) Close
 
@@ -870,7 +874,9 @@ A Conclude-ErrorPDU makes Close abort the association (ISO 9506-2 24.3) and retu
 
 This is NOT a graceful drain: pending requests are aborted immediately and their callers receive ErrClosed. Confirmed responses that arrive during the shutdown window (after CancelAll but before the reader exits) are discarded as unknown invoke IDs.
 
-Close is idempotent: the first call performs the conclude handshake; subsequent calls return nil.
+Close is idempotent: the first call performs the conclude handshake; subsequent calls return nil. When ctx is done the transport is closed, which also ends the wait for the reader goroutine.
+
+Called from an [InformationReportHandler](#type-informationreporthandler), Close cannot receive the Conclude-Response (the reader runs the handler): it returns when ctx is done, with that error, after closing the transport. Use [Client.Abort](#func-client-abort) there, or call Close on another goroutine.
 
 #### func (Client) DefineNamedVariableList
 
@@ -918,7 +924,7 @@ Done returns a channel that is closed when the association has ended: after [Cli
 func (c *Client) DownloadFile(ctx context.Context, fileName string) ([]byte, *FileOpenResult, error)
 ```
 
-DownloadFile is a convenience method that opens a file, reads all its content, and closes the handle. It returns the file data and metadata.
+DownloadFile is a convenience method that opens a file, reads all its content, and closes the handle. It returns the file data and metadata. The data is read as by [Client.FileReadAll](#func-client-filereadall).
 
 #### func (Client) Err
 
@@ -960,6 +966,8 @@ func (c *Client) FileDirectoryAll(ctx context.Context, fileSpec string) ([]FileD
 
 FileDirectoryAll retrieves all file directory entries by automatically handling continuation. It repeatedly calls [Client.FileDirectory](#func-client-filedirectory) until MoreFollows is false.
 
+It accumulates at most 1,000,000 entries. More entries, or a continuation point the server already sent, end it with an error matching ErrProtocol.
+
 #### func (Client) FileOpen
 
 ```go
@@ -983,6 +991,8 @@ func (c *Client) FileReadAll(ctx context.Context, frsmID int32) ([]byte, error)
 ```
 
 FileReadAll reads all remaining data from a previously opened file handle. It repeatedly calls [Client.FileRead](#func-client-fileread) until MoreFollows is false and returns the concatenated data.
+
+It accumulates the data in memory, at most 2^32−1 octets (the largest file size MMS describes). A chunk without data that announces more, or data beyond that size, ends it with an error matching ErrProtocol.
 
 #### func (Client) FileRename
 
@@ -1010,9 +1020,9 @@ func (c *Client) GetNameListAll(ctx context.Context, req NameListRequest) ([]str
 
 GetNameListAll retrieves all named objects by automatically handling continuation. It repeatedly calls [Client.GetNameList](#func-client-getnamelist) until MoreFollows is false.
 
-As a safety measure, GetNameListAll detects stalled pagination (where the server repeats the same continuation token) and returns an error.
+As a safety measure, GetNameListAll detects stalled pagination (where the server sends a continuation point it already sent) and returns an error.
 
-Note: this method accumulates all names in memory. For servers with very large name lists, prefer using [Client.GetNameList](#func-client-getnamelist) directly with explicit pagination control.
+Note: this method accumulates all names in memory, at most 1,000,000; more end it with an error matching ErrProtocol. For servers with very large name lists, prefer using [Client.GetNameList](#func-client-getnamelist) directly with explicit pagination control.
 
 #### func (Client) GetNamedVariableListAttributes
 
@@ -1618,6 +1628,9 @@ type FileProvider interface {
 	Open(ctx context.Context, path string) (FileHandle, FileAttributes, error)
 
 	// Read returns the next chunk of data from handle, up to maxBytes.
+	// maxBytes is at least 1: the server answers a FileRead with
+	// ServiceError service pdu-size, without calling Read, when the
+	// negotiated PDU size leaves no room for file data.
 	// On the final (or only) chunk the implementation must return
 	// moreFollows=false with a nil error. Returning io.EOF is treated
 	// as a provider error; use moreFollows=false to signal end-of-file.
@@ -1730,7 +1743,7 @@ type InformationReportHandler func(report *InformationReportIndication)
 
 InformationReportHandler is called when the client receives an unsolicited InformationReport from the server.
 
-The handler is called on the client's internal reader goroutine. Long-running work should be dispatched to a separate goroutine.
+The handler is called on the client's internal reader goroutine. Long-running work should be dispatched to a separate goroutine. While the handler runs no response is read, so it must not call a confirmed service of the same [Client](#type-client); such a call fails when its context ends. It may call [Client.Abort](#func-client-abort); [Client.Close](#func-client-close) returns only when its context is done.
 
 ### type InformationReportIndication
 
@@ -2392,13 +2405,14 @@ type RetryPolicy struct {
 	MaxBackoff time.Duration
 
 	// Multiplier is the factor applied to the delay after each attempt.
-	// Values below 1 mean 2.
+	// Values below 1, NaN and infinity mean 2.
 	Multiplier float64
 
 	// Jitter randomizes each delay by up to this fraction, downwards: a
 	// delay d becomes a random value in [d*(1-Jitter), d]. It must be in
-	// [0, 1]; 0 disables jitter. Jitter spreads reconnect storms when
-	// many clients lose the same server.
+	// [0, 1]; 0 disables jitter, and so do NaN and infinite values.
+	// Jitter spreads reconnect storms when many clients lose the same
+	// server.
 	Jitter float64
 
 	// Retryable reports whether err is worth another attempt. Nil means
@@ -2461,8 +2475,17 @@ String returns "client" or "server".
 
 ```go
 type Server struct {
+	// mu guards identifyHandler and statusHandler. It is never held
+	// while a handler, callback or provider runs: they may call back
+	// into the Server.
 
 	// association settings beyond mmsOpts
+
+	// serving holds every running Serve, from entry to return, with the
+	// cancel function of its context; conns only the associated ones.
+
+	// servingDone is made by the first Shutdown and closed when serving
+	// is empty.
 
 }
 ```
@@ -2503,7 +2526,7 @@ Connections returns a snapshot of currently active server connections. Each [Ser
 func (s *Server) HandleIdentify(h func(context.Context, IdentifyRequest) (*ServerIdentity, error))
 ```
 
-HandleIdentify registers a handler for the MMS Identify service.
+HandleIdentify registers a handler for the MMS Identify service. It may be called while the server serves, also from a handler or callback.
 
 #### func (Server) HandleStatus
 
@@ -2511,7 +2534,7 @@ HandleIdentify registers a handler for the MMS Identify service.
 func (s *Server) HandleStatus(h func(context.Context, StatusRequest) (*ServerStatus, error))
 ```
 
-HandleStatus registers a handler for the MMS Status service.
+HandleStatus registers a handler for the MMS Status service. It may be called while the server serves, also from a handler or callback.
 
 #### func (Server) ListenAndServe
 
@@ -2526,7 +2549,9 @@ Ownership:
   - ListenAndServe takes ownership of the listener and closes it on return. The caller must not close the listener separately.
   - Each accepted transport is closed automatically when its Serve goroutine finishes (via deferred Close).
 
-Each accepted connection is handled by [Server.Serve](#func-server-serve) in its own goroutine. Connection-level serve errors are logged but do not stop the accept loop. Temporary accept errors (e.g. transient network issues) are logged and retried. Fatal accept errors stop the server.
+Each accepted connection is handled by [Server.Serve](#func-server-serve) in its own goroutine. Connection-level serve errors are logged but do not stop the accept loop. Temporary accept errors (e.g. transient network issues) are logged and retried. Fatal accept errors stop the server: the connections it accepted are ended as by a cancelled ctx.
+
+ListenAndServe returns when every Serve goroutine it started has returned; after a [Server.Shutdown](#func-server-shutdown), when Shutdown has ended them.
 
 #### func (Server) RegisterDomain
 
@@ -2576,7 +2601,7 @@ func (s *Server) SetVariableRead(domain, itemID string, fn func(context.Context)
 
 SetVariableRead replaces the read handler of a previously registered domain-scoped variable. This is intended for post-registration configuration, such as installing control-model-specific read handlers on CO attributes after the server model has been fully built.
 
-Returns an error if no domain-scoped variable with the given domain and itemID exists.
+Returns an error if no domain-scoped variable with the given domain and itemID exists. It may be called while the server serves: a Read uses the handler set before the request looked the variable up.
 
 #### func (Server) Shutdown
 
@@ -2584,9 +2609,9 @@ Returns an error if no domain-scoped variable with the given domain and itemID e
 func (s *Server) Shutdown(ctx context.Context) error
 ```
 
-Shutdown stops the server gracefully: it closes the listeners of every running [Server.ListenAndServe](#func-server-listenandserve) (which then return ErrServerClosed), lets each association finish the request it is handling, and then aborts it (ACSE ABRT and transport close). MMS has no server-initiated orderly release, so idle associations are aborted right away.
+Shutdown stops the server gracefully: it closes the listeners of every running [Server.ListenAndServe](#func-server-listenandserve) (which then return ErrServerClosed), ends every connection that is not associated yet (its Serve returns an error matching ErrServerClosed), lets each association finish the request it is handling, and then aborts it (ACSE ABRT and transport close). MMS has no server-initiated orderly release, so idle associations are aborted right away. Shutdown returns when every [Server.Serve](#func-server-serve) has returned.
 
-If ctx is done before all in-flight requests finish, the remaining associations are aborted immediately and Shutdown returns ctx.Err(). After Shutdown, [Server.Serve](#func-server-serve) and [Server.ListenAndServe](#func-server-listenandserve) return ErrServerClosed. Shutdown is safe to call more than once.
+If ctx is done before all in-flight requests finish, the remaining associations are aborted immediately and Shutdown returns ctx.Err() without waiting further for Serve to return. After Shutdown, [Server.Serve](#func-server-serve) and [Server.ListenAndServe](#func-server-listenandserve) return ErrServerClosed. Shutdown is safe to call more than once.
 
 ### type ServerConn
 
@@ -2644,7 +2669,7 @@ This is typically called from an [Authenticator](#type-authenticator) or connect
 func (sc *ServerConn) SendInformationReport(ctx context.Context, req *InformationReportRequest) error
 ```
 
-SendInformationReport sends an InformationReport to a specific connected client. Returns ErrServerConnClosed if the connection has been closed.
+SendInformationReport sends an InformationReport to a specific connected client. Returns ErrServerConnClosed if the connection has been closed. The deadline of ctx bounds the write; a write that fails, or that the deadline cuts, ends the association.
 
 #### func (ServerConn) SendUnsolicitedStatus
 
@@ -2652,7 +2677,7 @@ SendInformationReport sends an InformationReport to a specific connected client.
 func (sc *ServerConn) SendUnsolicitedStatus(ctx context.Context, status ServerStatus) error
 ```
 
-SendUnsolicitedStatus sends an UnsolicitedStatus unconfirmed PDU to the connected client. This provides the client with VMD status without a preceding Status request. Returns ErrServerConnClosed if the connection has been closed.
+SendUnsolicitedStatus sends an UnsolicitedStatus unconfirmed PDU to the connected client. This provides the client with VMD status without a preceding Status request. Returns ErrServerConnClosed if the connection has been closed. The deadline of ctx bounds the write; a write that fails, or that the deadline cuts, ends the association.
 
 ### type ServerIdentity
 
