@@ -676,8 +676,10 @@ func (v *Value) Get(selectors ...AccessSelector) (*Value, error) {
 			}
 			start := sel.IndexRange.Start
 			count := sel.IndexRange.Count
-			if start < 0 || start+count > len(elems) {
-				return nil, invalidArgf("selector [%d]: range [%d..%d) out of bounds (array has %d elements)", i, start, start+count, len(elems))
+			// Compared with what remains, so that the check cannot overflow
+			// and a negative count never reaches make.
+			if start < 0 || count < 0 || start > len(elems) || count > len(elems)-start {
+				return nil, invalidArgf("selector [%d]: range of %d from %d out of bounds (array has %d elements)", i, count, start, len(elems))
 			}
 			sub := make([]*Value, count)
 			copy(sub, elems[start:start+count])

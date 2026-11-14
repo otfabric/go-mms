@@ -353,9 +353,15 @@ func decodeArrayTypeSpecWithDepth(data []byte, depth int) (TypeSpecWire, error) 
 	if tag != 0x81 {
 		return TypeSpecWire{}, fmt.Errorf("array numberOfElements: expected [1] (0x81), got 0x%02x", tag)
 	}
-	count, err := berutil.DecodeInteger(content)
+	// numberOfElements is Unsigned32 (ISO 9506-2 clause 14.3): it is decoded
+	// as unsigned, and refused where it does not fit an int (32-bit platforms).
+	n32, err := berutil.DecodeUnsigned(content)
 	if err != nil {
 		return TypeSpecWire{}, fmt.Errorf("array numberOfElements value: %w", err)
+	}
+	count, err := indexFromUnsigned32(n32, "array numberOfElements")
+	if err != nil {
+		return TypeSpecWire{}, err
 	}
 
 	// elementType [2] EXPLICIT TypeSpecification

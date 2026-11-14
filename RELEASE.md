@@ -1,5 +1,37 @@
 # go-mms Releases
 
+## v1.9.3
+
+**Date:** 2026-11-14
+**Previous release:** v1.9.2
+
+No API change. Bounds on counts, indexes and one exponent that come from a peer or from a caller.
+
+### Fixed
+
+- An array type description's `numberOfElements` is decoded as the Unsigned32 it is (ISO 9506-2). A negative encoding is rejected, and so is a value that does not fit an `int` (32-bit platforms). Before, it was read as a signed number.
+- `TypeSpec.DefaultValue` returns nil for a negative `Count`, and when the description holds more than 1,048,576 values and bit-string octets in total. A type description can come from a server, and nested arrays multiply. Before, it built whatever the description said.
+- `Value.Get` with `SelectRange`: a negative count, and a range that ends past the array, return `ErrInvalidArgument`. The check no longer adds the two numbers.
+- Alternate access from a peer: an index, low index or number of elements that does not fit an `int` is rejected when it is decoded, and the server's range selection refuses a negative count.
+- A REAL value whose exponent is beyond what a float64 holds decodes as ±Inf or 0. Before, an 8-octet exponent could wrap and decode as a finite number.
+
+### Documentation
+
+- LIMITS.md lists the three limits.
+
+### Testing
+
+- `internal/pdu` `numeric_bounds_test.go`: the `numberOfElements` and index boundaries (0, 2^31−1, 2^31, 2^32−1, negative encodings) on 64-bit and 32-bit platforms, and REAL exponents whose product with the base overflows.
+- `numeric_bounds_test.go`: `DefaultValue` on hostile descriptions (negative and maximal counts, nested arrays, a bit string of maximal size) returns nil without allocating what they describe, and still builds a description that exactly spends the budget; `Value.Get` and the server's range selection at their boundaries.
+- `FuzzDecodeTypeSpec` checks that no decoded array count is negative; it and `FuzzDecodeReal` get the boundary inputs as seeds.
+- The new tests also pass on linux/386.
+
+### Changed
+
+- CI: otfabric/engineering policy 1.6 and the shared workflows v3.8.0. This is the first go-mms release through the API compatibility gate.
+
+---
+
 ## v1.9.2
 
 **Date:** 2026-11-12

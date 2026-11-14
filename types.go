@@ -542,7 +542,28 @@ func (ts *TypeSpec) ShallowCompatible(v *Value) bool {
 // empty array (no elements). This is a deliberate best-effort placeholder:
 // a non-zero Count with nil Element means the type spec is incomplete
 // (the element type is unknown), so no elements can be initialized.
+//
+// A TypeSpec can come from a peer ([Client.GetVariableAccessAttributes]),
+// and nested arrays multiply. DefaultValue therefore returns nil when a
+// Count is negative, and when the spec describes more than 1,048,576
+// values and bit-string octets in total (LIMITS.md).
 func (ts *TypeSpec) DefaultValue() *Value {
+	budget := maxDefaultValueNodes
+	return ts.defaultValue(&budget)
+}
+
+// maxDefaultValueNodes is the largest tree [TypeSpec.DefaultValue] builds:
+// the number of values (every structure, array, element and leaf counts as
+// one) plus the octets of bit strings with a declared size.
+const maxDefaultValueNodes = 1 << 20
+
+// defaultValue builds the value and charges budget for what it allocates.
+// It returns nil when the budget is spent.
+func (ts *TypeSpec) defaultValue(budget *int) *Value {
+	if *budget <= 0 {
+		return nil
+	}
+	*budget--
 	switch ts.Type {
 	case ValueTypeBoolean:
 		return NewBoolean(false)
@@ -554,7 +575,16 @@ func (ts *TypeSpec) DefaultValue() *Value {
 		return NewFloat(0)
 	case ValueTypeBitString:
 		if ts.Size > 0 {
-			return NewBitStringWithLength(make([]byte, (ts.Size+7)/8), ts.Size)
+			// Octets for Size bits, without the overflow of (Size+7)/8.
+			octets := ts.Size / 8
+			if ts.Size%8 != 0 {
+				octets++
+			}
+			if octets > *budget {
+				return nil
+			}
+			*budget -= octets
+			return NewBitStringWithLength(make([]byte, octets), ts.Size)
 		}
 		return NewBitString(nil)
 	case ValueTypeOctetString:
@@ -580,19 +610,26 @@ func (ts *TypeSpec) DefaultValue() *Value {
 	case ValueTypeStructure:
 		elems := make([]*Value, len(ts.Elements))
 		for i := range ts.Elements {
-			elems[i] = ts.Elements[i].Type.DefaultValue()
+			elems[i] = ts.Elements[i].Type.defaultValue(budget)
 			if elems[i] == nil {
 				return nil
 			}
 		}
 		return NewStructure(elems)
 	case ValueTypeArray:
+		if ts.Count < 0 {
+			return nil
+		}
 		if ts.Element == nil || ts.Count == 0 {
 			return NewArray(nil)
 		}
+		// Every element costs at least one node: refuse before allocating.
+		if ts.Count > *budget {
+			return nil
+		}
 		elems := make([]*Value, ts.Count)
 		for i := range elems {
-			elems[i] = ts.Element.DefaultValue()
+			elems[i] = ts.Element.defaultValue(budget)
 			if elems[i] == nil {
 				return nil
 			}
