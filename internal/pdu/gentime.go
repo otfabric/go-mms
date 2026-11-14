@@ -10,6 +10,11 @@ import (
 
 var errGeneralizedTime = errors.New("not a GeneralizedTime")
 
+// maxQuotedTimeOctets bounds how much of a refused GeneralizedTime an
+// error quotes: the content comes from the peer and can be as long as
+// the PDU.
+const maxQuotedTimeOctets = 32
+
 // ParseGeneralizedTime parses the GeneralizedTime forms of X.680 clause
 // 46 (ISO 8601 basic format): YYYYMMDDHH, optionally followed by MM and
 // SS, a fraction (. or ,) of the last component present, and either Z,
@@ -18,9 +23,17 @@ var errGeneralizedTime = errors.New("not a GeneralizedTime")
 func ParseGeneralizedTime(s string) (time.Time, error) {
 	t, err := parseGeneralizedTime(s)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("%w: %q", errGeneralizedTime, s)
+		return time.Time{}, fmt.Errorf("%w: %s", errGeneralizedTime, quoteBounded(s, maxQuotedTimeOctets))
 	}
 	return t, nil
+}
+
+// quoteBounded quotes at most n octets of s, marking a cut with "...".
+func quoteBounded(s string, n int) string {
+	if len(s) <= n {
+		return fmt.Sprintf("%q", s)
+	}
+	return fmt.Sprintf("%q...", s[:n])
 }
 
 func parseGeneralizedTime(s string) (time.Time, error) {

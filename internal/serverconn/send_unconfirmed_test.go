@@ -19,15 +19,15 @@ func TestSendUnconfirmed_ContextEnds(t *testing.T) {
 		t.Errorf("pre-cancelled SendUnconfirmed = %v", err)
 	}
 
-	// A write still waiting for sendMu when ctx ends is abandoned and
+	// A write still waiting for the send lock when ctx ends is abandoned and
 	// never reaches the transport.
-	c.sendMu.Lock()
+	c.sendSem <- struct{}{}
 	ctx, cancel2 := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel2()
 	if err := c.SendUnconfirmed(ctx, []byte{2}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("blocked SendUnconfirmed = %v", err)
 	}
-	c.sendMu.Unlock()
+	<-c.sendSem
 	time.Sleep(20 * time.Millisecond)
 	select {
 	case d := <-tr.send:

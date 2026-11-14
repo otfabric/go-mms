@@ -180,6 +180,10 @@ type Negotiation struct {
 // of each abstract syntax is accepted.
 func Negotiate(defs []ContextDef) Negotiation {
 	var n Negotiation
+	// Acceptance is tracked apart from the identifier: an identifier of
+	// 0 (outside the range of ISO 8823-1, but not refused here) must not
+	// let a second context of the same abstract syntax be accepted.
+	var acseAccepted, mmsAccepted bool
 	for _, d := range defs {
 		known := d.IsACSE() || d.IsMMS()
 		switch {
@@ -187,10 +191,12 @@ func Negotiate(defs []ContextDef) Negotiation {
 			n.Results = append(n.Results, ContextResult{Result: ResultProviderRejection, ProviderReason: ContextReasonAbstractSyntaxNotSupported})
 		case !d.OffersBER():
 			n.Results = append(n.Results, ContextResult{Result: ResultProviderRejection, ProviderReason: ContextReasonTransferSyntaxesNotSupported})
-		case d.IsACSE() && n.ACSE == 0:
+		case d.IsACSE() && !acseAccepted:
+			acseAccepted = true
 			n.ACSE = d.ID
 			n.Results = append(n.Results, ContextResult{Result: ResultAcceptance, TransferSyntax: oidBER, ProviderReason: -1})
-		case d.IsMMS() && n.MMS == 0:
+		case d.IsMMS() && !mmsAccepted:
+			mmsAccepted = true
 			n.MMS = d.ID
 			n.Results = append(n.Results, ContextResult{Result: ResultAcceptance, TransferSyntax: oidBER, ProviderReason: -1})
 		default:

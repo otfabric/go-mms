@@ -55,6 +55,17 @@ coverage, but no independent security evaluation has been performed.
 TLS transport support relies on Go's standard `crypto/tls` implementation.
 This is not equivalent to IEC 62351 conformance or certification.
 
+## Client certificates
+
+`AuthContext.PeerCertificate` is the certificate the client presented. It
+is verified only when the listener's `tls.Config` sets `ClientAuth` to
+`tls.RequireAndVerifyClientCert` or `tls.VerifyClientCertIfGiven` (with
+`ClientCAs`); `AuthContext.PeerCertificateVerified` reports it. An
+`Authenticator` that authorises on certificate fields uses one of those modes
+or checks `PeerCertificateVerified`. With `RequestClientCert` or
+`RequireAnyClientCert` the certificate is not verified, and only pinning its
+exact bytes or key identifies the peer.
+
 ## Restricting which hosts a client can reach
 
 An application that limits which IEDs its users can reach enforces the

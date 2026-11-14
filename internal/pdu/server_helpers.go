@@ -391,6 +391,10 @@ func UnmarshalWriteRequestParsed(data []byte) (*WriteRequestWire, error) {
 		}
 		dataOffset += consumed
 		values = append(values, dv)
+		// The same element cap as a list of access results.
+		if len(values) > maxAccessResults {
+			return nil, fmt.Errorf("write request: data count %d exceeds maximum %d", len(values), maxAccessResults)
+		}
 	}
 	result.Values = values
 

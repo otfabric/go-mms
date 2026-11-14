@@ -1111,3 +1111,30 @@ func TestMarshalReadResponseWithSpec_MultipleVariables(t *testing.T) {
 		t.Fatal("expected non-empty output")
 	}
 }
+
+// A Write listOfData has the same element cap as a list of access
+// results.
+func TestUnmarshalWriteRequestDataCount(t *testing.T) {
+	name, err := EncodeObjectName(ObjectNameWire{Scope: ScopeVMD, ItemID: "nvl"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	one, err := MarshalData(&DataValue{Tag: TagDataBoolean})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := func(count int) []byte {
+		list := make([]byte, 0, count*len(one))
+		for range count {
+			list = append(list, one...)
+		}
+		return append(berutil.EncodeTLV(tagVarListName, name), berutil.EncodeTLV(tagWriteListOfData, list)...)
+	}
+	req, err := UnmarshalWriteRequestParsed(body(maxAccessResults))
+	if err != nil || len(req.Values) != maxAccessResults {
+		t.Fatalf("%d values: %v", maxAccessResults, err)
+	}
+	if _, err := UnmarshalWriteRequestParsed(body(maxAccessResults + 1)); err == nil {
+		t.Fatalf("%d values decoded", maxAccessResults+1)
+	}
+}

@@ -466,7 +466,23 @@ type AuthContext struct {
 	// PeerCertificate is the leaf TLS peer certificate, populated when
 	// the transport is TLS-secured and the peer presented a certificate.
 	// Nil when TLS is not active or no peer certificate was provided.
+	//
+	// It is verified only when PeerCertificateVerified is true. With
+	// tls.Config.ClientAuth set to tls.RequestClientCert or
+	// tls.RequireAnyClientCert, crypto/tls does not verify it: an
+	// application that pins such certificates itself must compare the
+	// whole certificate (for example its raw bytes or public key), not
+	// the subject.
 	PeerCertificate *x509.Certificate
+
+	// PeerCertificateVerified reports whether crypto/tls verified
+	// PeerCertificate against the listener's ClientCAs (the connection
+	// state has at least one verified chain). It is true only when the
+	// listener's tls.Config sets ClientAuth to tls.VerifyClientCertIfGiven
+	// or tls.RequireAndVerifyClientCert and the peer presented a
+	// certificate that chains to a trusted CA. False when no certificate
+	// was presented.
+	PeerCertificateVerified bool
 
 	// RemoteAddr is the network address of the remote peer. Nil when
 	// the transport does not expose address information.
@@ -529,6 +545,14 @@ const (
 	// authentication is present but the TLS transport provides peer
 	// certificates. The leaf certificate is available in
 	// [AuthContext].PeerCertificate.
+	//
+	// The mechanism says only that a certificate was presented. The
+	// certificate is verified against the listener's ClientCAs only when
+	// its tls.Config sets ClientAuth to tls.VerifyClientCertIfGiven or
+	// tls.RequireAndVerifyClientCert; with tls.RequestClientCert or
+	// tls.RequireAnyClientCert any certificate, also a self-signed one
+	// with any subject, is accepted. [AuthContext].PeerCertificateVerified
+	// reports which case applies.
 	AuthMechanismTLSCertificate
 )
 ```
@@ -599,7 +623,7 @@ Example authenticator for ACSE password policy:
 	    if auth.Mechanism != mms.AuthMechanismACSEPassword {
 	        return mms.AuthResult{}, nil // reject: wrong mechanism
 	    }
-	    if !bytes.Equal(auth.Password, []byte("secret")) {
+	    if subtle.ConstantTimeCompare(auth.Password, []byte("secret")) != 1 {
 	        return mms.AuthResult{}, nil // reject: wrong password
 	    }
 	    return mms.AuthResult{Accept: true, Token: "operator"}, nil
@@ -608,8 +632,10 @@ Example authenticator for ACSE password policy:
 Example authenticator for TLS client certificate policy:
 
 	func tlsAuth(_ context.Context, auth *mms.AuthContext) (mms.AuthResult, error) {
-	    if auth.PeerCertificate == nil {
-	        return mms.AuthResult{}, nil // reject: no peer cert
+	    // The listener's tls.Config sets ClientAuth to
+	    // tls.RequireAndVerifyClientCert and ClientCAs to the trusted CAs.
+	    if auth.PeerCertificate == nil || !auth.PeerCertificateVerified {
+	        return mms.AuthResult{}, nil // reject: no verified peer cert
 	    }
 	    cn := auth.PeerCertificate.Subject.CommonName
 	    if !isAllowedOperator(cn) {
@@ -2589,7 +2615,7 @@ Serve handles a single MMS association over the provided transport. It performs 
 
 The corresponding [ServerConn](#type-serverconn) is registered for the duration of Serve and can be obtained via [Server.Connections](#func-server-connections).
 
-The caller owns the transport, with three exceptions in which Serve closes it to unblock a pending read: ctx is cancelled (Serve then returns an error matching ctx.Err()), the association is not established within [ServerOptions.AssociationTimeout](#func-serveroptions-associationtimeout), or [Server.Shutdown](#func-server-shutdown) aborts the association. [Server.ListenAndServe](#func-server-listenandserve) closes every accepted transport when its Serve returns.
+The caller owns the transport, with four exceptions in which Serve closes it to unblock a pending read or write: ctx is cancelled (Serve then returns an error matching ctx.Err()), the association is not established within [ServerOptions.AssociationTimeout](#func-serveroptions-associationtimeout), [Server.Shutdown](#func-server-shutdown) aborts the association, or a write fails or is cut by [ServerOptions.WriteTimeout](#func-serveroptions-writetimeout) (Serve then returns an error matching context.DeadlineExceeded). [Server.ListenAndServe](#func-server-listenandserve) closes every accepted transport when its Serve returns.
 
 Serve blocks until the connection is complete. For serving multiple connections, call Serve in a goroutine per accepted transport.
 
@@ -2669,7 +2695,7 @@ This is typically called from an [Authenticator](#type-authenticator) or connect
 func (sc *ServerConn) SendInformationReport(ctx context.Context, req *InformationReportRequest) error
 ```
 
-SendInformationReport sends an InformationReport to a specific connected client. Returns ErrServerConnClosed if the connection has been closed. The deadline of ctx bounds the write; a write that fails, or that the deadline cuts, ends the association.
+SendInformationReport sends an InformationReport to a specific connected client. Returns ErrServerConnClosed if the connection has been closed. The earlier of the deadline of ctx and [ServerOptions.WriteTimeout](#func-serveroptions-writetimeout) bounds the write. A send that cannot start before ctx ends is skipped and the association stays up; a write that fails, or that the bound cuts, ends the association.
 
 #### func (ServerConn) SendUnsolicitedStatus
 
@@ -2677,7 +2703,7 @@ SendInformationReport sends an InformationReport to a specific connected client.
 func (sc *ServerConn) SendUnsolicitedStatus(ctx context.Context, status ServerStatus) error
 ```
 
-SendUnsolicitedStatus sends an UnsolicitedStatus unconfirmed PDU to the connected client. This provides the client with VMD status without a preceding Status request. Returns ErrServerConnClosed if the connection has been closed. The deadline of ctx bounds the write; a write that fails, or that the deadline cuts, ends the association.
+SendUnsolicitedStatus sends an UnsolicitedStatus unconfirmed PDU to the connected client. This provides the client with VMD status without a preceding Status request. Returns ErrServerConnClosed if the connection has been closed. The earlier of the deadline of ctx and [ServerOptions.WriteTimeout](#func-serveroptions-writetimeout) bounds the write. A send that cannot start before ctx ends is skipped and the association stays up; a write that fails, or that the bound cuts, ends the association.
 
 ### type ServerIdentity
 
@@ -2766,6 +2792,16 @@ type ServerOptions struct {
 	// Conclude-Response, the behaviour before v1.8.0).
 	ReleaseTimeout time.Duration
 
+	// WriteTimeout bounds every write of the server to an association:
+	// confirmed responses, Rejects, ServiceErrors, association refusals,
+	// aborts and the release response, and, together with the deadline
+	// of ctx, the unsolicited sends ([ServerConn.SendInformationReport],
+	// [ServerConn.SendUnsolicitedStatus], [Server.Broadcast]). A peer that
+	// stops reading cannot hold the association's writer longer: a write
+	// it cuts closes the transport and ends the association. Zero means
+	// 10s; a negative value disables the limit.
+	WriteTimeout time.Duration
+
 	// RespondingAPTitle and RespondingAEQualifier, when the AP-title is
 	// non-empty, are sent in the AARE as responding-AP-title [4] and
 	// responding-AE-qualifier [5] (ISO 8650-1; ISO 9506-2 Annex A.1.1
@@ -2773,6 +2809,31 @@ type ServerOptions struct {
 	// neither.
 	RespondingAPTitle     APTitle
 	RespondingAEQualifier int
+
+	// MaxPeerNVLs bounds the named variable lists that peers define
+	// with VMD or domain scope (DefineNamedVariableList) in the
+	// server's shared object model. Such lists outlive the defining
+	// association; a DeleteNamedVariableList frees their slots. Lists
+	// registered with [Server.RegisterNamedVariableList] do not count.
+	// Zero means 4096; a negative value refuses every VMD- or
+	// domain-scope definition by a peer.
+	MaxPeerNVLs int
+
+	// MaxAssociationNVLs bounds the association-scope named variable
+	// lists one association may define. Zero means 256; a negative
+	// value refuses every association-scope definition.
+	MaxAssociationNVLs int
+
+	// MaxNVLMembers bounds the members of one peer-defined named
+	// variable list. Zero means 1000; a negative value refuses every
+	// DefineNamedVariableList.
+	MaxNVLMembers int
+
+	// MaxOpenFiles bounds the files (FRSMs) one association may hold
+	// open through FileOpen at a time; FileClose and the end of the
+	// association free them. Zero means 32; a negative value refuses
+	// every FileOpen. Only used when FileProvider is set.
+	MaxOpenFiles int
 }
 ```
 

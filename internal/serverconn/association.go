@@ -165,7 +165,7 @@ func (c *Conn) sendRefusal(ctx context.Context, resp []byte, cause error) error 
 	if resp == nil {
 		return err
 	}
-	if serr := c.transport.Send(ctx, resp); serr != nil {
+	if serr := c.write(ctx, resp); serr != nil {
 		return errors.Join(err, fmt.Errorf("serverconn: send refusal: %w", serr))
 	}
 	return err
@@ -213,7 +213,7 @@ func (c *Conn) AcceptAssociation(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("serverconn: %w", err)
 	}
-	if err := c.transport.Send(ctx, resp); err != nil {
+	if err := c.write(ctx, resp); err != nil {
 		return fmt.Errorf("serverconn: send association response: %w", err)
 	}
 
@@ -252,7 +252,7 @@ func (c *Conn) RejectAssociation(ctx context.Context, diagnostic int) error {
 	if err != nil {
 		return fmt.Errorf("serverconn: %w", err)
 	}
-	return c.transport.Send(ctx, resp)
+	return c.write(ctx, resp)
 }
 
 func (c *Conn) clearPending() {

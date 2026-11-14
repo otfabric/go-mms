@@ -99,3 +99,21 @@ func TestDecodeBase128PlatformWidth(t *testing.T) {
 		}
 	}
 }
+
+// X.690 clause 8.19.2: the leading octet of a subidentifier shall not be
+// 0x80. Such an encoding is refused for the first and any later arc.
+func TestDecodeObjectIdentifier_NonMinimalSubidentifier(t *testing.T) {
+	for _, bad := range [][]byte{
+		{0x80, 0x2a},             // first subidentifier padded
+		{0x2a, 0x80, 0x01},       // later arc padded
+		{0x2a, 0x86, 0x48, 0x80}, // padding octet at the end
+	} {
+		if got, err := DecodeObjectIdentifier(bad); err == nil {
+			t.Errorf("% x decoded as %v", bad, got)
+		}
+	}
+	// 0x81 0x00 (value 128) and a zero arc stay valid.
+	if got, err := DecodeObjectIdentifier([]byte{0x2a, 0x81, 0x00, 0x00}); err != nil || fmt.Sprint(got) != "[1 2 128 0]" {
+		t.Errorf("valid arcs: %v %v", got, err)
+	}
+}

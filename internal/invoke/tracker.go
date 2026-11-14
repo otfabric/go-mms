@@ -14,6 +14,14 @@
 // waits for a free slot, first come first served; [Tracker.AllocateWithID]
 // fails with [ErrLimit] instead.
 //
+// An entry is first reserved and then marked sent ([Tracker.MarkSent])
+// by the writer immediately before its PDU is written. A response, error
+// or reject read from the peer answers only a request it can have
+// received: [Tracker.CompleteSent], [Tracker.Sole] and
+// [Tracker.CancelSent] ignore entries not yet marked sent (ISO 9506-2
+// clauses 8.6 and 7.3). [Tracker.Complete], [Tracker.Cancel] and
+// [Tracker.Close] remove any entry.
+//
 // This package is internal — invoke ID management is transparent to
 // users of the public mms.Client API.
 package invoke
@@ -36,10 +44,16 @@ var ErrLimit = errors.New("invoke: outstanding request limit reached")
 type Tracker struct {
 	mu         sync.Mutex
 	nextID     codec.InvokeID
-	pending    map[codec.InvokeID]chan<- Response
+	pending    map[codec.InvokeID]*entry
 	maxPending int
 	waiters    []*waiter // FIFO of Reserve calls waiting for a slot
 	closeErr   error     // non-nil after Close
+}
+
+// entry is one pending request.
+type entry struct {
+	ch   chan<- Response
+	sent bool // the request PDU is (being) written; see MarkSent
 }
 
 // waiter is a Reserve call queued for a slot. ready receives nil when the
@@ -64,7 +78,7 @@ type Response struct {
 // max-services-outstanding-calling.
 func NewTracker(maxPending int) *Tracker {
 	return &Tracker{
-		pending:    make(map[codec.InvokeID]chan<- Response),
+		pending:    make(map[codec.InvokeID]*entry),
 		maxPending: max(maxPending, 0),
 	}
 }
@@ -100,7 +114,7 @@ func (t *Tracker) Allocate() (codec.InvokeID, <-chan Response, error) {
 	id := t.nextID
 
 	ch := make(chan Response, 1)
-	t.pending[id] = ch
+	t.pending[id] = &entry{ch: ch}
 	return id, ch, nil
 }
 
@@ -120,7 +134,7 @@ func (t *Tracker) AllocateWithID(id codec.InvokeID) (codec.InvokeID, <-chan Resp
 	}
 
 	ch := make(chan Response, 1)
-	t.pending[id] = ch
+	t.pending[id] = &entry{ch: ch}
 	return id, ch, nil
 }
 
@@ -159,7 +173,7 @@ func (t *Tracker) Reserve(ctx context.Context, id codec.InvokeID) (<-chan Respon
 	}
 	ch := make(chan Response, 1)
 	if !t.full() && len(t.waiters) == 0 {
-		t.pending[id] = ch
+		t.pending[id] = &entry{ch: ch}
 		t.mu.Unlock()
 		return ch, nil
 	}
@@ -186,7 +200,7 @@ func (t *Tracker) Reserve(ctx context.Context, id codec.InvokeID) (<-chan Respon
 	}
 	// The slot was granted (or the tracker closed) while ctx ended: give
 	// the slot back.
-	if t.pending[id] == ch {
+	if e, ok := t.pending[id]; ok && e.ch == ch {
 		delete(t.pending, id)
 		t.grant()
 	}
@@ -200,7 +214,7 @@ func (t *Tracker) grant() {
 		w := t.waiters[0]
 		t.waiters[0] = nil
 		t.waiters = t.waiters[1:]
-		t.pending[w.id] = w.ch
+		t.pending[w.id] = &entry{ch: w.ch}
 		w.ready <- nil
 	}
 }
@@ -209,8 +223,23 @@ func (t *Tracker) grant() {
 // the pending entry, freeing its slot. Returns false if no pending
 // request exists for the ID (e.g., already completed or cancelled).
 func (t *Tracker) Complete(id codec.InvokeID, resp Response) bool {
+	return t.complete(id, resp, false)
+}
+
+// CompleteSent is [Tracker.Complete] for a PDU read from the peer: it
+// returns false, delivering nothing, also when the request for id has
+// not been marked sent, since the peer cannot answer a request it has
+// not received.
+func (t *Tracker) CompleteSent(id codec.InvokeID, resp Response) bool {
+	return t.complete(id, resp, true)
+}
+
+func (t *Tracker) complete(id codec.InvokeID, resp Response, sentOnly bool) bool {
 	t.mu.Lock()
-	ch, ok := t.pending[id]
+	e, ok := t.pending[id]
+	if ok && sentOnly && !e.sent {
+		ok = false
+	}
 	if ok {
 		delete(t.pending, id)
 		t.grant()
@@ -221,8 +250,23 @@ func (t *Tracker) Complete(id codec.InvokeID, resp Response) bool {
 		return false
 	}
 	resp.InvokeID = id
-	ch <- resp
+	e.ch <- resp
 	return true
+}
+
+// MarkSent marks the request for id as sent and reports whether it is
+// still pending. The writer calls it immediately before writing the
+// request PDU and skips the write when it returns false: the request was
+// already ended (Close, or its caller's Cancel) and must not reach the
+// peer.
+func (t *Tracker) MarkSent(id codec.InvokeID) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	e, ok := t.pending[id]
+	if ok {
+		e.sent = true
+	}
+	return ok
 }
 
 // Cancel removes a pending request without delivering a response.
@@ -237,12 +281,35 @@ func (t *Tracker) Cancel(id codec.InvokeID, err error) bool {
 func (t *Tracker) CancelAll(err error) {
 	t.mu.Lock()
 	pending := t.pending
-	t.pending = make(map[codec.InvokeID]chan<- Response)
+	t.pending = make(map[codec.InvokeID]*entry)
 	t.grant()
 	t.mu.Unlock()
 
-	for id, ch := range pending {
-		ch <- Response{InvokeID: id, Err: err}
+	for id, e := range pending {
+		e.ch <- Response{InvokeID: id, Err: err}
+	}
+}
+
+// CancelSent cancels the pending requests marked sent with the given
+// error; requests not yet sent stay pending. Queued waiters then get the
+// freed slots.
+func (t *Tracker) CancelSent(err error) {
+	t.mu.Lock()
+	var sent map[codec.InvokeID]*entry
+	for id, e := range t.pending {
+		if e.sent {
+			if sent == nil {
+				sent = make(map[codec.InvokeID]*entry)
+			}
+			sent[id] = e
+			delete(t.pending, id)
+		}
+	}
+	t.grant()
+	t.mu.Unlock()
+
+	for id, e := range sent {
+		e.ch <- Response{InvokeID: id, Err: err}
 	}
 }
 
@@ -254,13 +321,13 @@ func (t *Tracker) Close(err error) {
 		t.closeErr = err
 	}
 	pending := t.pending
-	t.pending = make(map[codec.InvokeID]chan<- Response)
+	t.pending = make(map[codec.InvokeID]*entry)
 	waiters := t.waiters
 	t.waiters = nil
 	t.mu.Unlock()
 
-	for id, ch := range pending {
-		ch <- Response{InvokeID: id, Err: err}
+	for id, e := range pending {
+		e.ch <- Response{InvokeID: id, Err: err}
 	}
 	for _, w := range waiters {
 		w.ready <- err
@@ -280,18 +347,20 @@ func (t *Tracker) advance() {
 // maxInvokeID is the largest Unsigned32 value of ISO 9506-2.
 const maxInvokeID = codec.MaxInvokeID
 
-// Sole returns the invoke ID of the only pending request, if exactly one
-// is pending.
+// Sole returns the invoke ID of the only pending request marked sent,
+// if exactly one is; requests not yet sent are not counted.
 func (t *Tracker) Sole() (codec.InvokeID, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if len(t.pending) != 1 {
-		return 0, false
+	var sole codec.InvokeID
+	n := 0
+	for id, e := range t.pending {
+		if e.sent {
+			sole = id
+			n++
+		}
 	}
-	for id := range t.pending {
-		return id, true
-	}
-	return 0, false
+	return sole, n == 1
 }
 
 // PendingCount returns the number of currently pending requests.

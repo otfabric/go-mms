@@ -19,7 +19,7 @@ This document lists all hard limits enforced by go-mms to protect against malfor
 
 | Limit | Value | Location | Purpose |
 |-------|:-----:|----------|---------|
-| Data nesting | 64 | `internal/pdu/data.go` | Prevents stack overflow from deeply nested arrays/structures in `DataValue` |
+| Data nesting | 64 structure and array levels | `internal/pdu/data.go` | Prevents stack overflow from deeply nested arrays/structures in `DataValue`; levels are counted as for `dataStructureNestingLevel`, an empty innermost structure included, so 65 levels are refused in any form |
 | TypeSpec nesting | 32 | `internal/pdu/getvaraccess.go` | Prevents stack overflow from deeply nested type specifications |
 | AlternateAccess chain | 64 levels | `internal/pdu/altaccess.go` (`maxAlternateAccessDepth`) | A selection cannot descend deeper than the Data it selects; a deeper chain does not decode, and decoding costs time and memory linear in its length |
 
@@ -31,7 +31,7 @@ Both sides also enforce the negotiated `dataStructureNestingLevel` (ISO 9506-2 c
 
 | Limit | Value | Location | Purpose |
 |-------|------:|----------|---------|
-| Access results | 65,536 | `internal/pdu/data.go` | Caps elements in a single read/write response |
+| Access results | 65,536 | `internal/pdu/data.go`, `internal/pdu/server_helpers.go` | Caps elements in a single read/write response, and the listOfData of a received Write request |
 | Directory entries | 10,000 | `internal/pdu/file.go` | Caps file directory listing entries |
 | Journal entries | 10,000 | `internal/pdu/journal.go` | Caps journal read response entries |
 | Name list identifiers | 100,000 | `internal/pdu/getnamelist.go` | Caps GetNameList response items |
@@ -42,6 +42,10 @@ Both sides also enforce the negotiated `dataStructureNestingLevel` (ISO 9506-2 c
 | DeleteNamedVariableList numberMatched, numberDeleted | Unsigned32 (2^31−1 on 32-bit platforms) | `internal/pdu/namedvarlist.go` | A value that does not fit an `int` is rejected |
 | Names accumulated by `Client.GetNameListAll` | 1,000,000 | `mms.go` (`maxListAll`) | More names, or a continuation point the server already sent, end it with an error matching `ErrProtocol` |
 | Entries accumulated by `Client.FileDirectoryAll` | 1,000,000 | `client_file.go` (`maxListAll`) | The same, for directory entries |
+| Named variable lists that peers define with VMD or domain scope | 4,096 per server | `ServerOptions.MaxPeerNVLs` (0 → default, negative refuses them) | They are shared and outlive the association; a delete frees a slot. Lists the application registers do not count. Beyond the limit DefineNamedVariableList is answered with ServiceError resource capability-unavailable (ISO 9506-2 clause 7.4.1) |
+| Association-scope named variable lists a peer defines | 256 per association | `ServerOptions.MaxAssociationNVLs` (0 → default, negative refuses them) | The same answer beyond the limit |
+| Members of a peer-defined named variable list | 1,000 | `ServerOptions.MaxNVLMembers` (0 → default, negative refuses every DefineNamedVariableList) | The same answer beyond the limit; a list without members is answered with Reject confirmed-requestPDU invalid-argument |
+| Files one association holds open (FRSMs) | 32 | `ServerOptions.MaxOpenFiles` (0 → default, negative refuses every FileOpen) | FileOpen beyond the limit is answered with ServiceError resource capability-unavailable before `FileProvider.Open` is called; FileClose frees a slot |
 | File data accumulated by `Client.FileReadAll` and `DownloadFile` | 2^32−1 octets, the largest sizeOfFile (Unsigned32) | `client_file.go` (`maxFileReadAll`) | More data, or a chunk without data that announces more, ends it with an error matching `ErrProtocol` |
 
 ## String lengths
@@ -50,7 +54,7 @@ Both sides also enforce the negotiated `dataStructureNestingLevel` (ISO 9506-2 c
 |-------|------:|----------|---------|
 | File name | 255 bytes | `internal/pdu/file.go` | Decoded (all elements joined with `/`) and sent FileName; IEC 61850-8-1 clause 23.1 |
 | Identifier name (received) | 1,024 bytes | `internal/pdu/getnamelist.go` | Caps individual identifier strings from a peer |
-| Identifier name (sent, registered) | 1..64 characters | `mms.go` (`validateIdentifier`) | ISO 9506-2 clause 7.5.2, IEC 61850-8-1 Annex F.3.2; the character set only with `ValidateIdentifier` |
+| Identifier name (sent, registered, and in a peer's DefineNamedVariableList) | 1..64 characters | `mms.go` (`validateIdentifier`), `server.go` (`handleDefineNVL`) | ISO 9506-2 clause 7.5.2, IEC 61850-8-1 Annex F.3.2; the character set only with `ValidateIdentifier` |
 
 ## BER encoding limits
 
@@ -62,7 +66,7 @@ Both sides also enforce the negotiated `dataStructureNestingLevel` (ISO 9506-2 c
 | Multi-octet tag number | 2^28−1 (4 subsequent octets) on every platform | `internal/berutil/element.go` (`maxTagNumber`) | A larger number is rejected, never wrapped |
 | INTEGER (sizes, counts, IDs) | 4 octets after trimming redundant leading octets | `internal/berutil/berutil.go` | Data INTEGER / Unsigned values take up to 8 octets (9 with the pad) |
 | Indefinite length | Accepted on constructed encodings, at most 64 levels | `internal/berutil/element.go` | X.690 §8.1.3.6; rewritten to definite lengths on receive, never sent |
-| OID arc value | what an `int` holds (2^31−1 on 32-bit platforms) | `internal/berutil/berutil.go` (`decodeBase128`) | A larger arc is rejected, never wrapped |
+| OID arc value | what an `int` holds (2^31−1 on 32-bit platforms) | `internal/berutil/berutil.go` (`decodeBase128`) | A larger arc is rejected, never wrapped; a subidentifier with a leading 0x80 octet is rejected (X.690 clause 8.19.2) |
 
 ## Connection setup and timeouts
 
@@ -73,6 +77,7 @@ Both sides also enforce the negotiated `dataStructureNestingLevel` (ISO 9506-2 c
 | Temporary accept error backoff | 5 ms → 1 s | fixed | `transport/iso/listen.go` | Doubles per consecutive error, resets on success |
 | Association (AARQ → Authenticate → AARE) | 30 s | `ServerOptions.AssociationTimeout` (0 → default, negative disables) | `server.go` | Transport closed; `Serve` returns `ErrAssociationFailed` |
 | Server wait for A-RELEASE after Conclude | 2 s | `ServerOptions.ReleaseTimeout` (0 → default, negative does not wait) | `internal/serverconn/release.go` | Association ends normally |
+| Server write (response, Reject, ServiceError, refusal, abort, release response; unsolicited sends together with the deadline of their context) | 10 s | `ServerOptions.WriteTimeout` (0 → default, negative disables) | `internal/serverconn/conn.go` | Transport closed; `Serve` returns an error matching `context.DeadlineExceeded`. A peer that stops reading holds its association at most this long |
 | Client A-RELEASE in `Close` | 2 s | `DialOptions.ReleaseTimeout` (0 → default, negative skips the release) | `client_association.go` | Transport closed; `Close` returns nil |
 | Confirmed request | none | `DialOptions.RequestTimeout` or the request context | `mms.go` | `ErrInvokeTimeout` + `context.DeadlineExceeded` |
 | ABRT send in `Server.Shutdown` | 1 s per association | fixed | `server.go` | Transport closed regardless |

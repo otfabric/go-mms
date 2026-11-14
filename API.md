@@ -892,8 +892,13 @@ type ServerOptions struct {
     Metrics         Metrics       // nil → no metrics
     AssociationTimeout time.Duration // AARQ → Authenticate → AARE; 0 → 30s, < 0 disables
     ReleaseTimeout     time.Duration // wait for FINISH after Conclude; 0 → 2s, < 0 does not wait
+    WriteTimeout       time.Duration // every server write; 0 → 10s, < 0 disables
     RespondingAPTitle     APTitle    // non-empty: sent in the AARE with RespondingAEQualifier
     RespondingAEQualifier int
+    MaxPeerNVLs        int // peer-defined VMD/domain NVLs per server; 0 → 4096, < 0 refuses them
+    MaxAssociationNVLs int // peer-defined association-scope NVLs; 0 → 256, < 0 refuses them
+    MaxNVLMembers      int // members of a peer-defined NVL; 0 → 1000, < 0 refuses DefineNamedVariableList
+    MaxOpenFiles       int // open files per association; 0 → 32, < 0 refuses FileOpen
 }
 ```
 
@@ -933,6 +938,7 @@ type AuthContext struct {
     Password           []byte
     CallingApplication *ApplicationReference
     PeerCertificate    *x509.Certificate
+    PeerCertificateVerified bool // crypto/tls verified PeerCertificate (VerifiedChains non-empty)
     RemoteAddr         net.Addr
 }
 

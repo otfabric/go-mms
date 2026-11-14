@@ -19,7 +19,10 @@ random seed; a failure prints `MMS_CHAOS_SEED` to replay it.
   once; a write that has not started is skipped (atomic
   pending/writing/abandoned state), and one that has started completes,
   so a cancelled request never leaves a partial PDU on the wire or tears
-  down the association. A failed write closes the association.
+  down the association. A failed write closes the association. The
+  tracker entry is marked sent under `sendMu` right before the write; the
+  reader completes, cancels and counts only sent entries, so a peer PDU
+  cannot decide a request before it is on the wire.
 - **mu**: protects `closed` and the reader handles.
 - **invoke tracker**: thread-safe map of pending request channels
   (`Reserve`, `AllocateWithID`, `Complete`, `Cancel`, `CancelAll`,
@@ -43,8 +46,12 @@ random seed; a failure prints `MMS_CHAOS_SEED` to replay it.
 - **busy**: per-connection one-slot semaphore held while a request is
   dispatched. `Server.Shutdown` closes listeners, waits for it per
   connection (bounded by its context), then aborts the association.
-- **Unsolicited sends** (`Broadcast`, `SendInformationReport`) use the
-  same detached-write pattern as the client.
+- **sendSem**: per-connection one-slot channel that serializes writes;
+  the wait for it observes a context. Unsolicited sends (`Broadcast`,
+  `SendInformationReport`) wait for it in the caller and start their
+  writer goroutine only once they hold it, so a skipped send leaves no
+  goroutine. Every write is bounded by `ServerOptions.WriteTimeout`; an
+  expired wait or write closes the transport.
 - **frsmTable**: per-connection file handle table with its own mutex;
   `closeAll` runs on cleanup with a bounded 10-second context.
 - **Connection and listener registry**: maps guarded by `connsMu`

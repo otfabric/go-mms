@@ -41,6 +41,14 @@ const (
 	// authentication is present but the TLS transport provides peer
 	// certificates. The leaf certificate is available in
 	// [AuthContext].PeerCertificate.
+	//
+	// The mechanism says only that a certificate was presented. The
+	// certificate is verified against the listener's ClientCAs only when
+	// its tls.Config sets ClientAuth to tls.VerifyClientCertIfGiven or
+	// tls.RequireAndVerifyClientCert; with tls.RequestClientCert or
+	// tls.RequireAnyClientCert any certificate, also a self-signed one
+	// with any subject, is accepted. [AuthContext].PeerCertificateVerified
+	// reports which case applies.
 	AuthMechanismTLSCertificate
 )
 
@@ -106,7 +114,23 @@ type AuthContext struct {
 	// PeerCertificate is the leaf TLS peer certificate, populated when
 	// the transport is TLS-secured and the peer presented a certificate.
 	// Nil when TLS is not active or no peer certificate was provided.
+	//
+	// It is verified only when PeerCertificateVerified is true. With
+	// tls.Config.ClientAuth set to tls.RequestClientCert or
+	// tls.RequireAnyClientCert, crypto/tls does not verify it: an
+	// application that pins such certificates itself must compare the
+	// whole certificate (for example its raw bytes or public key), not
+	// the subject.
 	PeerCertificate *x509.Certificate
+
+	// PeerCertificateVerified reports whether crypto/tls verified
+	// PeerCertificate against the listener's ClientCAs (the connection
+	// state has at least one verified chain). It is true only when the
+	// listener's tls.Config sets ClientAuth to tls.VerifyClientCertIfGiven
+	// or tls.RequireAndVerifyClientCert and the peer presented a
+	// certificate that chains to a trusted CA. False when no certificate
+	// was presented.
+	PeerCertificateVerified bool
 
 	// RemoteAddr is the network address of the remote peer. Nil when
 	// the transport does not expose address information.
@@ -156,7 +180,7 @@ type AuthResult struct {
 //	    if auth.Mechanism != mms.AuthMechanismACSEPassword {
 //	        return mms.AuthResult{}, nil // reject: wrong mechanism
 //	    }
-//	    if !bytes.Equal(auth.Password, []byte("secret")) {
+//	    if subtle.ConstantTimeCompare(auth.Password, []byte("secret")) != 1 {
 //	        return mms.AuthResult{}, nil // reject: wrong password
 //	    }
 //	    return mms.AuthResult{Accept: true, Token: "operator"}, nil
@@ -165,8 +189,10 @@ type AuthResult struct {
 // Example authenticator for TLS client certificate policy:
 //
 //	func tlsAuth(_ context.Context, auth *mms.AuthContext) (mms.AuthResult, error) {
-//	    if auth.PeerCertificate == nil {
-//	        return mms.AuthResult{}, nil // reject: no peer cert
+//	    // The listener's tls.Config sets ClientAuth to
+//	    // tls.RequireAndVerifyClientCert and ClientCAs to the trusted CAs.
+//	    if auth.PeerCertificate == nil || !auth.PeerCertificateVerified {
+//	        return mms.AuthResult{}, nil // reject: no verified peer cert
 //	    }
 //	    cn := auth.PeerCertificate.Subject.CommonName
 //	    if !isAllowedOperator(cn) {

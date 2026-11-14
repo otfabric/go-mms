@@ -279,8 +279,12 @@ func appendBase128(buf []byte, v int) []byte {
 
 // decodeBase128 decodes a base-128 integer of at most six octets. A value
 // that does not fit an int on this platform is an error, checked before
-// each shift.
+// each shift. A leading octet 0x80 is a non-minimal encoding (X.690
+// clause 8.19.2) and an error.
 func decodeBase128(data []byte, offset int) (int, int, error) {
+	if offset < len(data) && data[offset] == 0x80 {
+		return 0, 0, fmt.Errorf("base128 integer has a leading 0x80 octet (X.690 8.19.2)")
+	}
 	v := 0
 	n := 0
 	for i := offset; i < len(data); i++ {

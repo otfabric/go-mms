@@ -44,6 +44,13 @@ func (t *frsmTable) alloc(path string, handle FileHandle) int32 {
 	return id
 }
 
+// count returns the number of open handles.
+func (t *frsmTable) count() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return len(t.entries)
+}
+
 func (t *frsmTable) get(id int32) (*frsm, bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -105,6 +112,18 @@ func (s *Server) handleFileOpen(ctx context.Context, body []byte) (int, bool, []
 		return 0, false, nil, errInvalidRequest
 	}
 
+	sc := serverConnFromCtx(ctx)
+	if sc == nil {
+		return 0, false, nil, fmt.Errorf("no server connection in context")
+	}
+	// The association already holds the configured number of open
+	// files: refused before the provider opens another one, with
+	// ServiceError resource / capability-unavailable (ISO 9506-2 clause
+	// 7.4.1, Resource class).
+	if limit := s.limits.openFiles; limit < 0 || sc.frsmTable.count() >= limit {
+		return 0, false, nil, errCapabilityUnavailable
+	}
+
 	handle, attrs, err := s.fileProvider.Open(ctx, req.FileName)
 	if err != nil {
 		return 0, false, nil, fileError(err)
@@ -117,11 +136,6 @@ func (s *Server) handleFileOpen(ctx context.Context, body []byte) (int, bool, []
 		}
 	}
 
-	sc := serverConnFromCtx(ctx)
-	if sc == nil {
-		_ = s.fileProvider.Close(ctx, handle)
-		return 0, false, nil, fmt.Errorf("no server connection in context")
-	}
 	frsmID := sc.frsmTable.alloc(req.FileName, handle)
 
 	payload, err := pdu.MarshalFileOpenResponse(frsmID, attrs.Size, attrs.LastModified)
