@@ -21,6 +21,22 @@ Set-up and the pull request gate are in [CONTRIBUTING.md](CONTRIBUTING.md).
 `make cross` and `make test-armv7` only compile. No test runs on those
 targets here.
 
+## When CI runs
+
+| Event | Workflow | What runs |
+|---|---|---|
+| Pull request | `pr.yml` | `docs.yml` (docsync, otfabric-policy) always; `ci.yml` and `interop.yml` unless every changed file is documentation; then `OT Fabric Required Checks` |
+| Push to a branch | none | nothing; dispatch `ci.yml` or `interop.yml` to test a branch without a pull request |
+| Push to `main` | `docs.yml` | docsync and otfabric-policy; the merged commit was tested as the pull request's merge commit |
+| Nightly, by hand | `nightly.yml`, `self-interop.yml` | long fuzz and chaos; this commit against the latest published go-mms |
+| Release | `release.yml` | the shared release workflow tests the release commit again |
+
+Documentation means an added or modified `*.md` file outside `.github/`,
+`testdata/` and `vendor/`, other than `AGENTS.md` and `CLAUDE.md`. A deleted
+or renamed document, or any other file, runs everything. `OT Fabric Required
+Checks` fails unless every job that applies succeeded; its summary lists
+them.
+
 ## End-to-end suite
 
 `e2e/` runs the go-mms client against the go-mms server over real TCP through

@@ -62,12 +62,14 @@ client-sent Cancel, client UnsolicitedStatus callback, segmented
 | Static checks | `make vet`, `make lint`, `make vuln`, `make test-armv7` | go vet, golangci-lint (staticcheck among its linters), govulncheck, 32-bit build of `internal/pdu`. Gosec and Opengrep run on a maintainer's machine from otfabric/engineering (`make sast REPO=go-mms`), not in CI |
 
 `make check` runs fmt, tidy, vet, lint, vuln, test, test-race, coverage,
-fuzz-short, test-armv7 and docs-check. CI (`.github/workflows/ci.yml`) runs
-the shared Go workflow (lint, tests and race on Go 1.26 and 1.27,
-govulncheck, a 10 s fuzz pass over every target, otfabric-policy) plus a
-`quality` job (per-package coverage gate, 5 s chaos run);
-`.github/workflows/interop.yml` runs the interop suite against each
-digest-pinned adapter image; `.github/workflows/nightly.yml` fuzzes every
+fuzz-short, test-armv7 and docs-check. On every pull request,
+`.github/workflows/pr.yml` runs `docs.yml` (docsync, otfabric-policy) and,
+unless the change is documentation only, CI (`.github/workflows/ci.yml`: the
+shared Go workflow with lint, tests and race on Go 1.26 and 1.27,
+govulncheck and a 10 s fuzz pass over every target, plus a `quality` job with
+the per-package coverage gate and a 5 s chaos run) and
+`.github/workflows/interop.yml`, the interop suite against each
+digest-pinned adapter image. `.github/workflows/nightly.yml` fuzzes every
 target for 2 minutes and runs the chaos suite for 5 minutes per test.
 
 ## Open items
