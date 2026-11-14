@@ -120,3 +120,5 @@ input. A real failure is never retried.
 
 `internal/pdu/testdata/golden` and `internal/codec/testdata` hold expected
 encodings for the tests in those packages.
+
+<!-- Disposable: verifies OT Fabric Required Checks on a documentation-only pull request after the PR workflow merged. Never merged. -->
