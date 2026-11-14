@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	mms "github.com/otfabric/go-mms"
@@ -246,24 +247,38 @@ func TestListener_TemporaryAcceptErrors(t *testing.T) {
 	}
 }
 
+// Close while the accept loop waits out the backoff after a temporary
+// error ends the wait: Accept returns an error and the listener is not
+// asked for another connection.
 func TestListener_CloseDuringTemporaryBackoff(t *testing.T) {
-	sl := &scriptedListener{errs: []error{tempErr{}}, closed: make(chan struct{})}
-	l := NewListener(sl)
-	done := make(chan error, 1)
-	go func() {
-		_, err := l.Accept(context.Background())
-		done <- err
-	}()
-	time.Sleep(2 * time.Millisecond)
-	_ = l.Close()
-	select {
-	case err := <-done:
-		if err == nil {
+	synctest.Test(t, func(t *testing.T) {
+		sl := &scriptedListener{errs: []error{tempErr{}}, closed: make(chan struct{})}
+		l := NewListener(sl)
+		done := make(chan error, 1)
+		go func() {
+			_, err := l.Accept(context.Background())
+			done <- err
+		}()
+		// Every goroutine is blocked: the accept loop in its backoff, whose
+		// timer does not fire before the clock moves.
+		synctest.Wait()
+		sl.mu.Lock()
+		calls := sl.calls
+		sl.mu.Unlock()
+		if calls != 1 {
+			t.Fatalf("Accept calls before Close = %d, want 1 (the loop waits out its backoff)", calls)
+		}
+		_ = l.Close()
+		if err := <-done; err == nil {
 			t.Error("Accept succeeded after Close")
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Accept did not return after Close")
-	}
+		sl.mu.Lock()
+		calls = sl.calls
+		sl.mu.Unlock()
+		if calls != 1 {
+			t.Errorf("Accept calls after Close = %d, want 1: Close ends the backoff", calls)
+		}
+	})
 }
 
 func TestIsTemporary(t *testing.T) {

@@ -22,9 +22,10 @@ import (
 // while requests are sent. go-cotp (v1.1.0+) arms read and write deadlines
 // per direction, so a context ending on one side never disturbs the other.
 type cotpTransport struct {
-	mu   sync.Mutex
-	cotp *cotp.Conn
-	raw  net.Conn // same conn passed to Connect/Accept; used for TLSConnectionState
+	mu      sync.Mutex
+	cotp    *cotp.Conn
+	raw     net.Conn // same conn passed to Connect/Accept; used for TLSConnectionState
+	maxTSDU int      // the MaxTSDULength given to go-cotp (maxTSDULength)
 }
 
 // ctxIOError makes an I/O error that ctx ended match ctx's error. go-cotp

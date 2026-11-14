@@ -96,4 +96,7 @@ random seed; a failure prints `MMS_CHAOS_SEED` to replay it.
 - **Late response after cancel**: the tracker discards late responses
   (invoke ID already removed); logged at debug level.
 - **Report handler during shutdown**: reports can be delivered between
-  Close and the reader loop exiting. Handlers should not block.
+  Close and the reader loop exiting. Handlers should not block. With
+  `DialOptions.ReportQueue` the delivery goroutine delivers no report it
+  takes from the queue after Close or Abort started; it still empties the
+  queue, so a reader waiting for room is not left behind.

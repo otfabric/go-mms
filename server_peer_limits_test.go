@@ -347,7 +347,7 @@ func TestFileOpenLimit(t *testing.T) {
 	if _, _, _, err := s.handleFileOpen(ctx2, openBody); err != nil {
 		t.Fatalf("second association: %v", err)
 	}
-	sc.frsmTable.closeAll(ctx, fp)
+	sc.frsmTable.closeAll(s.logger, fp)
 
 	// A negative limit refuses every FileOpen without calling Open.
 	fp2 := &countingFileProvider{memFileProvider: newMemFileProvider()}

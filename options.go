@@ -65,7 +65,74 @@ type DialOptions struct {
 	// negative value skips the A-RELEASE: Close only concludes and closes
 	// the transport (the behaviour before v1.8.0).
 	ReleaseTimeout time.Duration
+
+	// ReportQueue, with a positive Length, delivers InformationReports to
+	// the [InformationReportHandler] through a queue that one goroutine
+	// drains, so a handler that takes its time does not hold up the
+	// responses to confirmed requests. The zero value delivers each
+	// report on the reader goroutine before the next PDU is read, as
+	// before v1.11.0. See [ReportQueueOptions].
+	ReportQueue ReportQueueOptions
+
+	// MaxFileReadAll bounds the file data, in octets, that
+	// [Client.FileReadAll] and [Client.DownloadFile] keep; more ends them
+	// with an error matching [ErrProtocol]. Zero means 2^32−1, the largest
+	// file size MMS describes (sizeOfFile is Unsigned32). A negative value
+	// sets no limit.
+	MaxFileReadAll int64
+
+	// MaxNameListAll bounds the names [Client.GetNameListAll] keeps over
+	// all pages; more end it with an error matching [ErrProtocol]. Zero
+	// means 1,000,000. A negative value sets no limit.
+	MaxNameListAll int
+
+	// MaxFileDirectoryAll bounds the entries [Client.FileDirectoryAll]
+	// keeps over all pages; more end it with an error matching
+	// [ErrProtocol]. Zero means 1,000,000. A negative value sets no limit.
+	MaxFileDirectoryAll int
 }
+
+// ReportQueueOptions configures the InformationReport queue of
+// [DialOptions.ReportQueue].
+//
+// With a queue, the reader goroutine queues each report and goes on
+// reading; one delivery goroutine calls the handler for the queued
+// reports in the order they arrived. A report and a response that arrive
+// close together may then reach the application in the other order. When
+// the peer ends the association, the reports already queued are still
+// delivered. Once [Client.Close] or [Client.Abort] has started, no further
+// report is delivered: the delivery goroutine takes the queued reports out
+// without delivering them, so that a reader waiting for room reads the
+// Conclude-Response. Close and Abort wait for the delivery goroutine,
+// bounded by their context, except while the handler runs (as without a
+// queue, so that the handler can call them): it then stops after the
+// handler returns.
+type ReportQueueOptions struct {
+	// Length is the number of reports the queue holds. Zero or a negative
+	// value means no queue.
+	Length int
+
+	// Full is what happens to a report that arrives while the queue holds
+	// Length reports. The zero value is [ReportDropNewest].
+	Full ReportQueueFull
+}
+
+// ReportQueueFull says what a full report queue does with a report that
+// arrives. A dropped report is logged at Debug level and reported to a
+// [Metrics] that implements [ReportDropObserver].
+type ReportQueueFull int
+
+// Policies of a full report queue.
+const (
+	// ReportDropNewest drops the report that arrives.
+	ReportDropNewest ReportQueueFull = iota
+	// ReportDropOldest drops the oldest queued report and queues the one
+	// that arrives.
+	ReportDropOldest
+	// ReportWait makes the reader wait until the queue has room: no
+	// report is dropped, and no response is read while it waits.
+	ReportWait
+)
 
 // Directions passed to [DialOptions.RawHook].
 const (

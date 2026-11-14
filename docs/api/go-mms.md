@@ -293,6 +293,20 @@ var (
 	// outstanding, when [MMSOptions.FailFastOutstanding] is set. The
 	// request is not sent.
 	ErrMaxOutstanding = errors.New("mms: max outstanding requests")
+
+	// ErrLimitReached is matched by the error [Server.Serve] returns for
+	// an association refused because the server holds
+	// [ServerOptions.MaxAssociations] associations.
+	ErrLimitReached = errors.New("mms: server limit reached")
+
+	// ErrCallbackFailed is matched by the error the library reports for
+	// an application callback that did not return normally: a server
+	// handler, callback or provider, the [Authenticator], the
+	// [InformationReportHandler], a [Metrics] method or the RawHook. The
+	// library recovers such a callback where it calls it, logs the value
+	// and the stack at Error level, and keeps running (see
+	// [ServerOptions] and OBSERVABILITY.md).
+	ErrCallbackFailed = errors.New("mms: callback did not return normally")
 )
 ```
 
@@ -617,6 +631,8 @@ Return an [AuthResult](#type-authresult) with Accept=true to accept, or Accept=f
 
 If not set on [ServerOptions](#type-serveroptions), all associations are accepted with a nil token.
 
+An Authenticator that does not return normally is logged with its stack and the association is refused as for an error; the error [Server.Serve](#func-server-serve) returns matches ErrAuthenticationFailed and ErrCallbackFailed.
+
 Example authenticator for ACSE password policy:
 
 	func myAuth(_ context.Context, auth *mms.AuthContext) (mms.AuthResult, error) {
@@ -839,8 +855,13 @@ type Client struct {
 	// why the reader loop exited; guarded by mu
 	// receives the Conclude outcome (nil: Conclude-Response)
 
-	// inReportHandler is set while the reader goroutine runs the report
-	// handler: Close and Abort called then do not wait for the reader.
+	// inReportHandler is set while the report handler runs: Close and
+	// Abort called then do not wait for the reader or the delivery
+	// goroutine.
+
+	// reports is the report queue (DialOptions.ReportQueue), nil without
+	// one: the reader sends and closes it, deliverReports drains it and
+	// closes reportsDone when it stops.
 
 	// Negotiated parameters from MMS Initiate handshake.
 
@@ -902,7 +923,7 @@ This is NOT a graceful drain: pending requests are aborted immediately and their
 
 Close is idempotent: the first call performs the conclude handshake; subsequent calls return nil. When ctx is done the transport is closed, which also ends the wait for the reader goroutine.
 
-Called from an [InformationReportHandler](#type-informationreporthandler), Close cannot receive the Conclude-Response (the reader runs the handler): it returns when ctx is done, with that error, after closing the transport. Use [Client.Abort](#func-client-abort) there, or call Close on another goroutine.
+Called from an [InformationReportHandler](#type-informationreporthandler) without [DialOptions.ReportQueue](#func-dialoptions-reportqueue), Close cannot receive the Conclude-Response (the reader runs the handler): it returns when ctx is done, with that error, after closing the transport. Use [Client.Abort](#func-client-abort) there, or call Close on another goroutine.
 
 #### func (Client) DefineNamedVariableList
 
@@ -992,7 +1013,7 @@ func (c *Client) FileDirectoryAll(ctx context.Context, fileSpec string) ([]FileD
 
 FileDirectoryAll retrieves all file directory entries by automatically handling continuation. It repeatedly calls [Client.FileDirectory](#func-client-filedirectory) until MoreFollows is false.
 
-It accumulates at most 1,000,000 entries. More entries, or a continuation point the server already sent, end it with an error matching ErrProtocol.
+It accumulates at most [DialOptions.MaxFileDirectoryAll](#func-dialoptions-maxfiledirectoryall) entries (default 1,000,000). More entries, or a continuation point the server already sent, end it with an error matching ErrProtocol.
 
 #### func (Client) FileOpen
 
@@ -1018,7 +1039,7 @@ func (c *Client) FileReadAll(ctx context.Context, frsmID int32) ([]byte, error)
 
 FileReadAll reads all remaining data from a previously opened file handle. It repeatedly calls [Client.FileRead](#func-client-fileread) until MoreFollows is false and returns the concatenated data.
 
-It accumulates the data in memory, at most 2^32−1 octets (the largest file size MMS describes). A chunk without data that announces more, or data beyond that size, ends it with an error matching ErrProtocol.
+It accumulates the data in memory, at most [DialOptions.MaxFileReadAll](#func-dialoptions-maxfilereadall) octets (default 2^32−1, the largest file size MMS describes). A chunk without data that announces more, or data beyond that size, ends it with an error matching ErrProtocol.
 
 #### func (Client) FileRename
 
@@ -1048,7 +1069,7 @@ GetNameListAll retrieves all named objects by automatically handling continuatio
 
 As a safety measure, GetNameListAll detects stalled pagination (where the server sends a continuation point it already sent) and returns an error.
 
-Note: this method accumulates all names in memory, at most 1,000,000; more end it with an error matching ErrProtocol. For servers with very large name lists, prefer using [Client.GetNameList](#func-client-getnamelist) directly with explicit pagination control.
+Note: this method accumulates all names in memory, at most [DialOptions.MaxNameListAll](#func-dialoptions-maxnamelistall) (default 1,000,000); more end it with an error matching ErrProtocol. For servers with very large name lists, prefer using [Client.GetNameList](#func-client-getnamelist) directly with explicit pagination control.
 
 #### func (Client) GetNamedVariableListAttributes
 
@@ -1474,6 +1495,31 @@ type DialOptions struct {
 	// negative value skips the A-RELEASE: Close only concludes and closes
 	// the transport (the behaviour before v1.8.0).
 	ReleaseTimeout time.Duration
+
+	// ReportQueue, with a positive Length, delivers InformationReports to
+	// the [InformationReportHandler] through a queue that one goroutine
+	// drains, so a handler that takes its time does not hold up the
+	// responses to confirmed requests. The zero value delivers each
+	// report on the reader goroutine before the next PDU is read, as
+	// before v1.11.0. See [ReportQueueOptions].
+	ReportQueue ReportQueueOptions
+
+	// MaxFileReadAll bounds the file data, in octets, that
+	// [Client.FileReadAll] and [Client.DownloadFile] keep; more ends them
+	// with an error matching [ErrProtocol]. Zero means 2^32−1, the largest
+	// file size MMS describes (sizeOfFile is Unsigned32). A negative value
+	// sets no limit.
+	MaxFileReadAll int64
+
+	// MaxNameListAll bounds the names [Client.GetNameListAll] keeps over
+	// all pages; more end it with an error matching [ErrProtocol]. Zero
+	// means 1,000,000. A negative value sets no limit.
+	MaxNameListAll int
+
+	// MaxFileDirectoryAll bounds the entries [Client.FileDirectoryAll]
+	// keeps over all pages; more end it with an error matching
+	// [ErrProtocol]. Zero means 1,000,000. A negative value sets no limit.
+	MaxFileDirectoryAll int
 }
 ```
 
@@ -1769,7 +1815,9 @@ type InformationReportHandler func(report *InformationReportIndication)
 
 InformationReportHandler is called when the client receives an unsolicited InformationReport from the server.
 
-The handler is called on the client's internal reader goroutine. Long-running work should be dispatched to a separate goroutine. While the handler runs no response is read, so it must not call a confirmed service of the same [Client](#type-client); such a call fails when its context ends. It may call [Client.Abort](#func-client-abort); [Client.Close](#func-client-close) returns only when its context is done.
+The handler is called on the client's internal reader goroutine. Long-running work should be dispatched to a separate goroutine. While the handler runs no response is read, so it must not call a confirmed service of the same [Client](#type-client); such a call fails when its context ends. It may call [Client.Abort](#func-client-abort); [Client.Close](#func-client-close) returns only when its context is done. With [DialOptions.ReportQueue](#func-dialoptions-reportqueue) the handler is called on a delivery goroutine instead, and responses are read while it runs.
+
+A handler that does not return normally is logged at Error level with its stack; the next report is delivered as usual.
 
 ### type InformationReportIndication
 
@@ -2129,6 +2177,14 @@ func (NopMetrics) ObserveConnection(ConnectionEvent)
 
 ObserveConnection implements [Metrics](#type-metrics).
 
+#### func (NopMetrics) ObserveReportDropped
+
+```go
+func (NopMetrics) ObserveReportDropped(ReportDroppedEvent)
+```
+
+ObserveReportDropped implements [ReportDropObserver](#type-reportdropobserver).
+
 #### func (NopMetrics) ObserveRequest
 
 ```go
@@ -2393,6 +2449,74 @@ RemoteAddrTransport is optionally implemented by [Transport](#type-transport) im
 	    addr := ra.RemoteAddr()
 	}
 
+### type ReportDropObserver
+
+```go
+type ReportDropObserver interface {
+	ObserveReportDropped(ReportDroppedEvent)
+}
+```
+
+ReportDropObserver is implemented by a [Metrics](#type-metrics) that counts the InformationReports a full report queue drops ([DialOptions.ReportQueue](#func-dialoptions-reportqueue)). When the Metrics of [DialOptions.Metrics](#func-dialoptions-metrics) implements it, the client calls ObserveReportDropped once for every dropped report, on its reader goroutine, so it should return quickly. [NopMetrics](#type-nopmetrics) implements it and discards the event.
+
+### type ReportDroppedEvent
+
+```go
+type ReportDroppedEvent struct {
+	// RemoteAddr is the peer address when the transport implements
+	// [RemoteAddrTransport], otherwise "".
+	RemoteAddr string
+	// Full is the queue's policy, [ReportDropNewest] or [ReportDropOldest].
+	Full ReportQueueFull
+	// Dropped is the number of reports the client has dropped, this one
+	// included.
+	Dropped uint64
+}
+```
+
+ReportDroppedEvent describes one InformationReport that a full report queue dropped.
+
+### type ReportQueueFull
+
+```go
+type ReportQueueFull int
+```
+
+ReportQueueFull says what a full report queue does with a report that arrives. A dropped report is logged at Debug level and reported to a [Metrics](#type-metrics) that implements [ReportDropObserver](#type-reportdropobserver).
+
+```go
+const (
+	// ReportDropNewest drops the report that arrives.
+	ReportDropNewest ReportQueueFull = iota
+	// ReportDropOldest drops the oldest queued report and queues the one
+	// that arrives.
+	ReportDropOldest
+	// ReportWait makes the reader wait until the queue has room: no
+	// report is dropped, and no response is read while it waits.
+	ReportWait
+)
+```
+
+Policies of a full report queue.
+
+### type ReportQueueOptions
+
+```go
+type ReportQueueOptions struct {
+	// Length is the number of reports the queue holds. Zero or a negative
+	// value means no queue.
+	Length int
+
+	// Full is what happens to a report that arrives while the queue holds
+	// Length reports. The zero value is [ReportDropNewest].
+	Full ReportQueueFull
+}
+```
+
+ReportQueueOptions configures the InformationReport queue of [DialOptions.ReportQueue](#func-dialoptions-reportqueue).
+
+With a queue, the reader goroutine queues each report and goes on reading; one delivery goroutine calls the handler for the queued reports in the order they arrived. A report and a response that arrive close together may then reach the application in the other order. When the peer ends the association, the reports already queued are still delivered. Once [Client.Close](#func-client-close) or [Client.Abort](#func-client-abort) has started, no further report is delivered: the delivery goroutine takes the queued reports out without delivering them, so that a reader waiting for room reads the Conclude-Response. Close and Abort wait for the delivery goroutine, bounded by their context, except while the handler runs (as without a queue, so that the handler can call them): it then stops after the handler returns.
+
 ### type RequestEvent
 
 ```go
@@ -2512,6 +2636,10 @@ type Server struct {
 
 	// servingDone is made by the first Shutdown and closed when serving
 	// is empty.
+
+	// associations counts the Serve calls that hold an association slot;
+	// maxAssociations is ServerOptions.MaxAssociations resolved (< 0
+	// refuses every association).
 
 }
 ```
@@ -2645,6 +2773,8 @@ If ctx is done before all in-flight requests finish, the remaining associations 
 type ServerConn struct {
 
 	// held while a confirmed request is handled
+
+	// holds one of the MaxAssociations slots; owned by Serve
 
 }
 ```
@@ -2834,6 +2964,22 @@ type ServerOptions struct {
 	// association free them. Zero means 32; a negative value refuses
 	// every FileOpen. Only used when FileProvider is set.
 	MaxOpenFiles int
+
+	// MaxAssociations bounds the associations the server holds at a
+	// time, counted from the AARQ (so including the one the
+	// Authenticator is deciding on) until [Server.Serve] returns. The
+	// AARQ of one more is answered with AARE rejected-transient and an
+	// Initiate-ErrorPDU resource capability-unavailable (ISO 9506-2
+	// clause 7.4.1), logged at Warn level ("mms: limit reached"), and its
+	// Serve returns an error that matches [ErrLimitReached] and
+	// [ErrAssociationFailed]. A connection that has not sent its AARQ is
+	// not counted; [ServerOptions.AssociationTimeout] bounds it. Zero
+	// means 100: libiec61850's MMS server accepts 100 connections by
+	// default (its IEC 61850 server 5), and a device serves a few
+	// clients (SCADA, gateway, engineering tool). A negative value
+	// refuses every association. Before v1.11.0 there was no limit;
+	// math.MaxInt keeps that behaviour.
+	MaxAssociations int
 }
 ```
 

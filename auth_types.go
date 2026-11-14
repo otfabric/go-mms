@@ -174,6 +174,10 @@ type AuthResult struct {
 // If not set on [ServerOptions], all associations are accepted with a
 // nil token.
 //
+// An Authenticator that does not return normally is logged with its stack
+// and the association is refused as for an error; the error [Server.Serve]
+// returns matches [ErrAuthenticationFailed] and [ErrCallbackFailed].
+//
 // Example authenticator for ACSE password policy:
 //
 //	func myAuth(_ context.Context, auth *mms.AuthContext) (mms.AuthResult, error) {

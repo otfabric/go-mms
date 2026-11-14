@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -138,9 +139,20 @@ func isTemporary(err error) bool {
 }
 
 // handshake runs the TLS and COTP handshakes for conn and hands the
-// transport to Accept.
+// transport to Accept. A callback of the TLS configuration that does not
+// return normally is logged at Error level with its stack, and conn is
+// closed; the listener goes on.
 func (l *Listener) handshake(conn net.Conn) {
 	defer func() { <-l.pending }()
+	defer func() {
+		if r := recover(); r != nil {
+			_ = conn.Close()
+			if l.opts.logger != nil {
+				l.opts.logger.Error("iso: handshake callback did not return normally, closing connection",
+					"remote_addr", conn.RemoteAddr().String(), "value", r, "stack", string(debug.Stack()))
+			}
+		}
+	}()
 
 	timeout := l.opts.handshakeTimeout
 	if timeout == 0 {
@@ -197,17 +209,22 @@ func (l *Listener) handshakeConn(ctx context.Context, conn net.Conn) (mms.Transp
 
 	// Return the CR's selectors in the CC, as libiec61850 servers do; a
 	// configured called selector is enforced (see WithCalledTSelector).
-	cotpConn, err := cotp.Accept(ctx, conn, cotp.ServerConfig{
+	// The listener does not know the server's MMS PDU size, so the TSDU
+	// bound is the one of the default size (see maxTSDULength); a server
+	// supports no larger PDU size than the transport carries.
+	cfg := cotp.ServerConfig{
 		LocalSelector: l.opts.calledTSelector,
 		MaxTPDULength: l.opts.maxTPDULength,
+		MaxTSDULength: maxTSDULength(0),
 		EchoSelectors: true,
-	})
+	}
+	cotpConn, err := cotp.Accept(ctx, conn, cfg)
 	if err != nil {
 		l.logWarn("iso: cotp handshake failed, closing connection", conn, err)
 		_ = conn.Close() // go-cotp normally closed it already
 		return nil, err
 	}
-	return &cotpTransport{cotp: cotpConn, raw: conn}, nil
+	return &cotpTransport{cotp: cotpConn, raw: conn, maxTSDU: cfg.MaxTSDULength}, nil
 }
 
 func (l *Listener) logWarn(msg string, conn net.Conn, err error) {

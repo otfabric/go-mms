@@ -10,10 +10,15 @@ import (
 // ServiceError errorClass CHOICE alternatives used by the association
 // services (ISO 9506-2 ServiceError).
 const (
+	ErrorClassResource = 3
 	ErrorClassAccess   = 7
 	ErrorClassInitiate = 8
 	ErrorClassConclude = 9
 )
+
+// ResourceErrCapabilityUnavailable is the ServiceError resource-class
+// code capability-unavailable (ISO 9506-2 clause 7.4.1).
+const ResourceErrCapabilityUnavailable = 4
 
 // ServiceError initiate-class codes (ISO 9506-2 ServiceError
 // errorClass initiate; IEC 61850-8-1 Table 13).

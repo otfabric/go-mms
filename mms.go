@@ -57,9 +57,16 @@ type Client struct {
 
 	reportMu      sync.RWMutex
 	reportHandler InformationReportHandler
-	// inReportHandler is set while the reader goroutine runs the report
-	// handler: Close and Abort called then do not wait for the reader.
+	// inReportHandler is set while the report handler runs: Close and
+	// Abort called then do not wait for the reader or the delivery
+	// goroutine.
 	inReportHandler atomic.Bool
+	// reports is the report queue (DialOptions.ReportQueue), nil without
+	// one: the reader sends and closes it, deliverReports drains it and
+	// closes reportsDone when it stops.
+	reports        chan *InformationReportIndication
+	reportsDone    chan struct{}
+	reportsDropped atomic.Uint64
 
 	// Negotiated parameters from MMS Initiate handshake.
 	maxPDUSize        int
@@ -97,7 +104,7 @@ func newClient(ctx context.Context, conn Transport, opts DialOptions) (*Client, 
 	c := &Client{
 		logger:     logger,
 		opts:       opts,
-		metrics:    metricsOrNop(opts.Metrics),
+		metrics:    guardMetrics(opts.Metrics, logger),
 		remote:     remote,
 		conn:       conn,
 		readerDone: make(chan struct{}),
@@ -117,6 +124,11 @@ func newClient(ctx context.Context, conn Transport, opts DialOptions) (*Client, 
 	// outstanding.
 	c.tracker = invoke.NewTracker(c.maxOutCalling)
 
+	if n := opts.ReportQueue.Length; n > 0 {
+		c.reports = make(chan *InformationReportIndication, n)
+		c.reportsDone = make(chan struct{})
+		go c.deliverReports()
+	}
 	readerCtx, cancel := context.WithCancel(context.Background())
 	c.readerCancel = cancel
 	go c.readerLoop(readerCtx)
@@ -133,8 +145,12 @@ func newClient(ctx context.Context, conn Transport, opts DialOptions) (*Client, 
 
 func (c *Client) associate(ctx context.Context) error {
 	mmsOpts := c.opts.MMS
+	maxPDU := mmsOpts.MaxPDUSize
+	if maxPDU <= 0 {
+		maxPDU = defaultMaxPDUSize
+	}
 	initReq := pdu.DefaultInitiateRequest(
-		mmsOpts.MaxPDUSize,
+		transportPDULimit(c.conn, maxPDU),
 		mmsOpts.MaxOutstandingCalling,
 		mmsOpts.MaxOutstandingCalled,
 		mmsOpts.DataStructureNestingLevel,
@@ -292,10 +308,11 @@ func isoAPTitle(title APTitle, aeq int, def APTitle) (APTitle, int) {
 // subsequent calls return nil. When ctx is done the transport is closed,
 // which also ends the wait for the reader goroutine.
 //
-// Called from an [InformationReportHandler], Close cannot receive the
-// Conclude-Response (the reader runs the handler): it returns when ctx
-// is done, with that error, after closing the transport. Use [Client.Abort]
-// there, or call Close on another goroutine.
+// Called from an [InformationReportHandler] without
+// [DialOptions.ReportQueue], Close cannot receive the Conclude-Response
+// (the reader runs the handler): it returns when ctx is done, with that
+// error, after closing the transport. Use [Client.Abort] there, or call
+// Close on another goroutine.
 func (c *Client) Close(ctx context.Context) error {
 	c.mu.Lock()
 	if c.closed {
@@ -362,11 +379,13 @@ func (c *Client) Abort(ctx context.Context) error {
 	return err
 }
 
-// waitReader waits for the reader goroutine to exit after readerCancel.
-// When ctx is done first the transport is closed, which ends a read that
-// does not watch its context. It does not wait while the report handler
-// runs: the handler runs on the reader, which exits when the handler
-// returns.
+// waitReader waits for the reader goroutine to exit after readerCancel,
+// and then for the delivery goroutine of the report queue, if any. When
+// ctx is done first the transport is closed, which ends a read that does
+// not watch its context, and the wait for the delivery goroutine ends. It
+// does not wait while the report handler runs: without a queue the
+// handler runs on the reader, which exits when the handler returns; with
+// one, the delivery goroutine stops when it returns.
 func (c *Client) waitReader(ctx context.Context) {
 	if c.inReportHandler.Load() {
 		return
@@ -374,6 +393,12 @@ func (c *Client) waitReader(ctx context.Context) {
 	stop := context.AfterFunc(ctx, func() { _ = c.conn.Close() })
 	defer stop()
 	<-c.readerDone
+	if c.reportsDone != nil {
+		select {
+		case <-c.reportsDone:
+		case <-ctx.Done():
+		}
+	}
 }
 
 // Done returns a channel that is closed when the association has ended:
@@ -958,6 +983,9 @@ func (c *Client) readerLoop(ctx context.Context) {
 		}
 		c.mu.Unlock()
 		c.metricsSink().ObserveConnection(ConnectionEvent{Role: RoleClient, State: ConnectionClosed, RemoteAddr: c.remote, Err: err})
+		if c.reports != nil {
+			close(c.reports)
+		}
 		close(c.readerDone)
 	}()
 
@@ -1156,22 +1184,99 @@ func (c *Client) dispatchUnconfirmed(ctx context.Context, content []byte) {
 		return
 	}
 
-	c.reportMu.RLock()
-	handler := c.reportHandler
-	c.reportMu.RUnlock()
-
-	if handler != nil {
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					c.logger.Error("mms: InformationReport handler panic", "panic", r)
-				}
-			}()
-			c.inReportHandler.Store(true)
-			defer c.inReportHandler.Store(false)
-			handler(indication)
-		}()
+	if c.handlerOf() == nil {
+		return
 	}
+	if c.reports != nil {
+		c.queueReport(ctx, indication)
+		return
+	}
+	c.deliverReport(indication)
+}
+
+// handlerOf returns the registered InformationReportHandler, or nil.
+func (c *Client) handlerOf() InformationReportHandler {
+	c.reportMu.RLock()
+	defer c.reportMu.RUnlock()
+	return c.reportHandler
+}
+
+// deliverReport calls the registered handler for one report. A handler
+// that does not return normally is logged with its stack; the next
+// report is delivered as usual.
+func (c *Client) deliverReport(indication *InformationReportIndication) {
+	handler := c.handlerOf()
+	if handler == nil {
+		return
+	}
+	c.inReportHandler.Store(true)
+	defer c.inReportHandler.Store(false)
+	_ = guard(c.logger, "InformationReportHandler", func() { handler(indication) })
+}
+
+// queueReport puts a report in the report queue; when the queue is full,
+// DialOptions.ReportQueue.Full decides. ctx is the reader's: it ends
+// when Close or Abort stops the reader, which ends a ReportWait.
+func (c *Client) queueReport(ctx context.Context, indication *InformationReportIndication) {
+	switch c.opts.ReportQueue.Full {
+	case ReportWait:
+		select {
+		case c.reports <- indication:
+		case <-ctx.Done():
+		}
+	case ReportDropOldest:
+		// Only the reader sends, so after one report is taken out there
+		// is room; the delivery goroutine may take it first.
+		for {
+			select {
+			case c.reports <- indication:
+				return
+			default:
+			}
+			select {
+			case <-c.reports:
+				c.reportDropped(ReportDropOldest)
+			default:
+			}
+		}
+	default:
+		select {
+		case c.reports <- indication:
+		default:
+			c.reportDropped(ReportDropNewest)
+		}
+	}
+}
+
+// reportDropped counts and reports one report the full queue dropped.
+func (c *Client) reportDropped(full ReportQueueFull) {
+	n := c.reportsDropped.Add(1)
+	c.logger.Debug("mms: report queue full, report dropped", "dropped", n)
+	if o, ok := c.metricsSink().(ReportDropObserver); ok {
+		o.ObserveReportDropped(ReportDroppedEvent{RemoteAddr: c.remote, Full: full, Dropped: n})
+	}
+}
+
+// deliverReports is the delivery goroutine of the report queue. It
+// delivers the queued reports in order until the reader closes the
+// queue. After Close or Abort it delivers no further report but still
+// takes them out, so that a reader waiting for room (ReportWait) reads
+// the Conclude-Response.
+func (c *Client) deliverReports() {
+	defer close(c.reportsDone)
+	for indication := range c.reports {
+		if c.isClosed() {
+			continue
+		}
+		c.deliverReport(indication)
+	}
+}
+
+// isClosed reports whether Close or Abort has started.
+func (c *Client) isClosed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
 }
 
 func (c *Client) infoReportToIndication(r *pdu.InformationReportWire) (*InformationReportIndication, error) {
@@ -1205,9 +1310,7 @@ func (c *Client) infoReportToIndication(r *pdu.InformationReportWire) (*Informat
 }
 
 func (c *Client) sendRaw(ctx context.Context, data []byte) error {
-	if c.opts.RawHook != nil {
-		c.opts.RawHook(RawHookSend, data)
-	}
+	c.rawHook(RawHookSend, data)
 	return c.conn.Send(ctx, data)
 }
 
@@ -1216,10 +1319,17 @@ func (c *Client) receiveRaw(ctx context.Context) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c.opts.RawHook != nil {
-		c.opts.RawHook(RawHookRecv, data)
-	}
+	c.rawHook(RawHookRecv, data)
 	return data, nil
+}
+
+// rawHook calls DialOptions.RawHook, if set. A hook that does not return
+// normally is logged with its stack; the PDU is sent or processed as
+// usual.
+func (c *Client) rawHook(direction string, data []byte) {
+	if hook := c.opts.RawHook; hook != nil {
+		_ = guard(c.logger, "RawHook", func() { hook(direction, data) })
+	}
 }
 
 // ReadRequest specifies what to read from the MMS server.
@@ -2113,12 +2223,13 @@ func (c *Client) GetNameList(ctx context.Context, req NameListRequest) (*NameLis
 // the server sends a continuation point it already sent) and returns an
 // error.
 //
-// Note: this method accumulates all names in memory, at most 1,000,000;
-// more end it with an error matching [ErrProtocol]. For servers with
-// very large name lists, prefer using [Client.GetNameList] directly
-// with explicit pagination control.
+// Note: this method accumulates all names in memory, at most
+// [DialOptions.MaxNameListAll] (default 1,000,000); more end it with an
+// error matching [ErrProtocol]. For servers with very large name lists,
+// prefer using [Client.GetNameList] directly with explicit pagination
+// control.
 func (c *Client) GetNameListAll(ctx context.Context, req NameListRequest) ([]string, error) {
-	return c.getNameListAll(ctx, req, maxListAll)
+	return c.getNameListAll(ctx, req, limitOf(c.opts.MaxNameListAll, maxListAll))
 }
 
 func (c *Client) getNameListAll(ctx context.Context, req NameListRequest, limit int) ([]string, error) {

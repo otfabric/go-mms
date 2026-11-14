@@ -68,7 +68,8 @@ client refuses to send a request larger than the server's localDetailCalled
 own localDetailCalling as invalid; `Client.Negotiated().MaxPDUSize` is the
 smaller of the two. The server answers min(own, proposed), or its own value
 when the client omits localDetailCalling. Before negotiation (during the
-initial handshake), no size limit is enforced. After negotiation, the server
+initial handshake), no MMS size limit is enforced; over `transport/iso` the
+TSDU bound applies (see [LIMITS.md](LIMITS.md)). After negotiation, the server
 answers an oversized PDU with a Reject (confirmed-requestPDU
 value-out-of-range for a confirmed request whose invoke ID can be read,
 otherwise pdu-error invalid-pdu) and the association continues; see
@@ -83,6 +84,7 @@ octets with Initiate-ErrorPDU max-segment-insufficient.
 | Transport protocol | TCP only (RFC 1006 TPKT framing). No native OSI transport, UDP, or serial support. |
 | TLS | Supported via `iso.WithTLSConfig`, but DTLS and other non-TCP-TLS variants are not supported. |
 | Custom transports | The `Transport` interface allows arbitrary implementations, but the library does not provide any beyond `transport/iso`. |
+| TSDU size of a `Listener` | An `iso.Listener` does not know the PDU size of the `Server` it serves, so it bounds TSDUs for the default of 65,000 octets (65,539 octets per TSDU) and has no setting to raise it: a server configured with a larger `ServerMMSOptions.MaxPDUSize` negotiates 65,475 octets over it. A server that needs larger PDUs serves a `Transport` of its own. A client raises its bound with `MMS.MaxPDUSize` in `iso.WithClientDialOptions`. See [LIMITS.md](LIMITS.md). |
 
 ## Behavioral Limitations
 
@@ -102,6 +104,8 @@ octets with Initiate-ErrorPDU max-segment-insufficient.
 | Client servicesSupportedCalling | The client still proposes libiec61850's servicesSupportedCalling bit string, which names services the client does not serve as a responder (MMS-PDU-26). Servers use it only informationally. |
 | Session protocol | Version 2 and version 1 are negotiated; only the kernel and duplex functional units are used. A CONNECT without duplex is refused (reason 134). Extended User Data (PGI 194) is sent for CONNECT user data above 512 octets (ISO 8327-1); libiec61850 does not parse it, but an MMS AARQ is far below 512 octets. |
 | Presentation contexts | Any context ids the client proposes for ACSE and MMS (BER transfer syntax) are accepted and used; other proposed contexts are rejected per context. Default-context and multiple PDV-list fully-encoded data are not supported. |
+| Callbacks the library does not recover | The library recovers the application code it calls on its own goroutines (server handlers, `Variable` callbacks, providers, the `Authenticator`, `Metrics`, the `InformationReportHandler`, the `RawHook`, the listener's `tls.Config` callbacks). It does not recover the `slog.Handler` of a `Logger` (it is how a failure is reported), a `Transport`, `TransportListener` or `net.Listener` implementation, or code that runs on the caller's goroutine (`RetryPolicy.OnRetry` and `Retryable`, the dialer of `iso.WithDialer`, the client's `tls.Config` callbacks): what those do reaches the caller. |
+| Report queue order | With `DialOptions.ReportQueue`, reports are delivered in the order they arrived, but a report and a response that arrive close together may reach the application in the other order. Without a queue the order is that of the wire. |
 | RawHook availability | Raw wire hooks (`RawHook`) are only available on the client side via `DialOptions`. The server does not expose a raw hook for wire-level inspection. |
 
 ## Named Variable List Limitations
@@ -129,7 +133,7 @@ octets with Initiate-ErrorPDU max-segment-insufficient.
 | Limitation | Details |
 |-----------|---------|
 | No built-in exporters | The `Metrics` interface reports request and connection events, but go-mms ships no Prometheus or OpenTelemetry adapter (see [OBSERVABILITY.md](OBSERVABILITY.md) for an example) and creates no tracing spans. |
-| Metrics coverage | Only confirmed requests and association state changes are reported; unconfirmed PDUs (InformationReport, UnsolicitedStatus), Cancel and byte counts are not. |
+| Metrics coverage | Only confirmed requests and association state changes are reported, and the InformationReports a full `DialOptions.ReportQueue` drops (to a `Metrics` that implements `ReportDropObserver`); other unconfirmed PDUs (InformationReport, UnsolicitedStatus), Cancel and byte counts are not. |
 | Server raw hook | Not available. Only the client exposes a `RawHook` for wire-level inspection. |
 
 ## Testing Gaps

@@ -255,6 +255,30 @@ func (c *Conn) RejectAssociation(ctx context.Context, diagnostic int) error {
 	return c.write(ctx, resp)
 }
 
+// RejectAssociationLimit refuses the pending association because the
+// server holds as many associations as it allows: Session REFUSE → CPR →
+// AARE rejected-transient (a later attempt may succeed) with
+// result-source-diagnostic acse-service-user no-reason-given (ISO 8650-1)
+// → Initiate-ErrorPDU resource capability-unavailable (ISO 9506-2
+// clauses 7.4.1 and 8.2).
+func (c *Conn) RejectAssociationLimit(ctx context.Context) error {
+	req := c.pendingReq
+	c.clearPending()
+	if req == nil {
+		return fmt.Errorf("serverconn: no pending association to reject")
+	}
+	resp, err := req.EncodeReject(isostack.Reject{
+		Result:     acse.ResultRejectedTransient,
+		DiagSource: acse.DiagSourceUser,
+		Diagnostic: acse.DiagUserNoReasonGiven,
+		MmsPayload: pdu.MarshalInitiateError(pdu.ErrorClassResource, pdu.ResourceErrCapabilityUnavailable),
+	})
+	if err != nil {
+		return fmt.Errorf("serverconn: %w", err)
+	}
+	return c.write(ctx, resp)
+}
+
 func (c *Conn) clearPending() {
 	c.pendingReq = nil
 	c.pendingInitReq = nil

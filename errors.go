@@ -46,6 +46,20 @@ var (
 	// outstanding, when [MMSOptions.FailFastOutstanding] is set. The
 	// request is not sent.
 	ErrMaxOutstanding = errors.New("mms: max outstanding requests")
+
+	// ErrLimitReached is matched by the error [Server.Serve] returns for
+	// an association refused because the server holds
+	// [ServerOptions.MaxAssociations] associations.
+	ErrLimitReached = errors.New("mms: server limit reached")
+
+	// ErrCallbackFailed is matched by the error the library reports for
+	// an application callback that did not return normally: a server
+	// handler, callback or provider, the [Authenticator], the
+	// [InformationReportHandler], a [Metrics] method or the RawHook. The
+	// library recovers such a callback where it calls it, logs the value
+	// and the stack at Error level, and keeps running (see
+	// [ServerOptions] and OBSERVABILITY.md).
+	ErrCallbackFailed = errors.New("mms: callback did not return normally")
 )
 
 // Phases reported in [ProtocolError.Phase].

@@ -42,6 +42,32 @@ func (NopMetrics) ObserveRequest(RequestEvent) {}
 // ObserveConnection implements [Metrics].
 func (NopMetrics) ObserveConnection(ConnectionEvent) {}
 
+// ObserveReportDropped implements [ReportDropObserver].
+func (NopMetrics) ObserveReportDropped(ReportDroppedEvent) {}
+
+// ReportDropObserver is implemented by a [Metrics] that counts the
+// InformationReports a full report queue drops ([DialOptions.ReportQueue]).
+// When the Metrics of [DialOptions.Metrics] implements it, the client
+// calls ObserveReportDropped once for every dropped report, on its reader
+// goroutine, so it should return quickly. [NopMetrics] implements it and
+// discards the event.
+type ReportDropObserver interface {
+	ObserveReportDropped(ReportDroppedEvent)
+}
+
+// ReportDroppedEvent describes one InformationReport that a full report
+// queue dropped.
+type ReportDroppedEvent struct {
+	// RemoteAddr is the peer address when the transport implements
+	// [RemoteAddrTransport], otherwise "".
+	RemoteAddr string
+	// Full is the queue's policy, [ReportDropNewest] or [ReportDropOldest].
+	Full ReportQueueFull
+	// Dropped is the number of reports the client has dropped, this one
+	// included.
+	Dropped uint64
+}
+
 // Role says which side of an association reported an event.
 type Role int
 

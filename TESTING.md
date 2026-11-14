@@ -102,9 +102,9 @@ package unless a directory is given. They wait for events through channels or
 | L7 | Late response after cancel | `AbandonedRequestStaysOutstanding` (`negotiated_limits_test.go`), `TestContextCancellationDuringRequest`, `TestLateResponseAfterCancel` (`internal/invoke`) |
 | L8 | Reconnect | not applicable: the library does not reconnect; dial retry is `RetryPolicy` (`TestDial_WithRetry` in `e2e`, `TestBackoffMultiplierValues`) |
 | L9 | A callback re-enters the server | `TestReadCallbackRegistersHandlers`, `TestBlockedCallbackDoesNotStopOtherAssociations`, `TestSetVariableReadWhileReading` |
-| L10 | A callback calls Close | `TestReportHandlerEndsAssociation` |
-| L11 | A slow callback | not covered: the InformationReport handler runs on the reader goroutine ([KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)) |
-| L12 | Bounded queues and outstanding requests | `OutstandingCallingLimit`, `FailFast` (`negotiated_limits_test.go`), `TestCloseWhileConcurrentRequests`, `TestListenerPendingHandshakeBound` (`transport/iso`), `TestChaos_OutstandingLimit` (`e2e`) |
+| L10 | A callback calls Close | `TestReportHandlerEndsAssociation`, `TestReportQueueHandlerAborts` (with `DialOptions.ReportQueue`) |
+| L11 | A slow callback | `TestReportQueueSlowHandler`: with `DialOptions.ReportQueue`, a response is read while the InformationReport handler runs; `TestReportInlineDefault`: without it the handler runs on the reader, as documented. A callback that does not return normally: `TestServerCallbackNotReturningNormally` (every server handler, callback and provider method), `TestAuthenticatorNotReturningNormally`, `TestMetricsNotReturningNormally`, `TestFileCloseAtEndNotReturningNormally`, `TestRawHookNotReturningNormally`, `TestReportHandlerNotReturningNormally`, `TestListenerTLSCallbackNotReturningNormally` (`transport/iso`), `TestFileOpenPositionClosesHandle` (the handle of a FileOpen whose skip to `initialPosition` fails or does not return normally is closed) |
+| L12 | Bounded queues and outstanding requests | `OutstandingCallingLimit`, `FailFast` (`negotiated_limits_test.go`), `TestCloseWhileConcurrentRequests`, `TestListenerPendingHandshakeBound` (`transport/iso`), `TestChaos_OutstandingLimit` (`e2e`), `TestReportQueueSlowHandler`, `TestReportQueueWait`, `TestReportQueueAbort`, `TestReportQueueCloseWithWaitingReader`, `TestReportQueueDrainsOnPeerEnd` (the report queue), `TestServerLimitMaxAssociations` (`ServerOptions.MaxAssociations` at max−1, max and max+1, negative, `math.MaxInt`), `TestAllHelperOptions` (the `*All` helper maxima), `TestListenerTSDUBound`, `TestDialTSDUBound` (`transport/iso`: the TSDU bound at max−1, max and max+1), `TestListenerPDUSizeClamp` (`transport/iso`), `TestTransportPDULimit`, `TestTransportPDULimitSend` (no PDU size larger than the transport carries) |
 | L13 | Session isolation | `TestAssociationScopeIsolation`, `TestAssocListResultsAreCopies`, `TestServerConcurrentClients`, `TestStress_Concurrent` (`e2e`) |
 | L14 | A failed constructor releases its resources | `TestDialerConnWithErrorClosed` (`transport/iso`); goleak in every `TestMain` |
 | L15 | Server shutdown | `TestServer_Shutdown`, `TestServer_Shutdown_StopsListenAndServe`, `TestShutdownWaitsForAssociatingServe`, `TestListenAndServeJoinsConnections`, `TestListenerPendingHandshakeBound` (`transport/iso`), `TestServer_Shutdown_InFlight` (`e2e`) |
@@ -160,6 +160,9 @@ allocation exceeds a fixed number of octets per input octet. A cost that grows
 faster than the input exceeds the budget. `TestUnmarshalReadRequestSelectionBudget`
 does the same for the deepest AlternateAccess chain, and
 `numeric_bounds_test.go` for `TypeSpec.DefaultValue`.
+`TestOversizedRequestAllocation` (`internal/serverconn`) checks that a request
+larger than the negotiated PDU size, nested 60 levels deep with indefinite
+lengths, is answered for less than a sixteenth of its size.
 
 ## Golden data
 

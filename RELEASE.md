@@ -1,5 +1,40 @@
 # go-mms Releases
 
+## v1.11.0
+
+**Date:** 2026-11-14
+**Previous release:** v1.10.0
+
+A limit on the associations a server holds, recovery of application callbacks that do not return normally, a bound on the TSDUs of `transport/iso`, an opt-in queue for InformationReport delivery, and options for the ceilings of the client's `*All` helpers.
+
+### Breaking
+
+Three behaviours change; no exported identifier is removed or changed.
+
+- **Associations a server holds.** The new `ServerOptions.MaxAssociations` bounds the associations a `Server` holds at a time, counted from the AARQ until `Serve` returns; zero means 100 (libiec61850's MMS server accepts 100 connections by default), and a negative value refuses every association, as a negative value of the other limits of `ServerOptions` refuses its operation. The AARQ beyond the limit is answered with AARE rejected-transient and an Initiate-ErrorPDU resource capability-unavailable (ISO 9506-2 clause 7.4.1) before the `Authenticator` runs, logged at Warn level (`mms: limit reached`, fields `limit`, `max`), and its `Serve` returns an error matching the new `ErrLimitReached` and `ErrAssociationFailed`. A connection that has not sent its AARQ is not counted. To keep v1.10.0's behaviour, set `MaxAssociations` to `math.MaxInt`.
+- **Callbacks that do not return normally.** The library recovers the application code it calls on its own goroutines, logs it at Error level with its stack (`mms: callback did not return normally`, fields `callback`, `value`, `stack`), and goes on; the error it reports matches the new `ErrCallbackFailed`. A server handler, `Variable` callback, `FileProvider` or `JournalProvider` method serving a request is answered with ServiceError vmd-state vmd-operational-problem and the association goes on. An `Authenticator` refuses the association as an error does (`Serve`'s error matches `ErrAuthenticationFailed` and `ErrCallbackFailed`). A `Metrics` method, the `RawHook` and a `FileProvider.Close` at the end of an association are logged and the operation goes on. A callback of the `tls.Config` of an `iso.Listener` closes that connection and is logged on the listener's logger (`iso: handshake callback did not return normally, closing connection`). Before, each of these ended the process. The `InformationReportHandler` was already recovered; its log record is now the one above, and the earlier message (`mms: InformationReport handler panic`) and its field are gone. A FileOpen with an `initialPosition` closes the handle `FileProvider.Open` returned when a `FileProvider.Read` of the skip to that position does not return normally, as it does when the skip fails. To get the old behaviour back, end the process in the callback itself, for example in a deferred function that calls `recover` and then `os.Exit`.
+- **TSDU and PDU sizes over `transport/iso`.** A connection of `transport/iso` receives and sends TSDUs of up to the larger of 65,539 octets (the largest session SPDU other than DATA) and the MMS PDU size plus 64 octets of session and presentation framing. go-cotp refuses a longer received TSDU before it holds it and ends the connection; the error matches `ErrClosed` and `cotp.ErrTSDUTooLarge`. Before, go-cotp's default of 4 MiB applied. The MMS PDU size is `MMS.MaxPDUSize` of `WithClientDialOptions` for `Dial` and `DialTCP` (65,000 when zero or without the option), and 65,000 for a `Listener`, which does not know the server's. A client and a server now propose and support no PDU size larger than their transport carries, and a client sends no request larger than its transport carries, whatever the server's localDetailCalled. Over a `Listener` or a plain `DialTCP` the transport carries 65,475 octets, so a server or client configured with a larger `MaxPDUSize` negotiates 65,475 there. A peer that keeps to the negotiated size is not affected, and a PDU above it but within the bound is still answered with a Reject while the association goes on. A Confirmed-Request larger than the negotiated size is answered from its invokeID alone, without decoding the rest: one that is malformed after its invokeID is now answered with Reject confirmed-requestPDU value-out-of-range for that invokeID, as a well-formed one is, where it used to get Reject pdu-error invalid-pdu. To get larger PDUs back, a client passes a larger `MMS.MaxPDUSize` with `WithClientDialOptions` to `Dial` or `DialTCP`; a `Listener` has no setting for it, and a server that needs PDUs above 65,475 octets serves a `Transport` of its own over go-cotp.
+
+### Added
+
+- `DialOptions.ReportQueue` (`ReportQueueOptions`): with a positive `Length`, InformationReports are delivered to the handler from a queue by one delivery goroutine, in the order they arrived, so a handler that takes its time does not hold up the responses. `Full` says what a full queue does: `ReportDropNewest` (the default), `ReportDropOldest`, or `ReportWait`, which makes the reader wait for room. A dropped report is logged at Debug level and reported to a `Metrics` that implements the new optional `ReportDropObserver` (`ObserveReportDropped(ReportDroppedEvent)`; `NopMetrics` implements it). The zero value delivers on the reader goroutine, as before.
+- `DialOptions.MaxFileReadAll`, `MaxNameListAll` and `MaxFileDirectoryAll` set the ceilings of `FileReadAll` and `DownloadFile`, `GetNameListAll` and `FileDirectoryAll`. Zero keeps the earlier ceilings (2^32−1 octets, 1,000,000 names, 1,000,000 entries); a negative value sets no limit.
+- `ErrLimitReached` and `ErrCallbackFailed`.
+
+### Documentation
+
+- LIMITS.md: `MaxAssociations`, the options of the `*All` helpers and the report queue; the TSDU bound of `transport/iso` and how it is derived; the answer to an oversized request.
+- API.md, ERRORS.md, OBSERVABILITY.md (the new log records and fields, `ReportDropObserver`), KNOWN_LIMITATIONS.md (the callbacks the library does not recover, report order with a queue, the TSDU size of a `Listener`), TIMEOUT_AND_CLOSE.md and RACE_NOTES.md (`Close` and `Abort` with a queue), SECURITY.md, TESTING.md (L11 is covered), and the `Authenticator` and `InformationReportHandler` doc comments.
+
+### Testing
+
+- `MaxAssociations` at max−1, max and max+1, a negative value and `math.MaxInt`; one case per call site of an application callback that does not return normally; the report queue under each `Full` policy, with `Close`, `Abort`, a handler that calls `Abort`, and the end of the association by the peer; the `*All` options.
+- An allocation budget for a request larger than the negotiated PDU size (`internal/serverconn`); the TSDU bound of a `Listener` and of `DialTCP` at max−1, max and max+1; the PDU size negotiated over a transport that carries less than the configured size; a FileOpen with an `initialPosition` whose skip fails or does not return normally.
+- `TestListener_CloseDuringTemporaryBackoff` waits for the accept loop with `testing/synctest` instead of a sleep.
+- The new tests also pass on linux/386.
+
+---
+
 ## v1.10.0
 
 **Date:** 2026-11-14

@@ -295,3 +295,76 @@ func TestFileDirectoryAllCeiling(t *testing.T) {
 		}
 	}
 }
+
+// The DialOptions maxima of the *All helpers: a lower value lowers the
+// ceiling (limit-1, limit), zero is the default and a negative value sets
+// no limit.
+func TestAllHelperOptions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	serve := func(fp FileProvider, opts DialOptions) *Client {
+		srv := NewServer(ServerOptions{FileProvider: fp})
+		c, served := serveLoopback(t, srv, opts)
+		t.Cleanup(func() { _ = c.Abort(context.Background()); _ = waitServe(t, served) })
+		return c
+	}
+	for _, tc := range []struct {
+		max int // 4 entries, 4 names, 12 octets of file data
+		ok  bool
+	}{{3, false}, {4, true}, {0, true}, {-1, true}} {
+		fileMax := int64(tc.max)
+		if tc.max > 0 {
+			fileMax = int64(3 * tc.max) // 9 and 12 octets
+		}
+
+		files := &endlessFileProvider{memFileProvider: newMemFileProvider(), chunk: []byte("abcd"), reads: 3}
+		files.addFile("f", []byte("1"))
+		c := serve(files, DialOptions{MaxFileReadAll: fileMax})
+		data, _, err := c.DownloadFile(ctx, "f")
+		if tc.ok != (err == nil) || (!tc.ok && !errors.Is(err, ErrProtocol)) || (tc.ok && len(data) != 12) {
+			t.Errorf("MaxFileReadAll %d: DownloadFile = %d octets, %v", fileMax, len(data), err)
+		}
+		files.mu.Lock()
+		files.n = 0 // the file starts again
+		files.mu.Unlock()
+		open, err := c.FileOpen(ctx, "f")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if data, err := c.FileReadAll(ctx, open.FrsmID); tc.ok != (err == nil) || (tc.ok && len(data) != 12) {
+			t.Errorf("MaxFileReadAll %d: FileReadAll = %d octets, %v", fileMax, len(data), err)
+		}
+
+		c = serve(&pagedFileProvider{memFileProvider: newMemFileProvider(), pages: [][]string{{"a", "b"}, {"c", "d"}}}, DialOptions{MaxFileDirectoryAll: tc.max})
+		entries, err := c.FileDirectoryAll(ctx, "")
+		if tc.ok != (err == nil) || (!tc.ok && !errors.Is(err, ErrProtocol)) || (tc.ok && len(entries) != 4) {
+			t.Errorf("MaxFileDirectoryAll %d: %d entries, %v", tc.max, len(entries), err)
+		}
+
+		mt := newMockTransport()
+		srv := newMockServer(t, mt)
+		go srv.handleAssociation(context.Background())
+		opts := defaultDialOptions()
+		opts.MaxNameListAll = tc.max
+		nc, err := NewClient(context.Background(), mt, opts)
+		if err != nil {
+			t.Fatalf("NewClient: %v", err)
+		}
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			for _, p := range []namePage{{[]string{"a", "b"}, true}, {[]string{"c", "d"}, false}} {
+				invokeID, _, _ := srv.handleDataRequest(context.Background())
+				if invokeID == 0 {
+					return
+				}
+				srv.sendGetNameListResponse(context.Background(), invokeID, p.names, p.moreFollows)
+			}
+		})
+		names, err := nc.GetNameListAll(ctx, allVars)
+		wg.Wait()
+		_ = nc.Abort(context.Background())
+		if tc.ok != (err == nil) || (!tc.ok && !errors.Is(err, ErrProtocol)) || (tc.ok && len(names) != 4) {
+			t.Errorf("MaxNameListAll %d: %q, %v", tc.max, names, err)
+		}
+	}
+}

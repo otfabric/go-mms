@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -68,14 +69,16 @@ func (t *frsmTable) remove(id int32) (*frsm, bool) {
 	return f, ok
 }
 
-func (t *frsmTable) closeAll(_ context.Context, provider FileProvider) {
+// closeAll closes every handle still open when the association ends. A
+// Close that does not return normally is logged; the others are closed.
+func (t *frsmTable) closeAll(logger *slog.Logger, provider FileProvider) {
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for _, f := range t.entries {
-		_ = provider.Close(cleanupCtx, f.handle)
+		_ = guard(logger, "FileProvider.Close", func() { _ = provider.Close(cleanupCtx, f.handle) })
 	}
 	t.entries = nil
 }
@@ -130,8 +133,7 @@ func (s *Server) handleFileOpen(ctx context.Context, body []byte) (int, bool, []
 	}
 
 	if req.InitialPosition > 0 {
-		if err := s.skipFileBytes(ctx, handle, int64(req.InitialPosition), attrs.Size); err != nil {
-			_ = s.fileProvider.Close(ctx, handle)
+		if err := s.skipOpened(ctx, handle, int64(req.InitialPosition), attrs.Size); err != nil {
 			return 0, false, nil, err
 		}
 	}
@@ -152,6 +154,21 @@ func (s *Server) handleFileOpen(ctx context.Context, body []byte) (int, bool, []
 		return 0, false, nil, fmt.Errorf("marshal file-open response: %w", err)
 	}
 	return asn1util.TagNumFileOpen, true, payload, nil
+}
+
+// skipOpened skips a handle FileOpen opened to its initialPosition. When
+// the skip fails, or a FileProvider.Read does not return normally, the
+// handle is closed: the client never learns it.
+func (s *Server) skipOpened(ctx context.Context, handle FileHandle, n, size int64) (err error) {
+	returned := false
+	defer func() {
+		if !returned || err != nil {
+			_ = s.fileProvider.Close(ctx, handle)
+		}
+	}()
+	err = s.skipFileBytes(ctx, handle, n, size)
+	returned = true
+	return err
 }
 
 // skipFileBytes advances a freshly opened handle to the FileOpen
