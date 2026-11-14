@@ -192,7 +192,11 @@ func decodeAlternateAccess(data []byte) ([]AccessSelectorWire, error) {
 		if err != nil {
 			return nil, fmt.Errorf("selectAccess index: %w", err)
 		}
-		return []AccessSelectorWire{{HasIndex: true, Index: int(idx)}}, nil
+		i, err := indexFromUnsigned32(idx, "selectAccess index")
+		if err != nil {
+			return nil, err
+		}
+		return []AccessSelectorWire{{HasIndex: true, Index: i}}, nil
 	case tagSSIndexRange:
 		ir, err := decodeIndexRange(content)
 		if err != nil {
@@ -244,7 +248,11 @@ func decodeSelectAlternateAccess(data []byte) ([]AccessSelectorWire, error) {
 		if err != nil {
 			return nil, fmt.Errorf("selectAlternateAccess index: %w", err)
 		}
-		sel = AccessSelectorWire{HasIndex: true, Index: int(idx)}
+		i, err := indexFromUnsigned32(idx, "selectAlternateAccess index")
+		if err != nil {
+			return nil, err
+		}
+		sel = AccessSelectorWire{HasIndex: true, Index: i}
 	case tagSAIndexRange:
 		ir, err := decodeIndexRange(content)
 		if err != nil {
@@ -306,14 +314,18 @@ func decodeIndexRange(data []byte) (*IndexRangeWire, error) {
 			if err != nil {
 				return nil, fmt.Errorf("indexRange lowIndex: %w", err)
 			}
-			low = int(v)
+			if low, err = indexFromUnsigned32(v, "indexRange lowIndex"); err != nil {
+				return nil, err
+			}
 			gotLow = true
 		case 0x81:
 			v, err := berutil.DecodeUnsigned(content)
 			if err != nil {
 				return nil, fmt.Errorf("indexRange numberOfElements: %w", err)
 			}
-			num = int(v)
+			if num, err = indexFromUnsigned32(v, "indexRange numberOfElements"); err != nil {
+				return nil, err
+			}
 			gotNum = true
 		default:
 			return nil, fmt.Errorf("indexRange: unexpected tag 0x%02x", tag)
@@ -325,6 +337,16 @@ func decodeIndexRange(data []byte) (*IndexRangeWire, error) {
 	}
 
 	return &IndexRangeWire{LowIndex: low, NumberOfElements: num}, nil
+}
+
+// indexFromUnsigned32 converts an Unsigned32 index or count from the wire to
+// an int. The whole Unsigned32 range fits a 64-bit int; on a 32-bit platform
+// a value of 2^31 or more would turn negative, so it is refused there.
+func indexFromUnsigned32(v uint32, field string) (int, error) {
+	if uint64(v) > uint64(math.MaxInt) {
+		return 0, fmt.Errorf("%s %d does not fit an int on this platform", field, v)
+	}
+	return int(v), nil
 }
 
 // encodeUnsigned32 encodes v as Unsigned32 content (ISO 9506-2 Unsigned32).

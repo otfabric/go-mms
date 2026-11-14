@@ -203,9 +203,9 @@ func selectRange(val *Value, start, count int) *Value {
 		return nil
 	}
 	elems := val.elementsVal
-	end := start + count
-	if start < 0 || end > len(elems) {
+	// Compared with what remains, so that the check cannot overflow.
+	if start < 0 || count < 0 || start > len(elems) || count > len(elems)-start {
 		return nil
 	}
-	return NewArray(elems[start:end])
+	return NewArray(elems[start : start+count])
 }

@@ -32,6 +32,9 @@ Both sides also enforce the negotiated `dataStructureNestingLevel` (ISO 9506-2 c
 | Directory entries | 10,000 | `internal/pdu/file.go` | Caps file directory listing entries |
 | Journal entries | 10,000 | `internal/pdu/journal.go` | Caps journal read response entries |
 | Name list identifiers | 100,000 | `internal/pdu/getnamelist.go` | Caps GetNameList response items |
+| Array type description (`numberOfElements`) | Unsigned32 (2^31−1 on 32-bit platforms) | `internal/pdu/getvaraccess.go` | Decoded as unsigned and kept in an `int`; a negative encoding is rejected, and so is a value that does not fit an `int` |
+| Alternate access index, low index, number of elements | Unsigned32 (2^31−1 on 32-bit platforms) | `internal/pdu/altaccess.go` | A value that does not fit an `int` is rejected |
+| `TypeSpec.DefaultValue` | 1,048,576 values and bit-string octets | `types.go` | A type description can come from a peer, and nested arrays multiply; beyond the budget, or for a negative count, the method returns nil |
 
 ## String lengths
 

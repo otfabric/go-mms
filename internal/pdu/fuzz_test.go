@@ -24,12 +24,33 @@ func FuzzDecodeTypeSpec(f *testing.F) {
 	// array [1] CONSTRUCTED { count + elementType }
 	arrayInner := append(berutil.EncodeTLV(0x80, []byte{10}), berutil.EncodeTLV(0x83, []byte{0})...)
 	f.Add(berutil.EncodeTLV(0xa1, arrayInner))
+	// array with numberOfElements at and beyond the int32 boundary, and negative
+	for _, count := range [][]byte{{0x7f, 0xff, 0xff, 0xff}, {0x00, 0x80, 0x00, 0x00, 0x00}, {0xff}} {
+		f.Add(berutil.EncodeTLV(0xa1, arrayTypeSpec(count)))
+	}
 	f.Add([]byte{})
 	f.Add([]byte{0xff})
 	f.Add([]byte{0x83}) // truncated
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _ = DecodeTypeSpec(data)
+		ts, err := DecodeTypeSpec(data)
+		if err != nil {
+			return
+		}
+		// Whatever decodes, an array count is never negative.
+		var walk func(TypeSpecWire)
+		walk = func(ts TypeSpecWire) {
+			if ts.Count < 0 {
+				t.Fatalf("array count %d is negative", ts.Count)
+			}
+			if ts.Element != nil {
+				walk(*ts.Element)
+			}
+			for _, c := range ts.Components {
+				walk(c.Type)
+			}
+		}
+		walk(ts)
 	})
 }
 
@@ -526,6 +547,9 @@ func FuzzDecodeReal(f *testing.F) {
 	f.Add([]byte{0x42}) // NaN
 	f.Add([]byte{0x43}) // -0
 	f.Add([]byte{})
+	// exponents whose product with the base shift overflows int64
+	f.Add(realWithExponent(false, 0x40, 0, 0, 0, 0, 0, 0, 0))
+	f.Add(realWithExponent(true, 0xc0, 0, 0, 0, 0, 0, 0, 0))
 
 	f.Fuzz(func(t *testing.T, content []byte) {
 		data := berutil.EncodeTLV(TagDataReal, content)

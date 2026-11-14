@@ -2956,6 +2956,8 @@ DefaultValue creates a zero-valued [Value](#type-value) matching this TypeSpec. 
 
 For arrays, when Element is nil or Count is 0 the method returns an empty array (no elements). This is a deliberate best-effort placeholder: a non-zero Count with nil Element means the type spec is incomplete (the element type is unknown), so no elements can be initialized.
 
+A TypeSpec can come from a peer ([Client.GetVariableAccessAttributes](#func-client-getvariableaccessattributes)), and nested arrays multiply. DefaultValue therefore returns nil when a Count is negative, and when the spec describes more than 1,048,576 values and bit-string octets in total (LIMITS.md).
+
 #### func (TypeSpec) Resolve
 
 ```go
