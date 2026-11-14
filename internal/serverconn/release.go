@@ -65,10 +65,7 @@ func (c *Conn) awaitRelease(ctx context.Context) error {
 		_ = c.SendAbort(ctx)
 		return fmt.Errorf("serverconn: expected A-RELEASE after conclude: %w", err)
 	}
-	c.sendMu.Lock()
-	err = c.transport.Send(ctx, isostack.EncodeReleaseResponseOn(c.contexts))
-	c.sendMu.Unlock()
-	if err != nil {
+	if err := c.write(ctx, isostack.EncodeReleaseResponseOn(c.contexts)); err != nil {
 		return fmt.Errorf("serverconn: send release response: %w", err)
 	}
 	c.logger.Info("mms: released")
@@ -94,9 +91,7 @@ func isFinish(data []byte) bool {
 // ARU-PPDU with an ACSE ABRT (source acse-service-user) on the
 // association's ACSE context (ISO 8823-1, ISO 8650-1). This is a
 // best-effort send: errors are returned but the caller should close the
-// transport regardless.
+// transport regardless. The write is bounded by the write timeout.
 func (c *Conn) SendAbort(ctx context.Context) error {
-	c.sendMu.Lock()
-	defer c.sendMu.Unlock()
-	return c.transport.Send(ctx, isostack.EncodeAbortOn(c.contexts))
+	return c.write(ctx, isostack.EncodeAbortOn(c.contexts))
 }

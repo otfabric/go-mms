@@ -13,6 +13,9 @@ import (
 	"github.com/otfabric/go-mms/internal/berutil"
 )
 
+// maxDataNestingDepth bounds the structure and array levels of one Data
+// value, counted as for dataStructureNestingLevel (ISO 9506-2 clause
+// 8.2): a simple value is 0, a structure or array of simple values 1.
 const maxDataNestingDepth = 64
 
 // errMmsStringUTF8 reports an MMSString that is not valid UTF-8. ISO 9506-2
@@ -196,11 +199,8 @@ func UnmarshalAccessResults(data []byte) ([]*DataValue, error) {
 	return unmarshalAccessResultsWithDepth(data, 0)
 }
 
+// depth is the number of structures and arrays enclosing the element.
 func unmarshalDataElementWithDepth(data []byte, offset, depth int) (*DataValue, int, error) {
-	if depth > maxDataNestingDepth {
-		return nil, 0, fmt.Errorf("pdu: data nesting depth %d exceeds maximum %d", depth, maxDataNestingDepth)
-	}
-
 	tag, content, consumed, err := berutil.DecodeTLVAt(data, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("pdu: data element: %w", err)
@@ -336,6 +336,10 @@ func decodeDataContentWithDepth(tag byte, content []byte, depth int) (*DataValue
 		return &DataValue{Tag: tag, Bytes: data, BitLen: bitLen}, nil
 
 	case TagDataArray, TagDataStructure:
+		// This structure or array is level depth+1, also when it is empty.
+		if depth >= maxDataNestingDepth {
+			return nil, fmt.Errorf("pdu: data nesting depth %d exceeds maximum %d", depth+1, maxDataNestingDepth)
+		}
 		elements, err := unmarshalAccessResultsWithDepth(content, depth+1)
 		if err != nil {
 			return nil, err

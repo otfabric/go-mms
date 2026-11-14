@@ -6,8 +6,11 @@ import (
 	"bytes"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/otfabric/go-mms/internal/berutil"
 )
 
 func TestDataBooleanRoundTrip(t *testing.T) {
@@ -829,5 +832,80 @@ func TestDataMmsStringRejectsInvalidUTF8(t *testing.T) {
 	vis := []byte{TagDataVisibleStr, 0x01, 0xa5}
 	if got, _, err := UnmarshalDataElement(vis, 0); err != nil || got.Str != "\xa5" {
 		t.Errorf("VisibleString = %+v, %v", got, err)
+	}
+}
+
+// nestedData returns levels structures around inner (nil: the innermost
+// structure is empty).
+func nestedData(levels int, inner *DataValue) *DataValue {
+	dv := inner
+	for range levels {
+		s := &DataValue{Tag: TagDataStructure}
+		if dv != nil {
+			s.Elements = []*DataValue{dv}
+		}
+		dv = s
+	}
+	return dv
+}
+
+// Data nests at most maxDataNestingDepth structure or array levels,
+// counted as for dataStructureNestingLevel (ISO 9506-2 clause 8.2): an
+// empty innermost structure is a level like one holding a simple value.
+func TestDataNestingLimit(t *testing.T) {
+	leaf := &DataValue{Tag: TagDataBoolean, Bool: true}
+	for _, tc := range []struct {
+		name   string
+		levels int
+		inner  *DataValue
+		ok     bool
+	}{
+		{"leaf in 64", maxDataNestingDepth, leaf, true},
+		{"empty 64", maxDataNestingDepth, nil, true},
+		{"leaf in 65", maxDataNestingDepth + 1, leaf, false},
+		{"empty 65", maxDataNestingDepth + 1, nil, false},
+		{"array in 64", maxDataNestingDepth, &DataValue{Tag: TagDataArray}, false},
+	} {
+		b, err := MarshalData(nestedData(tc.levels, tc.inner))
+		if err != nil {
+			t.Fatalf("%s: marshal: %v", tc.name, err)
+		}
+		_, _, err = UnmarshalDataElement(b, 0)
+		if tc.ok && err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+		}
+		if !tc.ok && err == nil {
+			t.Errorf("%s: decoded, want a nesting error", tc.name)
+		}
+		// A list of access results applies the same limit.
+		_, err = UnmarshalAccessResults(b)
+		if tc.ok != (err == nil) {
+			t.Errorf("%s: access results: %v", tc.name, err)
+		}
+	}
+}
+
+// A refused GeneralizedTime is quoted in the error only in part: the
+// content can be as long as the PDU.
+func TestGeneralizedTimeErrorBounded(t *testing.T) {
+	long := bytes.Repeat([]byte{0xff}, 4096)
+	nested := berutil.EncodeTLV(TagDataGenTime, long)
+	for range maxDataNestingDepth {
+		nested = berutil.EncodeTLV(TagDataStructure, nested)
+	}
+	_, _, err := UnmarshalDataElement(nested, 0)
+	if !errors.Is(err, errGeneralizedTime) {
+		t.Fatalf("invalid time nested %d deep: %v", maxDataNestingDepth, err)
+	}
+	msg := err.Error()
+	if n := strings.Count(msg, `\xff`); n != maxQuotedTimeOctets || !strings.Contains(msg, `"...`) {
+		t.Errorf("error quotes %d octets, want %d and a cut mark: %s", n, maxQuotedTimeOctets, msg)
+	}
+	if len(msg) > 4096 {
+		t.Errorf("error is %d octets", len(msg))
+	}
+	// Content within the bound is quoted in full.
+	if _, err := ParseGeneralizedTime("2024"); err == nil || !strings.HasSuffix(err.Error(), `: "2024"`) {
+		t.Errorf("short content: %v", err)
 	}
 }

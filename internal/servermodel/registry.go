@@ -7,6 +7,7 @@
 package servermodel
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -30,8 +31,16 @@ type NVLEntry struct {
 	ItemID    string
 	Scope     int // 0=VMD, 1=Domain
 	Deletable bool
-	Variables []NVLVariable
+	// PeerDefined marks a list a peer created with
+	// DefineNamedVariableList; such lists count against the limit
+	// passed to DefineNVL.
+	PeerDefined bool
+	Variables   []NVLVariable
 }
+
+// ErrNVLLimit is returned by DefineNVL when the registry already holds
+// the maximum number of peer-defined named variable lists.
+var ErrNVLLimit = errors.New("servermodel: peer-defined NVL limit reached")
 
 // AccessSelectorModel is the server-side representation of one level
 // of alternate access selection inside an NVL definition.
@@ -63,6 +72,8 @@ type Registry struct {
 	domains map[string]bool
 	vars    map[string]*VarEntry // key = scope:domain/itemID
 	nvls    map[string]*NVLEntry // key = scope:domain/itemID
+	// peerNVLs counts the entries of nvls with PeerDefined set.
+	peerNVLs int
 
 	domainOrder []string            // sorted domain names
 	varOrder    map[string][]string // domain -> sorted variable names
@@ -205,6 +216,13 @@ func nvlKey(scope int, domain, itemID string) string {
 // DefineNVL creates a named variable list. The domain (if domain-scoped)
 // must already be registered. Returns an error if the list already exists.
 func (r *Registry) DefineNVL(entry *NVLEntry) error {
+	return r.DefinePeerNVL(entry, 0)
+}
+
+// DefinePeerNVL is DefineNVL with a limit: when entry.PeerDefined is set
+// and maxPeer > 0, it returns ErrNVLLimit if the registry already holds
+// maxPeer peer-defined lists. maxPeer <= 0 means no limit.
+func (r *Registry) DefinePeerNVL(entry *NVLEntry, maxPeer int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -221,6 +239,12 @@ func (r *Registry) DefineNVL(entry *NVLEntry) error {
 	key := nvlKey(entry.Scope, entry.Domain, entry.ItemID)
 	if _, exists := r.nvls[key]; exists {
 		return fmt.Errorf("servermodel: NVL %q already defined", key)
+	}
+	if entry.PeerDefined {
+		if maxPeer > 0 && r.peerNVLs >= maxPeer {
+			return ErrNVLLimit
+		}
+		r.peerNVLs++
 	}
 	r.nvls[key] = entry
 
@@ -255,7 +279,7 @@ func (r *Registry) DeleteNVL(scope int, domain, itemID string) bool {
 	if !entry.Deletable {
 		return false
 	}
-	delete(r.nvls, key)
+	r.removeNVL(key, entry)
 
 	switch scope {
 	case 0:
@@ -283,7 +307,7 @@ func (r *Registry) DeleteAllDomainNVLs(domain string) (matched, deleted int) {
 		}
 		matched++
 		if entry.Deletable {
-			delete(r.nvls, key)
+			r.removeNVL(key, entry)
 			r.nvlOrder[domain] = removeFromSorted(r.nvlOrder[domain], itemID)
 			deleted++
 		}
@@ -308,12 +332,27 @@ func (r *Registry) DeleteAllVMDNVLs() (matched, deleted int) {
 		}
 		matched++
 		if entry.Deletable {
-			delete(r.nvls, key)
+			r.removeNVL(key, entry)
 			r.vmdNVLOrder = removeFromSorted(r.vmdNVLOrder, itemID)
 			deleted++
 		}
 	}
 	return matched, deleted
+}
+
+// removeNVL deletes the entry stored under key; r.mu is held.
+func (r *Registry) removeNVL(key string, entry *NVLEntry) {
+	delete(r.nvls, key)
+	if entry.PeerDefined {
+		r.peerNVLs--
+	}
+}
+
+// PeerNVLCount returns the number of peer-defined named variable lists.
+func (r *Registry) PeerNVLCount() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.peerNVLs
 }
 
 func removeFromSorted(sorted []string, name string) []string {

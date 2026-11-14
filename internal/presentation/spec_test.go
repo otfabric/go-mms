@@ -78,6 +78,16 @@ func TestSpec_8823_ContextNegotiation(t *testing.T) {
 	if n.MMS != 3 || n.Results[1].Result != ResultProviderRejection {
 		t.Fatalf("duplicate MMS: %+v", n)
 	}
+
+	// Identifier 0 is outside ISO 8823-1's range but tolerated; it still
+	// counts as the accepted context, so a second one is refused.
+	for _, abs := range [][]byte{oidACSE, oidMMS} {
+		n = Negotiate([]ContextDef{{ID: 0, AbstractSyntax: abs, TransferSyntaxes: [][]byte{oidBER}}, {ID: 5, AbstractSyntax: abs, TransferSyntaxes: [][]byte{oidBER}}})
+		if len(n.Results) != 2 || n.Results[0].Result != ResultAcceptance || n.Results[1].Result != ResultProviderRejection ||
+			n.Results[1].ProviderReason != ContextReasonLocalLimitOnDCSExceeded || n.ACSE != 0 || n.MMS != 0 {
+			t.Errorf("identifier 0 then 5 for % x: %+v", abs, n)
+		}
+	}
 }
 
 func TestSpec_8823_ContextListMalformed(t *testing.T) {

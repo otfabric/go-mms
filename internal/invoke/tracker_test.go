@@ -3,8 +3,10 @@
 package invoke
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -315,15 +317,102 @@ func TestSole(t *testing.T) {
 		t.Fatal("Sole with nothing pending")
 	}
 	id1, _, _ := tr.Allocate()
+	if _, ok := tr.Sole(); ok {
+		t.Fatal("Sole counts a request not yet sent")
+	}
+	tr.MarkSent(id1)
 	if id, ok := tr.Sole(); !ok || id != id1 {
 		t.Fatalf("Sole = %d, %v", id, ok)
 	}
 	id2, _, _ := tr.Allocate()
+	if id, ok := tr.Sole(); !ok || id != id1 {
+		t.Fatalf("Sole with one sent, one unsent = %d, %v", id, ok)
+	}
+	tr.MarkSent(id2)
 	if _, ok := tr.Sole(); ok {
-		t.Fatal("Sole with two pending")
+		t.Fatal("Sole with two sent")
 	}
 	tr.Cancel(id1, nil)
 	tr.Cancel(id2, nil)
+}
+
+// TestCompleteSent verifies that a response read from the peer completes
+// only a request marked sent, while Complete and Cancel remove any entry.
+func TestCompleteSent(t *testing.T) {
+	tr := NewTracker(0)
+	id, ch, _ := tr.Allocate()
+	if tr.CompleteSent(id, Response{Kind: 1}) {
+		t.Fatal("CompleteSent completed a request not yet sent")
+	}
+	if tr.PendingCount() != 1 {
+		t.Fatalf("pending = %d, want 1", tr.PendingCount())
+	}
+	if !tr.MarkSent(id) {
+		t.Fatal("MarkSent on a pending request = false")
+	}
+	if !tr.CompleteSent(id, Response{Kind: 2}) {
+		t.Fatal("CompleteSent on a sent request = false")
+	}
+	if r := <-ch; r.Kind != 2 || r.InvokeID != id {
+		t.Fatalf("response = %+v", r)
+	}
+	if tr.MarkSent(id) {
+		t.Fatal("MarkSent on a completed request = true")
+	}
+
+	id2, ch2, _ := tr.Allocate()
+	if !tr.Cancel(id2, errors.New("gone")) {
+		t.Fatal("Cancel of a request not yet sent = false")
+	}
+	if r := <-ch2; r.Err == nil {
+		t.Fatal("Cancel delivered no error")
+	}
+	if tr.MarkSent(id2) {
+		t.Fatal("MarkSent after Cancel = true")
+	}
+}
+
+// TestCancelSent verifies that CancelSent fails only requests marked
+// sent, leaves the others pending, and hands freed slots to waiters.
+func TestCancelSent(t *testing.T) {
+	tr := NewTracker(2)
+	sent, sentCh, _ := tr.Allocate()
+	_, unsentCh, _ := tr.Allocate()
+	tr.MarkSent(sent)
+
+	granted := make(chan error, 1)
+	go func() {
+		_, err := tr.Reserve(context.Background(), 99)
+		granted <- err
+	}()
+	for tr.WaitingCount() != 1 {
+		runtime.Gosched()
+	}
+
+	errRej := errors.New("rejected")
+	tr.CancelSent(errRej)
+	if r := <-sentCh; !errors.Is(r.Err, errRej) || r.InvokeID != sent {
+		t.Fatalf("sent request got %+v", r)
+	}
+	select {
+	case r := <-unsentCh:
+		t.Fatalf("unsent request got %+v", r)
+	default:
+	}
+	if err := <-granted; err != nil {
+		t.Fatalf("waiter: %v", err)
+	}
+	if tr.PendingCount() != 2 {
+		t.Fatalf("pending = %d, want 2 (unsent + granted waiter)", tr.PendingCount())
+	}
+	tr.CancelSent(errRej) // nothing sent: no-op
+	if tr.PendingCount() != 2 {
+		t.Fatalf("pending after empty CancelSent = %d", tr.PendingCount())
+	}
+	tr.Close(errRej)
+	if r := <-unsentCh; !errors.Is(r.Err, errRej) {
+		t.Fatalf("Close: unsent request got %+v", r)
+	}
 }
 
 // TestOutOfOrderResponses verifies that the tracker correctly delivers

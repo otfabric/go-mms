@@ -619,7 +619,17 @@ func (c *Client) doConfirmed(ctx context.Context, invokeID codec.InvokeID, mmsPd
 		return nil, err
 	}
 
-	if onWire, err := c.sendRequest(ctx, isostack.EncodeDataRequest(mmsPdu)); err != nil {
+	markSent := func() bool { return c.tracker.MarkSent(invokeID) }
+	if onWire, err := c.sendRequest(ctx, isostack.EncodeDataRequest(mmsPdu), markSent); err != nil {
+		if errors.Is(err, errRequestEnded) {
+			// The request ended (Close, Abort, lost association) before
+			// it was written: nothing is on the wire, and whoever removed
+			// its tracker entry delivers its result to ch.
+			if resp := <-ch; resp.Err != nil {
+				return nil, resp.Err
+			}
+			return nil, c.readerExitErr()
+		}
 		if !onWire {
 			c.tracker.Cancel(invokeID, err)
 		}
@@ -680,9 +690,13 @@ func (c *Client) reserve(ctx context.Context, invokeID codec.InvokeID) (<-chan i
 
 // send writes one PDU; see sendRequest.
 func (c *Client) send(ctx context.Context, data []byte) error {
-	_, err := c.sendRequest(ctx, data)
+	_, err := c.sendRequest(ctx, data, nil)
 	return err
 }
+
+// errRequestEnded reports that a request's tracker entry was gone when
+// its turn to be written came, so it was not written.
+var errRequestEnded = errors.New("mms: request ended before it was sent")
 
 // sendRequest writes one request PDU. Cancelling ctx does not interrupt
 // the write: abandoning a PDU half-written would corrupt the stream for
@@ -694,7 +708,12 @@ func (c *Client) send(ctx context.Context, data []byte) error {
 // transport is closed, which stops the reader and fails the other pending
 // requests with ErrClosed. onWire reports whether the PDU was (or may
 // still be) written: false only when the write was skipped.
-func (c *Client) sendRequest(ctx context.Context, data []byte) (onWire bool, err error) {
+//
+// markSent, when not nil, marks the request's tracker entry sent; it is
+// called under sendMu immediately before the write, so a response read
+// from the peer can only complete a request that is on the wire. When it
+// reports the entry gone, the write is skipped with errRequestEnded.
+func (c *Client) sendRequest(ctx context.Context, data []byte, markSent func() bool) (onWire bool, err error) {
 	const (
 		pending int32 = iota
 		writing
@@ -729,6 +748,11 @@ func (c *Client) sendRequest(ctx context.Context, data []byte) (onWire bool, err
 		}
 		if !state.CompareAndSwap(pending, writing) {
 			done <- nil
+			return
+		}
+		if markSent != nil && !markSent() {
+			state.Store(abandoned)
+			done <- errRequestEnded
 			return
 		}
 		wctx, cancel := writeContext(ctx)
@@ -1033,7 +1057,7 @@ func (c *Client) dispatchConfirmed(kind pdu.PduKind, content []byte) {
 		Data:     content,
 	}
 
-	if !c.tracker.Complete(invokeID, resp) {
+	if !c.tracker.CompleteSent(invokeID, resp) {
 		c.mu.Lock()
 		closing := c.closed
 		c.mu.Unlock()
@@ -1051,23 +1075,25 @@ func (c *Client) dispatchConfirmed(kind pdu.PduKind, content []byte) {
 // request, or fails all outstanding requests when several are pending,
 // rather than leaving them to time out (MMS-PDU-07). A response or error
 // whose invoke ID cannot be read fails the only outstanding request with a
-// decode error.
+// decode error. Only requests already written count: the peer cannot
+// answer or reject a request it has not received, so a request still
+// waiting to be written is left to be sent and answered.
 func (c *Client) dispatchWithoutInvokeID(kind pdu.PduKind, content []byte, extractErr error) {
 	if kind == pdu.PduReject {
 		if rj, err := pdu.DecodeRejectPDU(content); err == nil && !rj.HasInvokeID {
 			if id, ok := c.tracker.Sole(); ok {
-				c.tracker.Complete(id, invoke.Response{Kind: int(kind), Data: content})
+				c.tracker.CompleteSent(id, invoke.Response{Kind: int(kind), Data: content})
 				return
 			}
 			rejErr := &RejectError{Type: RejectType(rj.RejectType), Reason: rj.RejectReason}
 			c.logger.Warn("mms: reject without invoke ID", "error", rejErr)
-			c.tracker.CancelAll(rejErr)
+			c.tracker.CancelSent(rejErr)
 			return
 		}
 	}
 	c.logger.Warn("mms: reader cannot extract invoke ID", "kind", kind, "error", extractErr)
 	if id, ok := c.tracker.Sole(); ok {
-		c.tracker.Cancel(id, decodeErrorf("mms: %s without a valid invoke ID: %w", kind, extractErr))
+		c.tracker.CompleteSent(id, invoke.Response{Err: decodeErrorf("mms: %s without a valid invoke ID: %w", kind, extractErr)})
 	}
 }
 
@@ -1083,7 +1109,7 @@ func (c *Client) rejectMalformed(ctx context.Context, mmsPayload []byte, decodeE
 		return false
 	}
 	c.logger.Warn("mms: rejecting malformed PDU", "kind", kind, "invoke_id", id, "error", decodeErr)
-	c.tracker.Cancel(id, decodeErrorf("mms: decode %s: %w", kind, decodeErr))
+	c.tracker.CompleteSent(id, invoke.Response{Err: decodeErrorf("mms: decode %s: %w", kind, decodeErr)})
 	rejectType := 0
 	switch kind {
 	case pdu.PduConfirmedResponse:

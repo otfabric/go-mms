@@ -72,7 +72,9 @@ Request writes are detached from the cancellation of the request context, not fr
 
 A request's context being cancelled mid-write therefore does not tear down the association; its deadline passing mid-write does. A request without any deadline (no deadline on `ctx` and `RequestTimeout` zero) has an unbounded write: against a peer that stopped reading it stays blocked until `Close`, `Abort` or the connection ends. Set `RequestTimeout` or a deadline to bound it.
 
-`ServerConn.SendInformationReport` and the other unsolicited sends of the server follow the same rule: the deadline of `ctx` bounds the write, and a write that fails or is cut ends the association.
+`ServerConn.SendInformationReport` and the other unsolicited sends of the server follow the same rule, with one more bound: the earlier of the deadline of `ctx` and `ServerOptions.WriteTimeout` bounds the write, and a write that fails or is cut ends the association.
+
+A response, error or Reject from the peer completes only a request already written. A request still waiting to be written is answered only by its own response, and one that `Close`, `Abort` or a lost association ends while it waits is not sent.
 
 ### While waiting for response
 
@@ -86,7 +88,11 @@ A response to a request whose caller gave up completes the kept invoke ID: the r
 
 ### Server-side sends
 
-`ServerConn.SendInformationReport`, `SendUnsolicitedStatus` and `Server.Broadcast` use the same detached-write rule: `ctx` bounds how long the caller waits, an unstarted write is skipped, and a write in progress completes in the background.
+`ServerConn.SendInformationReport`, `SendUnsolicitedStatus` and `Server.Broadcast` use the same detached-write rule: `ctx` bounds how long the caller waits, also while it waits for an earlier write; a send that has not started when `ctx` ends is skipped without ending the association and leaves no goroutine behind; a write in progress completes in the background, bounded by the earlier of the deadline of `ctx` and `ServerOptions.WriteTimeout`.
+
+### Server response writes
+
+Confirmed responses, Rejects, ServiceErrors, association refusals, aborts and the release response are bounded by `ServerOptions.WriteTimeout` (default 10 s; negative disables). When it expires, the transport is closed and `Serve` returns an error matching `context.DeadlineExceeded`, so a peer that stops reading ends its association after that time.
 
 ## Full-duplex transport and deadlines
 

@@ -1,5 +1,44 @@
 # go-mms Releases
 
+## v1.10.0
+
+**Date:** 2026-11-14
+**Previous release:** v1.9.4
+
+Additive API: new `ServerOptions` fields and `AuthContext.PeerCertificateVerified`. The server bounds what peers define and how long its writes take; the client answers each request only with what the peer sent for it.
+
+### Added
+
+- `ServerOptions.WriteTimeout` (default 10 s; negative disables) bounds every server write: confirmed responses, Rejects, ServiceErrors, association refusals, aborts and the release response. A peer that stops reading ends its association after this time instead of holding it.
+- `ServerOptions.MaxPeerNVLs` (default 4,096 per server), `MaxAssociationNVLs` (default 256 per association) and `MaxNVLMembers` (default 1,000) bound the named variable lists peers define with DefineNamedVariableList. Beyond them the server answers ServiceError resource capability-unavailable. A negative value refuses that kind of definition.
+- `ServerOptions.MaxOpenFiles` (default 32) bounds the files one association holds open; FileOpen beyond it is answered with ServiceError resource capability-unavailable before the `FileProvider` is called.
+- `AuthContext.PeerCertificateVerified` reports whether crypto/tls verified the client certificate.
+
+### Changed
+
+- DefineNamedVariableList: list, domain and member names must be 1 to 64 characters (ISO 9506-2 clause 7.5.2, IEC 61850-8-1 Annex F.3.2), and a list needs at least one member. A list name out of range or an empty list is answered with Reject confirmed-requestPDU invalid-argument, a member name out of range with ServiceError definition object-undefined.
+- An unsolicited server send (`SendInformationReport`, `SendUnsolicitedStatus`, `Broadcast`) without a deadline on its context is now bounded by `WriteTimeout`. A send that cannot start before its context ends is skipped without a goroutine left behind, and the association stays up.
+- Data values decode to exactly 64 structure and array levels, an empty innermost structure included; 65 empty levels used to decode.
+- A Write request's listOfData is limited to 65,536 elements, the cap of a list of access results.
+- An object identifier subidentifier with a leading 0x80 octet is refused when decoding Data (X.690 clause 8.19.2).
+- Presentation context negotiation accepts only the first ACSE and the first MMS context, also when a peer uses context identifier 0.
+- An invalid GeneralizedTime is quoted in errors only up to its first 32 octets.
+
+### Fixed
+
+- The client no longer completes a confirmed request from a peer PDU (a Reject without invoke ID, an unreadable response, or a response with its invoke ID) while the request still waits to be written, and then sends it anyway. Such a request is written and answered by its own response; one that `Close`, `Abort` or a lost association ends before its write is not sent.
+- Peer-defined VMD- and domain-scope named variable lists no longer grow the server without bound across associations.
+
+### Documentation
+
+- LIMITS.md lists the new server limits and the write timeout; TIMEOUT_AND_CLOSE.md, RACE_NOTES.md and COMPLIANCE.md describe the new write and completion rules. SECURITY.md and the `Authenticator` examples say which `ClientAuth` modes verify client certificates; the password example compares in constant time.
+
+### Dependencies
+
+- go-cotp v1.4.1, go-tpkt v1.2.1.
+
+---
+
 ## v1.9.4
 
 **Date:** 2026-11-14

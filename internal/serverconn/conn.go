@@ -11,8 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/otfabric/go-mms/internal/berutil"
@@ -86,7 +84,9 @@ func (e *ServiceError) Error() string {
 
 // Conn manages one MMS association.
 type Conn struct {
-	sendMu    sync.Mutex
+	// sendSem serializes writes (capacity 1). A channel instead of a
+	// mutex so that the wait for it observes a context.
+	sendSem   chan struct{}
 	transport Transport
 	logger    *slog.Logger
 	handler   ServiceHandler
@@ -120,6 +120,13 @@ type MMSOptions struct {
 	// negative value does not wait.
 	ReleaseTimeout time.Duration
 
+	// WriteTimeout bounds every server write: a confirmed response,
+	// Reject, ServiceError, refusal, abort or release response, and
+	// (together with the caller's deadline) an unconfirmed send. A write
+	// it cuts closes the transport. Zero means DefaultWriteTimeout; a
+	// negative value disables the limit.
+	WriteTimeout time.Duration
+
 	// RespondingAPTitle / RespondingAEQualifier are sent in the AARE
 	// when the AP-title is non-empty (ISO 8650-1).
 	RespondingAPTitle     []int
@@ -129,6 +136,7 @@ type MMSOptions struct {
 // New creates a new server connection.
 func New(t Transport, logger *slog.Logger, handler ServiceHandler, opts MMSOptions) *Conn {
 	return &Conn{
+		sendSem:   make(chan struct{}, 1),
 		transport: t,
 		logger:    logger,
 		handler:   handler,
@@ -296,54 +304,96 @@ func (c *Conn) sendError(ctx context.Context, invokeID codec.InvokeID, errorClas
 	return c.sendData(ctx, errPdu)
 }
 
+// DefaultWriteTimeout bounds a server write when MMSOptions.WriteTimeout
+// is zero.
+const DefaultWriteTimeout = 10 * time.Second
+
+// writeContext returns ctx bounded by the write timeout.
+func (c *Conn) writeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := c.mmsOpts.WriteTimeout
+	if timeout < 0 {
+		return context.WithCancel(ctx)
+	}
+	if timeout == 0 {
+		timeout = DefaultWriteTimeout
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+// acquire waits for the send lock until ctx ends.
+func (c *Conn) acquire(ctx context.Context) error {
+	select {
+	case c.sendSem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (c *Conn) release() { <-c.sendSem }
+
+// write sends one encoded frame under the send lock, bounded by ctx and
+// the write timeout. When the lock or the write is not obtained in time
+// the writer of the association is stalled, or the stream is broken:
+// the transport is closed, which ends Serve.
+func (c *Conn) write(ctx context.Context, data []byte) error {
+	wctx, cancel := c.writeContext(ctx)
+	defer cancel()
+	if err := c.acquire(wctx); err != nil {
+		_ = c.transport.Close()
+		return err
+	}
+	defer c.release()
+	err := c.transport.Send(wctx, data)
+	if err != nil {
+		_ = c.transport.Close()
+	}
+	return err
+}
+
 func (c *Conn) sendData(ctx context.Context, mmsPdu []byte) error {
-	c.sendMu.Lock()
-	defer c.sendMu.Unlock()
-	data := isostack.EncodeData(c.contexts, mmsPdu)
-	return c.transport.Send(ctx, data)
+	return c.write(ctx, isostack.EncodeData(c.contexts, mmsPdu))
 }
 
 // SendUnconfirmed sends a pre-encoded MMS unconfirmed PDU (e.g.
 // InformationReport) over the connection. Safe for concurrent use with
 // the Serve loop.
 //
-// Cancelling ctx ends the caller's wait, not the write: abandoning a PDU
-// half-written would corrupt the stream. A write that has not started when
-// ctx is done is skipped; one in progress continues in the background,
-// bounded by the deadline of ctx when it has one. A write that fails, or
-// that the deadline cuts, leaves the stream unusable, so the transport is
-// closed, which ends Serve.
+// The wait for earlier writes ends with ctx: a write that has not started
+// when ctx is done, or whose deadline has passed, is skipped, nothing of
+// it is on the wire and the association stays usable (a writer stalled
+// on a peer that stopped reading is ended by the write timeout).
+// Cancelling ctx ends the caller's wait, not a started write: abandoning
+// a PDU half-written would corrupt the stream. A write in progress
+// continues in the background, bounded by the earlier of the deadline of
+// ctx and the write timeout. A write that fails, or that a deadline cuts,
+// leaves the stream unusable, so the transport is closed, which ends
+// Serve.
 func (c *Conn) SendUnconfirmed(ctx context.Context, mmsPdu []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	const (
-		pending int32 = iota
-		writing
-		abandoned
-	)
-	var state atomic.Int32
+	if err := c.acquire(ctx); err != nil {
+		return err
+	}
+	// A write whose deadline passed while it waited is skipped.
+	if err := contextEnded(ctx); err != nil {
+		c.release()
+		return err
+	}
+	wctx, cancel := c.writeContext(context.WithoutCancel(ctx))
+	if dl, ok := ctx.Deadline(); ok {
+		var cancelDl context.CancelFunc
+		wctx, cancelDl = context.WithDeadline(wctx, dl)
+		prev := cancel
+		cancel = func() { cancelDl(); prev() }
+	}
+	data := isostack.EncodeData(c.contexts, mmsPdu)
 	done := make(chan error, 1)
 	go func() {
-		c.sendMu.Lock()
-		defer c.sendMu.Unlock()
-		// A write whose context ended while it waited is skipped: nothing
-		// of it is on the wire and the stream stays usable.
-		if err := contextEnded(ctx); err != nil {
-			done <- err
-			return
-		}
-		if !state.CompareAndSwap(pending, writing) {
-			done <- nil
-			return
-		}
-		wctx := context.WithoutCancel(ctx)
-		if dl, ok := ctx.Deadline(); ok {
-			var cancel context.CancelFunc
-			wctx, cancel = context.WithDeadline(wctx, dl)
-			defer cancel()
-		}
-		err := c.transport.Send(wctx, isostack.EncodeData(c.contexts, mmsPdu))
+		defer cancel()
+		defer c.release()
+		err := c.transport.Send(wctx, data)
 		if err != nil {
 			_ = c.transport.Close()
 		}
@@ -353,7 +403,6 @@ func (c *Conn) SendUnconfirmed(ctx context.Context, mmsPdu []byte) error {
 	case err := <-done:
 		return err
 	case <-ctx.Done():
-		state.CompareAndSwap(pending, abandoned)
 		return ctx.Err()
 	}
 }

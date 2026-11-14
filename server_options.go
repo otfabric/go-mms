@@ -53,6 +53,16 @@ type ServerOptions struct {
 	// Conclude-Response, the behaviour before v1.8.0).
 	ReleaseTimeout time.Duration
 
+	// WriteTimeout bounds every write of the server to an association:
+	// confirmed responses, Rejects, ServiceErrors, association refusals,
+	// aborts and the release response, and, together with the deadline
+	// of ctx, the unsolicited sends ([ServerConn.SendInformationReport],
+	// [ServerConn.SendUnsolicitedStatus], [Server.Broadcast]). A peer that
+	// stops reading cannot hold the association's writer longer: a write
+	// it cuts closes the transport and ends the association. Zero means
+	// 10s; a negative value disables the limit.
+	WriteTimeout time.Duration
+
 	// RespondingAPTitle and RespondingAEQualifier, when the AP-title is
 	// non-empty, are sent in the AARE as responding-AP-title [4] and
 	// responding-AE-qualifier [5] (ISO 8650-1; ISO 9506-2 Annex A.1.1
@@ -60,6 +70,65 @@ type ServerOptions struct {
 	// neither.
 	RespondingAPTitle     APTitle
 	RespondingAEQualifier int
+
+	// MaxPeerNVLs bounds the named variable lists that peers define
+	// with VMD or domain scope (DefineNamedVariableList) in the
+	// server's shared object model. Such lists outlive the defining
+	// association; a DeleteNamedVariableList frees their slots. Lists
+	// registered with [Server.RegisterNamedVariableList] do not count.
+	// Zero means 4096; a negative value refuses every VMD- or
+	// domain-scope definition by a peer.
+	MaxPeerNVLs int
+
+	// MaxAssociationNVLs bounds the association-scope named variable
+	// lists one association may define. Zero means 256; a negative
+	// value refuses every association-scope definition.
+	MaxAssociationNVLs int
+
+	// MaxNVLMembers bounds the members of one peer-defined named
+	// variable list. Zero means 1000; a negative value refuses every
+	// DefineNamedVariableList.
+	MaxNVLMembers int
+
+	// MaxOpenFiles bounds the files (FRSMs) one association may hold
+	// open through FileOpen at a time; FileClose and the end of the
+	// association free them. Zero means 32; a negative value refuses
+	// every FileOpen. Only used when FileProvider is set.
+	MaxOpenFiles int
+}
+
+// Defaults of the peer-definition and open-file limits in
+// [ServerOptions].
+const (
+	defaultMaxPeerNVLs        = 4096
+	defaultMaxAssociationNVLs = 256
+	defaultMaxNVLMembers      = 1000
+	defaultMaxOpenFiles       = 32
+)
+
+// serverLimits holds the resolved limits of [ServerOptions]; a value
+// < 0 refuses the operation, otherwise it is the maximum.
+type serverLimits struct {
+	peerNVLs        int
+	associationNVLs int
+	nvlMembers      int
+	openFiles       int
+}
+
+func limitOrDefault(v, def int) int {
+	if v == 0 {
+		return def
+	}
+	return v
+}
+
+func (o *ServerOptions) limits() serverLimits {
+	return serverLimits{
+		peerNVLs:        limitOrDefault(o.MaxPeerNVLs, defaultMaxPeerNVLs),
+		associationNVLs: limitOrDefault(o.MaxAssociationNVLs, defaultMaxAssociationNVLs),
+		nvlMembers:      limitOrDefault(o.MaxNVLMembers, defaultMaxNVLMembers),
+		openFiles:       limitOrDefault(o.MaxOpenFiles, defaultMaxOpenFiles),
+	}
 }
 
 // ServerMMSOptions configures MMS protocol negotiation parameters for

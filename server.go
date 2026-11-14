@@ -123,6 +123,7 @@ type Server struct {
 	logger          *slog.Logger
 	mmsOpts         ServerMMSOptions
 	registry        *servermodel.Registry
+	limits          serverLimits
 	authenticator   Authenticator
 	fileProvider    FileProvider
 	journalProvider JournalProvider
@@ -184,6 +185,7 @@ func NewServer(opts ServerOptions) *Server {
 		logger:          logger.With("role", RoleServer.String()),
 		mmsOpts:         opts.MMS.withDefaults(),
 		registry:        servermodel.NewRegistry(),
+		limits:          opts.limits(),
 		authenticator:   opts.Authenticate,
 		fileProvider:    opts.FileProvider,
 		journalProvider: opts.JournalProvider,
@@ -193,6 +195,7 @@ func NewServer(opts ServerOptions) *Server {
 			ServicesSupportedCalled: servicesSupportedCalled(opts.FileProvider != nil, opts.JournalProvider != nil),
 			ParameterCBB:            serverconn.DefaultParameterCBB,
 			ReleaseTimeout:          opts.ReleaseTimeout,
+			WriteTimeout:            opts.WriteTimeout,
 			RespondingAPTitle:       append(APTitle(nil), opts.RespondingAPTitle...),
 			RespondingAEQualifier:   opts.RespondingAEQualifier,
 		},
@@ -329,11 +332,13 @@ func (s *Server) RegisterNamedVariableList(nvl NamedVariableList) error {
 // The corresponding [ServerConn] is registered for the duration of
 // Serve and can be obtained via [Server.Connections].
 //
-// The caller owns the transport, with three exceptions in which Serve
-// closes it to unblock a pending read: ctx is cancelled (Serve then
-// returns an error matching ctx.Err()), the association is not
-// established within [ServerOptions.AssociationTimeout], or
-// [Server.Shutdown] aborts the association. [Server.ListenAndServe]
+// The caller owns the transport, with four exceptions in which Serve
+// closes it to unblock a pending read or write: ctx is cancelled (Serve
+// then returns an error matching ctx.Err()), the association is not
+// established within [ServerOptions.AssociationTimeout],
+// [Server.Shutdown] aborts the association, or a write fails or is cut
+// by [ServerOptions.WriteTimeout] (Serve then returns an error matching
+// context.DeadlineExceeded). [Server.ListenAndServe]
 // closes every accepted transport when its Serve returns.
 //
 // Serve blocks until the connection is complete. For serving multiple
@@ -519,6 +524,10 @@ func (s *Server) buildAuthContext(conn Transport, authInfo acse.AuthInfo) *AuthC
 	if tt, ok := conn.(TLSTransport); ok {
 		if state := tt.TLSConnectionState(); state != nil && len(state.PeerCertificates) > 0 {
 			ac.PeerCertificate = state.PeerCertificates[0]
+			// crypto/tls fills VerifiedChains only when it verified
+			// the client chain (ClientAuth VerifyClientCertIfGiven or
+			// RequireAndVerifyClientCert).
+			ac.PeerCertificateVerified = len(state.VerifiedChains) > 0
 		}
 	}
 
@@ -712,6 +721,13 @@ func (sc *ServerConn) AuthToken() any {
 }
 
 func (sc *ServerConn) defineAssocNVL(entry *servermodel.NVLEntry) error {
+	return sc.defineAssocNVLLimited(entry, 0)
+}
+
+// defineAssocNVLLimited adds an association-scope list; with maxLists > 0
+// it returns servermodel.ErrNVLLimit when the association already holds
+// maxLists lists.
+func (sc *ServerConn) defineAssocNVLLimited(entry *servermodel.NVLEntry, maxLists int) error {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	if sc.assocNVLs == nil {
@@ -719,6 +735,9 @@ func (sc *ServerConn) defineAssocNVL(entry *servermodel.NVLEntry) error {
 	}
 	if _, exists := sc.assocNVLs[entry.ItemID]; exists {
 		return invalidArgf("mms: association NVL %q already defined", entry.ItemID)
+	}
+	if maxLists > 0 && len(sc.assocNVLs) >= maxLists {
+		return servermodel.ErrNVLLimit
 	}
 	sc.assocNVLs[entry.ItemID] = entry
 	sc.assocNVLOrder = servermodel.InsertSorted(sc.assocNVLOrder, entry.ItemID)
@@ -886,8 +905,10 @@ func (sc *ServerConn) Abort(ctx context.Context) error {
 // the connected client. This provides the client with VMD status
 // without a preceding Status request.
 // Returns [ErrServerConnClosed] if the connection has been closed.
-// The deadline of ctx bounds the write; a write that fails, or that the
-// deadline cuts, ends the association.
+// The earlier of the deadline of ctx and [ServerOptions.WriteTimeout]
+// bounds the write. A send that cannot start before ctx ends is skipped
+// and the association stays up; a write that fails, or that the bound
+// cuts, ends the association.
 func (sc *ServerConn) SendUnsolicitedStatus(ctx context.Context, status ServerStatus) error {
 	sc.mu.RLock()
 	if sc.closed {
@@ -905,8 +926,10 @@ func (sc *ServerConn) SendUnsolicitedStatus(ctx context.Context, status ServerSt
 
 // SendInformationReport sends an InformationReport to a specific
 // connected client. Returns [ErrServerConnClosed] if the connection
-// has been closed. The deadline of ctx bounds the write; a write that
-// fails, or that the deadline cuts, ends the association.
+// has been closed. The earlier of the deadline of ctx and
+// [ServerOptions.WriteTimeout] bounds the write. A send that cannot start
+// before ctx ends is skipped and the association stays up; a write that
+// fails, or that the bound cuts, ends the association.
 func (sc *ServerConn) SendInformationReport(ctx context.Context, req *InformationReportRequest) error {
 	sc.mu.RLock()
 	if sc.closed {
@@ -1666,11 +1689,64 @@ func (s *Server) resolveNVLMembers(ctx context.Context, listName *pdu.ObjectName
 
 // --- DefineNamedVariableList ---
 
+var (
+	// errCapabilityUnavailable answers a DefineNamedVariableList over
+	// a configured limit, or one the server is configured to refuse:
+	// ServiceError resource / capability-unavailable (ISO 9506-2 clause
+	// 7.4.1, Resource class).
+	errCapabilityUnavailable = &serverconn.ServiceError{ErrorClass: int(ErrorClassResource), ErrorCode: svcErrCapabilityUnavailable}
+	// errDefinitionObjectUndefined answers a DefineNamedVariableList
+	// member whose name is not an Identifier of 1..MaxIdentifierLength
+	// characters and so cannot name a variable: ServiceError
+	// definition / object-undefined (ISO 9506-2 clause 7.4.1,
+	// Definition class).
+	errDefinitionObjectUndefined = &serverconn.ServiceError{ErrorClass: int(ErrorClassDefinition), ErrorCode: svcErrObjectUndefined}
+)
+
+const (
+	svcErrCapabilityUnavailable = 4 // resource: capability-unavailable
+	svcErrObjectUndefined       = 1 // definition: object-undefined
+)
+
+// checkDefineNVL applies the identifier rule and the member limit to a
+// decoded DefineNamedVariableList request. The list name and every
+// member name are Identifiers of 1..MaxIdentifierLength characters (ISO
+// 9506-2 clause 7.5.2, IEC 61850-8-1 Annex F.3.2); as everywhere in the
+// server, the character set is not enforced.
+func (s *Server) checkDefineNVL(req *pdu.DefineNVLRequest) error {
+	if s.limits.nvlMembers < 0 {
+		return errCapabilityUnavailable
+	}
+	name := req.ListName
+	if validateIdentifier("list", name.ItemID) != nil ||
+		(name.Scope == pdu.ScopeDomain && validateIdentifier("domain", name.DomainID) != nil) {
+		return errInvalidRequest
+	}
+	// listOfVariable names the members of the list (ISO 9506-1 clause
+	// 11.4); a list without members cannot be read or reported.
+	if len(req.Variables) == 0 {
+		return errInvalidRequest
+	}
+	if len(req.Variables) > s.limits.nvlMembers {
+		return errCapabilityUnavailable
+	}
+	for _, v := range req.Variables {
+		if validateIdentifier("variable", v.Name.ItemID) != nil ||
+			(v.Name.Scope == pdu.ScopeDomain && validateIdentifier("domain", v.Name.DomainID) != nil) {
+			return errDefinitionObjectUndefined
+		}
+	}
+	return nil
+}
+
 //nolint:unparam // result []byte is always nil; signature matches the handler contract
 func (s *Server) handleDefineNVL(ctx context.Context, body []byte) (int, bool, []byte, error) {
 	req, err := pdu.UnmarshalDefineNVLRequest(body)
 	if err != nil {
 		return 0, false, nil, requestDecodeError(err)
+	}
+	if err := s.checkDefineNVL(req); err != nil {
+		return 0, false, nil, err
 	}
 
 	vars := make([]servermodel.NVLVariable, len(req.Variables))
@@ -1698,11 +1774,12 @@ func (s *Server) handleDefineNVL(ctx context.Context, body []byte) (int, bool, [
 	}
 
 	entry := &servermodel.NVLEntry{
-		Domain:    req.ListName.DomainID,
-		ItemID:    req.ListName.ItemID,
-		Scope:     req.ListName.Scope,
-		Deletable: true,
-		Variables: vars,
+		Domain:      req.ListName.DomainID,
+		ItemID:      req.ListName.ItemID,
+		Scope:       req.ListName.Scope,
+		Deletable:   true,
+		PeerDefined: true,
+		Variables:   vars,
 	}
 
 	if req.ListName.Scope == pdu.ScopeAssociation {
@@ -1710,11 +1787,23 @@ func (s *Server) handleDefineNVL(ctx context.Context, body []byte) (int, bool, [
 		if sc == nil {
 			return 0, false, nil, errAccessUnsupported
 		}
-		if err := sc.defineAssocNVL(entry); err != nil {
+		if s.limits.associationNVLs < 0 {
+			return 0, false, nil, errCapabilityUnavailable
+		}
+		if err := sc.defineAssocNVLLimited(entry, s.limits.associationNVLs); err != nil {
+			if errors.Is(err, servermodel.ErrNVLLimit) {
+				return 0, false, nil, errCapabilityUnavailable
+			}
 			return 0, false, nil, errObjectNonExistent
 		}
 	} else {
-		if err := s.registry.DefineNVL(entry); err != nil {
+		if s.limits.peerNVLs < 0 {
+			return 0, false, nil, errCapabilityUnavailable
+		}
+		if err := s.registry.DefinePeerNVL(entry, s.limits.peerNVLs); err != nil {
+			if errors.Is(err, servermodel.ErrNVLLimit) {
+				return 0, false, nil, errCapabilityUnavailable
+			}
 			return 0, false, nil, errObjectNonExistent
 		}
 	}

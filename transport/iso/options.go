@@ -127,7 +127,13 @@ func WithClientDialOptions(opts mms.DialOptions) Option {
 //
 // For servers ([Listen], [NewListener]): the config is used to accept
 // TLS connections. Include server certificates and optionally set
-// ClientAuth to request client certificates.
+// ClientAuth to request client certificates. When client certificates
+// are used for authorisation (an mms Authenticator that decides on
+// AuthContext.PeerCertificate), set ClientAuth to
+// tls.RequireAndVerifyClientCert (or tls.VerifyClientCertIfGiven) and
+// ClientCAs to the trusted CAs: with tls.RequestClientCert or
+// tls.RequireAnyClientCert crypto/tls accepts any certificate without
+// verifying it, and AuthContext.PeerCertificateVerified is false.
 //
 // The standard port for MMS over TLS is 3782 (vs 102 for plaintext).
 func WithTLSConfig(cfg *tls.Config) Option {
