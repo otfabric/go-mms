@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   changes:
-    uses: otfabric/.github/.github/workflows/pr-changes.yml@v3.7.0
+    uses: otfabric/.github/.github/workflows/pr-changes.yml@v3.8.0
 
   docs:
     uses: ./.github/workflows/docs.yml
@@ -50,7 +50,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: otfabric/.github/actions/required-gate@v3.7.0
+      - uses: otfabric/.github/actions/required-gate@v3.8.0
         with:
           needs: ${{ toJSON(needs) }}
           required: changes docs
