@@ -121,7 +121,7 @@ func (c *Client) GetVariableAccessAttributes(ctx context.Context, name ObjectNam
 ```
 
 `GetNameListAll` paginates automatically, collecting all results, at most 1,000,000
-names; a continuation point the server already sent ends it with an error matching
+names (`DialOptions.MaxNameListAll`); a continuation point the server already sent ends it with an error matching
 `ErrProtocol`. `GetNameList` exposes the low-level continuation cursor.
 
 ### Information reports
@@ -131,10 +131,18 @@ func (c *Client) OnInformationReport(handler InformationReportHandler)
 ```
 
 Registers a callback invoked for every `UnconfirmedPDU`/`InformationReport` received.
-The callback is called from the client's internal reader goroutine; it must return quickly
-and must not call a confirmed service of the same `Client` (no response is read while it
-runs). It may call `Abort`, which returns at once; `Close` called there returns when its
-context is done, since the Conclude-Response cannot be read.
+By default the callback is called from the client's internal reader goroutine; it must
+return quickly and must not call a confirmed service of the same `Client` (no response is
+read while it runs). It may call `Abort`, which returns at once; `Close` called there
+returns when its context is done, since the Conclude-Response cannot be read.
+
+With `DialOptions.ReportQueue` (`Length` > 0) the reader queues each report and one
+delivery goroutine calls the callback, in the order the reports arrived, so a callback
+that takes its time does not hold up responses. `ReportQueueOptions.Full` decides what a
+full queue does: `ReportDropNewest` (the default) or `ReportDropOldest` drop a report,
+log it at Debug level and report it to a `Metrics` that implements `ReportDropObserver`;
+`ReportWait` makes the reader wait for room. A callback that does not return normally is
+logged at Error level with its stack, and the next report is delivered as usual.
 
 ### File services
 
@@ -157,7 +165,8 @@ position 0. `FileDirectory` pages with `FileDirectoryRequest.ContinueAfter`;
 and returns the bytes plus the FileOpen metadata. The helpers that accumulate stop
 with an error matching `ErrProtocol` when the server sends more than they keep
 (`FileReadAll` and `DownloadFile`: 2^32−1 octets, the largest file size MMS
-describes; `FileDirectoryAll`: 1,000,000 entries), a chunk without data that
+describes, or `DialOptions.MaxFileReadAll`; `FileDirectoryAll`: 1,000,000 entries,
+or `DialOptions.MaxFileDirectoryAll`), a chunk without data that
 announces more, or a continuation point it already sent ([LIMITS.md](LIMITS.md)).
 
 `ObtainFile` requests the server to copy `sourceFile` to `destinationFile` using its
@@ -245,6 +254,14 @@ aborts it.
 Handlers, callbacks and providers run without a lock of the `Server` held: they may
 call `HandleIdentify`, `HandleStatus` and `SetVariableRead`, also while other
 associations are served.
+
+A handler, `Variable` callback, `FileProvider` or `JournalProvider` method that does not
+return normally while a request is served is logged at Error level with its stack, and
+the request is answered with ServiceError vmd-state vmd-operational-problem (ISO 9506-2
+clause 7.4.1); the `Metrics` request event's error matches `ErrCallbackFailed`, and the
+association goes on. An `Authenticator` that does not return normally refuses the
+association as an error does; a `Metrics` method, or a `FileProvider.Close` when the
+association ends, is logged and the server goes on.
 
 ### Server file and journal providers
 
@@ -593,6 +610,18 @@ type Metrics interface {
 
 type NopMetrics struct{} // default; embed for forward compatibility
 
+// Optional: a Metrics that also implements it is told of each
+// InformationReport the client's report queue drops.
+type ReportDropObserver interface {
+    ObserveReportDropped(ReportDroppedEvent)
+}
+
+type ReportDroppedEvent struct {
+    RemoteAddr string
+    Full       ReportQueueFull // ReportDropNewest or ReportDropOldest
+    Dropped    uint64          // reports this client's queue has dropped so far
+}
+
 type RequestEvent struct {
     Role     Role
     Service  Service
@@ -620,7 +649,9 @@ type Service int         // ServiceStatus, ServiceGetNameList, ServiceIdentify, 
 ```
 
 Set via `DialOptions.Metrics` and `ServerOptions.Metrics`; nil means no metrics.
-Methods are called synchronously and must be safe for concurrent use.
+Methods are called synchronously and must be safe for concurrent use. A method that
+does not return normally is logged at Error level with its stack; the event is lost and
+the operation it reports goes on.
 
 ---
 
@@ -786,6 +817,13 @@ func WithHandshakeTimeout(d time.Duration) Option
   the CC. `WithCalledTSelector` makes it strict: an absent or different called
   selector (byte for byte, so `0001` ≠ `00000001`) is refused with DR reason 3.
   `WithMaxTPDULength` caps the TPDU size accepted.
+- **TSDU size.** A connection receives and sends TSDUs of up to the larger of
+  65,539 octets and the MMS PDU size plus 64; go-cotp refuses a longer received TSDU
+  before it holds it and ends the connection (`cotp.ErrTSDUTooLarge`). The MMS PDU
+  size is `MMS.MaxPDUSize` of `WithClientDialOptions` for `Dial` and `DialTCP`
+  (65,000 when zero or without the option) and 65,000 for a `Listener`. The `mms`
+  package proposes and supports no larger PDU size than the transport carries, so a
+  server on a `Listener` negotiates at most 65,475 octets. See [LIMITS.md](LIMITS.md).
 - `WithRetry` makes `Dial`/`DialTCP` retry failed attempts (backoff with jitter,
   honouring `ctx`). For `Dial` one attempt covers TCP connect, TLS and COTP handshakes
   and the MMS association; permanent errors (`mms.IsRetryable`) return at once.
@@ -814,6 +852,15 @@ type DialOptions struct {
     RequestTimeout time.Duration // > 0: default bound per confirmed request
     AllowedServices []Service   // non-nil: only these confirmed services are sent
     ReleaseTimeout time.Duration // A-RELEASE in Close; 0 → 2s, < 0 skips it
+    ReportQueue    ReportQueueOptions // Length > 0: reports delivered from a queue
+    MaxFileReadAll      int64 // FileReadAll, DownloadFile; 0 → 2^32−1, < 0 no limit
+    MaxNameListAll      int   // GetNameListAll; 0 → 1,000,000, < 0 no limit
+    MaxFileDirectoryAll int   // FileDirectoryAll; 0 → 1,000,000, < 0 no limit
+}
+
+type ReportQueueOptions struct {
+    Length int             // reports the queue holds; ≤ 0 → no queue (the default)
+    Full   ReportQueueFull // ReportDropNewest (default), ReportDropOldest, ReportWait
 }
 
 const (
@@ -899,8 +946,16 @@ type ServerOptions struct {
     MaxAssociationNVLs int // peer-defined association-scope NVLs; 0 → 256, < 0 refuses them
     MaxNVLMembers      int // members of a peer-defined NVL; 0 → 1000, < 0 refuses DefineNamedVariableList
     MaxOpenFiles       int // open files per association; 0 → 32, < 0 refuses FileOpen
+    MaxAssociations    int // associations held at a time; 0 → 100, < 0 refuses every association
 }
 ```
+
+The AARQ beyond `MaxAssociations` is answered with AARE rejected-transient and an
+Initiate-ErrorPDU resource capability-unavailable (ISO 9506-2 clause 7.4.1), before the
+`Authenticator` runs; it is logged at Warn level, and the error `Serve` returns for it
+matches `ErrLimitReached` and `ErrAssociationFailed`. The slot is given back when `Serve`
+returns. `math.MaxInt` keeps the behaviour before v1.11.0, which had no limit. See
+[LIMITS.md](LIMITS.md).
 
 The server's Initiate-Response advertises the services it implements
 (IEC 61850-8-1 Table 111): status, identify, getNameList, read, write,

@@ -258,7 +258,8 @@ func (c *Client) FileDirectory(ctx context.Context, req FileDirectoryRequest) (*
 	}, nil
 }
 
-// Bounds of the helpers that accumulate what the server sends.
+// Default bounds of the helpers that accumulate what the server sends
+// (DialOptions.MaxFileReadAll, MaxNameListAll, MaxFileDirectoryAll).
 const (
 	// maxFileReadAll is the most file data FileReadAll and DownloadFile
 	// accumulate: sizeOfFile is Unsigned32 (ISO 9506-2 FileOpen,
@@ -273,11 +274,12 @@ const (
 // It repeatedly calls [Client.FileRead] until MoreFollows is false and
 // returns the concatenated data.
 //
-// It accumulates the data in memory, at most 2^32−1 octets (the largest
-// file size MMS describes). A chunk without data that announces more, or
-// data beyond that size, ends it with an error matching [ErrProtocol].
+// It accumulates the data in memory, at most [DialOptions.MaxFileReadAll]
+// octets (default 2^32−1, the largest file size MMS describes). A chunk
+// without data that announces more, or data beyond that size, ends it
+// with an error matching [ErrProtocol].
 func (c *Client) FileReadAll(ctx context.Context, frsmID int32) ([]byte, error) {
-	return c.fileReadAll(ctx, frsmID, maxFileReadAll)
+	return c.fileReadAll(ctx, frsmID, limitOf64(c.opts.MaxFileReadAll, maxFileReadAll))
 }
 
 func (c *Client) fileReadAll(ctx context.Context, frsmID int32, limit int64) ([]byte, error) {
@@ -332,11 +334,11 @@ func (c *Client) DownloadFile(ctx context.Context, fileName string) ([]byte, *Fi
 // handling continuation. It repeatedly calls [Client.FileDirectory]
 // until MoreFollows is false.
 //
-// It accumulates at most 1,000,000 entries. More entries, or a
-// continuation point the server already sent, end it with an error
-// matching [ErrProtocol].
+// It accumulates at most [DialOptions.MaxFileDirectoryAll] entries
+// (default 1,000,000). More entries, or a continuation point the server
+// already sent, end it with an error matching [ErrProtocol].
 func (c *Client) FileDirectoryAll(ctx context.Context, fileSpec string) ([]FileDirectoryEntry, error) {
-	return c.fileDirectoryAll(ctx, fileSpec, maxListAll)
+	return c.fileDirectoryAll(ctx, fileSpec, limitOf(c.opts.MaxFileDirectoryAll, maxListAll))
 }
 
 func (c *Client) fileDirectoryAll(ctx context.Context, fileSpec string, limit int) ([]FileDirectoryEntry, error) {

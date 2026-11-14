@@ -46,6 +46,10 @@ const (
 	svcErrPDUSize                  = 3
 	svcErrContinuationInvalid      = 4
 	svcErrObjectConstraintConflict = 5
+
+	// vmd-state vmd-operational-problem (ISO 9506-2 clause 7.4.1).
+	serviceErrorClassVMDState   = int(ErrorClassVMDState)
+	svcErrVMDOperationalProblem = 2
 )
 
 var (
@@ -70,6 +74,9 @@ var (
 	// objectScope (IEC 61850-8-1 clause 8.1.3.4.2.4, Table 15).
 	errObjectConstraint    = &serverconn.ServiceError{ErrorClass: serviceErrorClassService, ErrorCode: svcErrObjectConstraintConflict}
 	errContinuationInvalid = &serverconn.ServiceError{ErrorClass: serviceErrorClassService, ErrorCode: svcErrContinuationInvalid}
+	// errOperationalProblem answers a request whose handler, callback or
+	// provider did not return normally.
+	errOperationalProblem = &serverconn.ServiceError{ErrorClass: serviceErrorClassVMDState, ErrorCode: svcErrVMDOperationalProblem}
 )
 
 // Per-variable data-access error codes for Read/Write result lists.
@@ -145,6 +152,11 @@ type Server struct {
 	// servingDone is made by the first Shutdown and closed when serving
 	// is empty.
 	servingDone chan struct{}
+	// associations counts the Serve calls that hold an association slot;
+	// maxAssociations is ServerOptions.MaxAssociations resolved (< 0
+	// refuses every association).
+	associations    int
+	maxAssociations int
 }
 
 // ServerConn represents an active server-side MMS association. It can
@@ -163,6 +175,7 @@ type ServerConn struct {
 	conn      *serverconn.Conn
 	authToken any
 	frsmTable *frsmTable
+	slot      bool // holds one of the MaxAssociations slots; owned by Serve
 
 	assocNVLs     map[string]*servermodel.NVLEntry
 	assocNVLOrder []string
@@ -181,15 +194,17 @@ func NewServer(opts ServerOptions) *Server {
 	if assocTimeout == 0 {
 		assocTimeout = defaultAssociationTimeout
 	}
+	logger = logger.With("role", RoleServer.String())
 	return &Server{
-		logger:          logger.With("role", RoleServer.String()),
+		logger:          logger,
 		mmsOpts:         opts.MMS.withDefaults(),
 		registry:        servermodel.NewRegistry(),
 		limits:          opts.limits(),
+		maxAssociations: limitOrDefault(opts.MaxAssociations, defaultMaxAssociations),
 		authenticator:   opts.Authenticate,
 		fileProvider:    opts.FileProvider,
 		journalProvider: opts.JournalProvider,
-		metrics:         metricsOrNop(opts.Metrics),
+		metrics:         guardMetrics(opts.Metrics, logger),
 		assocTimeout:    assocTimeout,
 		assocOpts: serverconn.MMSOptions{
 			ServicesSupportedCalled: servicesSupportedCalled(opts.FileProvider != nil, opts.JournalProvider != nil),
@@ -359,9 +374,10 @@ func (s *Server) Serve(ctx context.Context, conn Transport) error {
 		return ErrServerClosed
 	}
 	defer s.untrackServe(sc)
+	defer s.releaseSlot(sc)
 
 	connOpts := s.assocOpts
-	connOpts.MaxPDUSize = s.mmsOpts.MaxPDUSize
+	connOpts.MaxPDUSize = transportPDULimit(conn, s.mmsOpts.MaxPDUSize)
 	connOpts.MaxOutstandingCalling = s.mmsOpts.MaxOutstandingCalling
 	connOpts.MaxOutstandingCalled = s.mmsOpts.MaxOutstandingCalled
 	connOpts.DataStructureNestingLevel = s.mmsOpts.DataStructureNestingLevel
@@ -372,7 +388,7 @@ func (s *Server) Serve(ctx context.Context, conn Transport) error {
 	stopOnCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stopOnCancel()
 
-	authToken, err := s.associate(ctx, conn, c, logger)
+	authToken, err := s.associate(ctx, conn, sc, logger)
 	if err != nil {
 		if cause := context.Cause(ctx); errors.Is(cause, ErrServerClosed) {
 			err = errors.Join(ErrServerClosed, err)
@@ -393,7 +409,7 @@ func (s *Server) Serve(ctx context.Context, conn Transport) error {
 	s.metrics.ObserveConnection(ConnectionEvent{Role: RoleServer, State: ConnectionEstablished, RemoteAddr: remote})
 	defer func() {
 		if s.fileProvider != nil {
-			sc.frsmTable.closeAll(ctx, s.fileProvider)
+			sc.frsmTable.closeAll(logger, s.fileProvider)
 		}
 		s.unregisterConn(sc)
 	}()
@@ -419,7 +435,10 @@ const defaultAssociationTimeout = 30 * time.Second
 
 // associate receives the AARQ, runs the authenticator and sends the AARE,
 // bounded by the association timeout. On timeout the transport is closed.
-func (s *Server) associate(ctx context.Context, conn Transport, c *serverconn.Conn, logger *slog.Logger) (any, error) {
+// An association beyond ServerOptions.MaxAssociations is refused before
+// the authenticator runs.
+func (s *Server) associate(ctx context.Context, conn Transport, sc *ServerConn, logger *slog.Logger) (any, error) {
+	c := sc.conn
 	actx := ctx
 	if s.assocTimeout > 0 {
 		var cancel context.CancelFunc
@@ -437,14 +456,25 @@ func (s *Server) associate(ctx context.Context, conn Transport, c *serverconn.Co
 		return nil, classify(fmt.Errorf("mms: receive association: %w", err), ErrAssociationFailed)
 	}
 
+	if !s.takeSlot(sc) {
+		logger.Warn("mms: limit reached", "limit", "MaxAssociations", "max", s.maxAssociations)
+		limErr := fmt.Errorf("mms: association refused by ServerOptions.MaxAssociations (%d)", s.maxAssociations)
+		return nil, classify(errors.Join(limErr, c.RejectAssociationLimit(actx)), ErrAssociationFailed, ErrLimitReached)
+	}
+
 	var authToken any
 	if s.authenticator != nil {
 		authCtx := s.buildAuthContext(conn, authInfo)
-		result, authErr := s.authenticator(actx, authCtx)
+		var result AuthResult
+		var authErr error
+		cbErr := guard(logger, "Authenticator", func() { result, authErr = s.authenticator(actx, authCtx) })
+		if cbErr != nil {
+			authErr = cbErr
+		}
 		if authErr != nil {
 			logger.Warn("mms: authenticator error", "error", authErr)
 			_ = c.RejectAssociation(actx, authRejectDiagnostic(authInfo))
-			return nil, &AuthenticationError{Reason: authErr.Error()}
+			return nil, classify(&AuthenticationError{Reason: authErr.Error()}, kindsOf(cbErr)...)
 		}
 		if !result.Accept {
 			logger.Warn("mms: authentication rejected")
@@ -480,9 +510,9 @@ func (s *Server) handler(sc *ServerConn, logger *slog.Logger) serverconn.Service
 		defer func() { <-sc.busy }()
 
 		start := time.Now()
-		respTag, constructed, payload, err := s.dispatch(ctx, invokeID, serviceTag, body)
-		err = toWireServiceError(err)
 		svc := serviceFromTag(serviceTag)
+		respTag, constructed, payload, err := s.dispatchGuarded(ctx, logger, svc, invokeID, serviceTag, body)
+		err = toWireServiceError(err)
 		elapsed := time.Since(start)
 		if err != nil {
 			logger.Debug("mms: request failed", "service", svc.String(), "invoke_id", invokeID, "duration", elapsed, "error", err)
@@ -492,6 +522,29 @@ func (s *Server) handler(sc *ServerConn, logger *slog.Logger) serverconn.Service
 		s.metrics.ObserveRequest(RequestEvent{Role: RoleServer, Service: svc, InvokeID: InvokeID(invokeID), Duration: elapsed, Err: err})
 		return respTag, constructed, payload, err
 	}
+}
+
+// dispatchGuarded runs dispatch. A handler, callback or provider that does
+// not return normally is logged with its stack, and the request is
+// answered with ServiceError vmd-state vmd-operational-problem (ISO 9506-2
+// clause 7.4.1); the error matches ErrCallbackFailed.
+func (s *Server) dispatchGuarded(ctx context.Context, logger *slog.Logger, svc Service, invokeID codec.InvokeID, serviceTag int, body []byte) (respTag int, constructed bool, payload []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			cbErr := callbackFailed(logger, "handler of "+svc.String(), r, "service", svc.String(), "invoke_id", invokeID)
+			respTag, constructed, payload, err = 0, false, nil, fmt.Errorf("%w: %w", cbErr, errOperationalProblem)
+		}
+	}()
+	return s.dispatch(ctx, invokeID, serviceTag, body)
+}
+
+// kindsOf returns the sentinel kinds of a callback error to add to an
+// error that reports it: ErrCallbackFailed when cbErr is not nil.
+func kindsOf(cbErr error) []error {
+	if cbErr != nil {
+		return []error{ErrCallbackFailed}
+	}
+	return nil
 }
 
 // toWireServiceError converts a [*ServiceError] returned by a user
@@ -586,6 +639,31 @@ func (s *Server) registerConn(sc *ServerConn) error {
 	}
 	s.conns[sc] = struct{}{}
 	return nil
+}
+
+// takeSlot takes one of the ServerOptions.MaxAssociations slots for sc;
+// it reports false when they are all taken, and always for a negative
+// limit.
+func (s *Server) takeSlot(sc *ServerConn) bool {
+	s.connsMu.Lock()
+	defer s.connsMu.Unlock()
+	if s.associations >= s.maxAssociations {
+		return false
+	}
+	s.associations++
+	sc.slot = true
+	return true
+}
+
+// releaseSlot gives back the slot sc took, if any.
+func (s *Server) releaseSlot(sc *ServerConn) {
+	if !sc.slot {
+		return
+	}
+	s.connsMu.Lock()
+	defer s.connsMu.Unlock()
+	s.associations--
+	sc.slot = false
 }
 
 func (s *Server) isShutdown() bool {

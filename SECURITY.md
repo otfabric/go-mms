@@ -75,6 +75,23 @@ the connection is made. Checking the host name before calling `iso.Dial`
 leaves a DNS-rebinding gap. `iso.DialTCP` and `iso.Dial` are the only paths
 that open a connection, and both use the dialer on every retry attempt.
 
+## Bounding what peers hold on a server
+
+A `Server` bounds the associations it holds (`ServerOptions.MaxAssociations`),
+the named variable lists and open files peers create (`MaxPeerNVLs`,
+`MaxAssociationNVLs`, `MaxNVLMembers`, `MaxOpenFiles`) and how long each of
+its writes may take (`WriteTimeout`), each with a default; see
+[LIMITS.md](LIMITS.md). An association or a request beyond a limit is refused
+with an MMS error and changes nothing. Application callbacks that do
+not return normally are recovered where the library calls them and logged with
+their stack (see [API.md](API.md)); the process goes on.
+
+A connection of `transport/iso` receives TSDUs of up to the MMS PDU size plus
+the session and presentation framing, and at least 65,539 octets (the largest
+session SPDU other than DATA); go-cotp refuses a longer one before it holds
+it. A request larger than the negotiated PDU size is answered from its
+invokeID, without decoding the rest of it. See [LIMITS.md](LIMITS.md).
+
 ## Disclosure policy
 
 We follow coordinated disclosure. We request that you allow a reasonable fix

@@ -42,6 +42,8 @@ Both `Close` and `Abort` are safe to call multiple times, including concurrently
 
 `Close` and `Abort` wait for the reader goroutine to stop; when their `ctx` is done they close the transport, which ends that wait. Called from the `InformationReport` handler, which runs on the reader, they do not wait for it: `Abort` returns at once, and `Close` when its `ctx` is done (it cannot read the Conclude-Response); the reader stops when the handler returns.
 
+With `DialOptions.ReportQueue`, `Close` and `Abort` also wait, bounded by their `ctx`, for the delivery goroutine that calls the handler. Called while the handler runs (from it or from another goroutine) they do not wait for it, as without a queue; the delivery goroutine stops after the handler returns. Once `Close` or `Abort` has started no further report is delivered: the delivery goroutine takes the queued reports out without delivering them, so a reader that waits for room (`ReportWait`) goes on and `Close` reads the Conclude-Response; `Abort` stops the reader at once. When the peer ends the association, the reports already queued are delivered.
+
 Reconnecting is left to the caller; `mms.Retry` with a `RetryPolicy` (or `iso.WithRetry` on `iso.Dial`) provides backoff with jitter. See the `Retry` doc comment for a reconnect loop.
 
 ## Context cancellation and timeouts
@@ -168,6 +170,10 @@ After `Shutdown`, `Serve` and `ListenAndServe` return `ErrServerClosed`. `Shutdo
 | Abort already closed | `TestClientAbort` | Returns nil |
 | Conclude PDU without a Conclude-Request | `TestConcludeWithoutRequestEndsAssociation` | `Done` closed, `Err` matches `ErrClosed` and `ErrProtocol`, transport closed, a later request is not written |
 | Report handler calls `Abort` or `Close` | `TestReportHandlerEndsAssociation` | `Abort` returns at once, `Close` at its context's deadline; the reader stops afterwards |
+| Report handler calls `Abort`, with a report queue | `TestReportQueueHandlerAborts` | `Abort` returns at once; the delivery goroutine stops afterwards |
+| `Abort` while the handler runs, with a report queue and a waiting reader | `TestReportQueueAbort` | `Abort` returns at once, the reader stops; the delivery goroutine stops when the handler returns, without delivering the queued reports |
+| `Close` while the reader waits for room in the report queue | `TestReportQueueCloseWithWaitingReader` | The queued reports are taken out without being delivered; the Conclude exchange completes and `Close` returns nil |
+| Peer ends the association with reports queued | `TestReportQueueDrainsOnPeerEnd` | The queued reports are delivered in order |
 | Peer goes away | `TestClient_Done_Err_Reconnect`, `TestClient_PeerDisconnect` (interop) | `Done` closed, `Err` matches `ErrClosed`, reconnect succeeds |
 | Request timeout | `TestClient_RequestTimeout`, `TestClient_RequestTimeout_Loopback` | `ErrInvokeTimeout` + `context.DeadlineExceeded`; association stays up |
 | Write failure | `TestClient_SendFailureClosesAssociation` | Association closed, pending requests get `ErrClosed` |

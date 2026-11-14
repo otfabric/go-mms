@@ -21,6 +21,7 @@ type Metrics interface {
 |------|-----------------|
 | `RequestEvent` | `Role`, `Service`, `InvokeID`, `Duration`, `Err` |
 | `ConnectionEvent` | `Role`, `State`, `RemoteAddr`, `Err` |
+| `ReportDroppedEvent` | `RemoteAddr`, `Full` (`ReportDropNewest` or `ReportDropOldest`), `Dropped` (reports the client's queue has dropped so far) |
 | `Role` | `RoleClient` (`"client"`), `RoleServer` (`"server"`) |
 | `ConnectionState` | `ConnectionEstablished`, `ConnectionRejected`, `ConnectionClosed` (`"established"`, `"rejected"`, `"closed"`) |
 | `Service` | `ServiceStatus`, `ServiceGetNameList`, `ServiceIdentify`, `ServiceRead`, `ServiceWrite`, `ServiceGetVariableAccessAttributes`, `ServiceDefineNamedVariableList`, `ServiceGetNamedVariableListAttributes`, `ServiceDeleteNamedVariableList`, `ServiceFileOpen`, `ServiceFileRead`, `ServiceFileClose`, `ServiceFileRename`, `ServiceFileDelete`, `ServiceFileDirectory`, `ServiceObtainFile`, `ServiceReadJournal`, `ServiceUnknown`; `String()` returns the ISO 9506 name (`"Read"`, `"GetNameList"`, ...) |
@@ -39,8 +40,15 @@ Semantics:
   closed (`Err` nil after an orderly Conclude/Release, and on the
   client after `Close`/`Abort`; the cause otherwise). `RemoteAddr` is set when the
   transport implements `RemoteAddrTransport`.
+- `ObserveReportDropped` is optional: a `Metrics` that also implements
+  `ReportDropObserver` is called once per InformationReport that a full
+  `DialOptions.ReportQueue` drops, on the reader goroutine. `NopMetrics`
+  implements it.
 - Methods run synchronously on the goroutine that completed the operation:
-  implementations must be safe for concurrent use and return quickly.
+  implementations must be safe for concurrent use and return quickly. A
+  method that does not return normally is logged at Error level
+  (`mms: callback did not return normally`); the event is lost and the
+  operation it reports goes on.
 - Nil means `NopMetrics`. Embed `NopMetrics` in your implementation so
   methods added in later minor releases do not break your build.
 
@@ -246,6 +254,7 @@ server messages carry `role=server`, and per-association ones
 | `mms: reader loop PDU size error` | `error` | Received PDU exceeds the negotiated size |
 | `mms: reader loop PDU error` | `error` | MMS PDU decode failure in reader |
 | `mms: discarding late response during shutdown` | `invoke_id` | Response arrives after Close started |
+| `mms: report queue full, report dropped` | `dropped` | A report arrived while `DialOptions.ReportQueue` was full (`ReportDropNewest`, `ReportDropOldest`) |
 
 #### Client — Warn Level
 
@@ -263,7 +272,7 @@ server messages carry `role=server`, and per-association ones
 
 | Message | Fields | When |
 |---------|--------|------|
-| `mms: InformationReport handler panic` | `panic` | User-registered handler panicked (recovered) |
+| `mms: callback did not return normally` | `callback`, `value`, `stack` | The `InformationReportHandler`, the `RawHook` or a `Metrics` method did not return normally; the client recovered it and goes on |
 
 #### Server — Info Level
 
@@ -289,16 +298,29 @@ server messages carry `role=server`, and per-association ones
 
 | Message | Fields | When |
 |---------|--------|------|
-| `mms: PDU exceeds negotiated size` | `size`, `max` | Oversized PDU received (skipped) |
+| `mms: PDU exceeds negotiated size` | `size`, `max` | Oversized PDU received; answered with a Reject read from its invokeID alone |
 | `mms: malformed PDU` | `error` | PDU decode failure |
 | `mms: unexpected PDU kind` | `kind` | Unhandled PDU type |
 | `mms: malformed confirmed request` | `error` | Confirmed request decode failure (Reject sent) |
 | `mms: response exceeds negotiated PDU size` | `invoke_id`, `size`, `max` | Response too large; Resource error sent instead |
 | `mms: malformed cancel request` | `error` | CancelRequest decode failure |
-| `mms: authenticator error` | `error` | Authenticator returned an error |
+| `mms: authenticator error` | `error` | Authenticator returned an error, or did not return normally |
+| `mms: limit reached` | `limit`, `max`, `remote_addr` | An association beyond `ServerOptions.MaxAssociations` was refused |
 | `mms: authentication rejected` | — | Authenticator returned `Accept=false` |
 | `mms: broadcast send failed` | `remote_addr`, `error` | Broadcast to a connection failed |
 | `mms: temporary accept error, retrying` | `error` | Transient accept error in ListenAndServe |
+
+#### Server — Error Level
+
+| Message | Fields | When |
+|---------|--------|------|
+| `mms: callback did not return normally` | `callback`, `value`, `stack`; `service`, `invoke_id` for a request | A handler, `Variable` callback, provider method, the `Authenticator` or a `Metrics` method did not return normally; the server recovered it and goes on (a request is answered with ServiceError vmd-state vmd-operational-problem) |
+
+#### ISO Transport — Error Level
+
+| Message | Fields | When |
+|---------|--------|------|
+| `iso: handshake callback did not return normally, closing connection` | `remote_addr`, `value`, `stack` | A callback of the listener's `tls.Config` did not return normally during a handshake; that connection is closed and the listener goes on |
 
 #### ISO Transport — Warn Level
 
@@ -347,8 +369,12 @@ server messages carry `role=server`, and per-association ones
 | `delay` | duration | Wait before the next dial attempt |
 | `aborted` | int | Associations aborted by `Server.Shutdown` |
 | `size` | int | Received PDU size (oversized PDU warning) |
-| `max` | int | Negotiated max size (oversized PDU warning) |
-| `panic` | any | Recovered panic value |
+| `max` | int | Negotiated max size (oversized PDU warning), or the value of the limit (`mms: limit reached`) |
+| `limit` | string | The `ServerOptions` field of the limit reached (`MaxAssociations`) |
+| `callback` | string | The application callback that did not return normally (`handler of <service>`, `Authenticator`, `FileProvider.Close`, `InformationReportHandler`, `RawHook`, `Metrics.ObserveRequest`, `Metrics.ObserveConnection`, `ReportDropObserver.ObserveReportDropped`) |
+| `value` | any | What `recover` returned for the callback |
+| `stack` | string | The stack of the goroutine the callback ran on |
+| `dropped` | int | Reports the client's report queue has dropped so far |
 
 ## Raw Wire Hooks
 

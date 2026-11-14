@@ -110,7 +110,10 @@ func clientTSelector(sel []byte, what string) ([]byte, error) {
 
 // WithClientDialOptions sets the MMS dial options used by the convenience
 // [Dial] function. These options are passed to [mms.NewClient] after the
-// transport is established. Ignored by [DialTCP] and [Listen].
+// transport is established. [DialTCP] reads only MMS.MaxPDUSize from them,
+// to bound the TSDUs of the connection to the PDU size the client
+// proposes (65,000 octets when zero, as without this option); [Listen]
+// ignores them.
 func WithClientDialOptions(opts mms.DialOptions) Option {
 	return func(o *Options) {
 		o.mmsDialOpts = opts

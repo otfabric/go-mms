@@ -99,7 +99,7 @@ func dialOnce(ctx context.Context, addr string, o Options) (mms.Transport, error
 	if err != nil {
 		return nil, fmt.Errorf("iso: cotp connect %s: %w", addr, err)
 	}
-	return &cotpTransport{cotp: cotpConn, raw: conn}, nil
+	return &cotpTransport{cotp: cotpConn, raw: conn, maxTSDU: cfg.MaxTSDULength}, nil
 }
 
 // Dial is a convenience function that establishes a TCP+TP0 connection and
@@ -142,7 +142,8 @@ func Dial(ctx context.Context, addr string, opts ...Option) (*mms.Client, error)
 }
 
 // clientCOTPConfig returns the CR parameters of a client: the configured
-// or default selectors and TPDU size.
+// or default selectors and TPDU size, and the TSDU bound for the MMS PDU
+// size the client proposes (see maxTSDULength).
 func (o Options) clientCOTPConfig() (cotp.ClientConfig, error) {
 	calling, err := clientTSelector(o.callingTSelector, "calling")
 	if err != nil {
@@ -160,5 +161,6 @@ func (o Options) clientCOTPConfig() (cotp.ClientConfig, error) {
 		LocalSelector:  calling,
 		RemoteSelector: called,
 		MaxTPDULength:  maxTPDU,
+		MaxTSDULength:  maxTSDULength(o.mmsDialOpts.MMS.MaxPDUSize),
 	}, nil
 }

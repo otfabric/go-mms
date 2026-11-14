@@ -717,7 +717,11 @@ type InformationReportIndication struct {
 // the handler runs no response is read, so it must not call a confirmed
 // service of the same [Client]; such a call fails when its context ends.
 // It may call [Client.Abort]; [Client.Close] returns only when its
-// context is done.
+// context is done. With [DialOptions.ReportQueue] the handler is called
+// on a delivery goroutine instead, and responses are read while it runs.
+//
+// A handler that does not return normally is logged at Error level with
+// its stack; the next report is delivered as usual.
 type InformationReportHandler func(report *InformationReportIndication)
 
 // InformationReportRequest is used to send an InformationReport from the

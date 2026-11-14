@@ -5,6 +5,7 @@ package pdu
 import (
 	"encoding/asn1"
 	"fmt"
+	"slices"
 
 	"github.com/otfabric/go-mms/internal/asn1util"
 	"github.com/otfabric/go-mms/internal/berutil"
@@ -125,11 +126,25 @@ func ExtractInvokeIDFor(kind PduKind, content []byte) (codec.InvokeID, error) {
 // and the PDU rejected instead of ending the association. It only reads
 // the first inner element.
 func RecoverInvokeID(mmsPDU []byte) (PduKind, codec.InvokeID, bool) {
+	return recoverInvokeID(mmsPDU, PduConfirmedResponse, PduConfirmedError, PduReject)
+}
+
+// RecoverRequestInvokeID reads the invoke ID of a Confirmed-Request PDU
+// from its first inner element only, as RecoverInvokeID does, so that a
+// PDU refused for its size is answered without decoding the rest of it.
+func RecoverRequestInvokeID(mmsPDU []byte) (codec.InvokeID, bool) {
+	_, id, ok := recoverInvokeID(mmsPDU, PduConfirmedRequest)
+	return id, ok
+}
+
+// recoverInvokeID reads the invoke ID of a PDU of one of kinds from the
+// first element inside its outer tag and length.
+func recoverInvokeID(mmsPDU []byte, kinds ...PduKind) (PduKind, codec.InvokeID, bool) {
 	if len(mmsPDU) < 2 {
 		return 0, 0, false
 	}
 	kind, err := classifyTag(mmsPDU[0])
-	if err != nil || (kind != PduConfirmedResponse && kind != PduConfirmedError && kind != PduReject) {
+	if err != nil || !slices.Contains(kinds, kind) {
 		return 0, 0, false
 	}
 	off := 2

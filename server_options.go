@@ -4,6 +4,7 @@ package mms
 
 import (
 	"log/slog"
+	"math"
 	"time"
 )
 
@@ -95,6 +96,22 @@ type ServerOptions struct {
 	// association free them. Zero means 32; a negative value refuses
 	// every FileOpen. Only used when FileProvider is set.
 	MaxOpenFiles int
+
+	// MaxAssociations bounds the associations the server holds at a
+	// time, counted from the AARQ (so including the one the
+	// Authenticator is deciding on) until [Server.Serve] returns. The
+	// AARQ of one more is answered with AARE rejected-transient and an
+	// Initiate-ErrorPDU resource capability-unavailable (ISO 9506-2
+	// clause 7.4.1), logged at Warn level ("mms: limit reached"), and its
+	// Serve returns an error that matches [ErrLimitReached] and
+	// [ErrAssociationFailed]. A connection that has not sent its AARQ is
+	// not counted; [ServerOptions.AssociationTimeout] bounds it. Zero
+	// means 100: libiec61850's MMS server accepts 100 connections by
+	// default (its IEC 61850 server 5), and a device serves a few
+	// clients (SCADA, gateway, engineering tool). A negative value
+	// refuses every association. Before v1.11.0 there was no limit;
+	// math.MaxInt keeps that behaviour.
+	MaxAssociations int
 }
 
 // Defaults of the peer-definition and open-file limits in
@@ -104,6 +121,7 @@ const (
 	defaultMaxAssociationNVLs = 256
 	defaultMaxNVLMembers      = 1000
 	defaultMaxOpenFiles       = 32
+	defaultMaxAssociations    = 100
 )
 
 // serverLimits holds the resolved limits of [ServerOptions]; a value
@@ -129,6 +147,53 @@ func (o *ServerOptions) limits() serverLimits {
 		nvlMembers:      limitOrDefault(o.MaxNVLMembers, defaultMaxNVLMembers),
 		openFiles:       limitOrDefault(o.MaxOpenFiles, defaultMaxOpenFiles),
 	}
+}
+
+// limitOf resolves a limit option for which a negative value means no
+// bound: zero is def, a negative value is math.MaxInt.
+func limitOf(v, def int) int {
+	switch {
+	case v == 0:
+		return def
+	case v < 0:
+		return math.MaxInt
+	default:
+		return v
+	}
+}
+
+// limitOf64 is limitOf for an int64 option (no bound: math.MaxInt64).
+func limitOf64(v, def int64) int64 {
+	switch {
+	case v == 0:
+		return def
+	case v < 0:
+		return math.MaxInt64
+	default:
+		return v
+	}
+}
+
+// defaultMaxPDUSize is the MMS PDU size a client proposes when
+// MMSOptions.MaxPDUSize is zero.
+const defaultMaxPDUSize = 65000
+
+// pduSizeLimiter is implemented by a Transport that carries MMS PDUs up to
+// a size: those of transport/iso, whose TSDUs are bounded.
+type pduSizeLimiter interface {
+	MaxMMSPDU() int
+}
+
+// transportPDULimit returns n, or the largest MMS PDU t carries when t
+// says and that is smaller, so that neither side proposes or supports a
+// PDU size its transport does not carry.
+func transportPDULimit(t Transport, n int) int {
+	if l, ok := t.(pduSizeLimiter); ok {
+		if m := l.MaxMMSPDU(); m > 0 && m < n {
+			return m
+		}
+	}
+	return n
 }
 
 // ServerMMSOptions configures MMS protocol negotiation parameters for

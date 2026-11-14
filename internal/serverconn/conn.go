@@ -215,15 +215,11 @@ func (c *Conn) dispatchPDU(ctx context.Context, mmsPayload []byte) error {
 // IEC 61850-8-1 clause 8.1.3.5 (Write) and 8.1.3.6.1 (DefineNamedVariableList)
 // require Reject confirmed-requestPDU value-out-of-range (ISO 9506-2
 // clause 8.6); otherwise Reject pdu-error invalid-pdu without an invokeID.
+// Only the invokeID, the first element inside the outer tag, is read: the
+// rest of the PDU is not decoded.
 func (c *Conn) rejectOversized(ctx context.Context, mmsPayload []byte) error {
-	if kind, content, err := pdu.DecodePdu(mmsPayload); err == nil && kind == pdu.PduConfirmedRequest {
-		invokeID, _, err := codec.UnmarshalConfirmedRequest(content)
-		if envErr, ok := errors.AsType[*codec.EnvelopeError](err); ok && envErr.HasInvokeID {
-			invokeID, err = envErr.InvokeID, nil
-		}
-		if err == nil {
-			return c.sendData(ctx, codec.MarshalRejectPDU(invokeID, RejectConfirmedRequest, ReasonValueOutOfRange))
-		}
+	if invokeID, ok := pdu.RecoverRequestInvokeID(mmsPayload); ok {
+		return c.sendData(ctx, codec.MarshalRejectPDU(invokeID, RejectConfirmedRequest, ReasonValueOutOfRange))
 	}
 	return c.sendData(ctx, codec.MarshalRejectPDUNoInvokeID(RejectPDUError, ReasonInvalidPDU))
 }

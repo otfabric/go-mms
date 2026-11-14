@@ -170,8 +170,8 @@ func (c *Client) checkNegotiated(req pdu.InitiateRequest, resp *pdu.InitiateResp
 	c.sendLimit = 0
 	c.maxPDUSize = req.LocalDetailCalling
 	if hasLocalDetail && resp.LocalDetailCalled > 0 {
-		c.sendLimit = resp.LocalDetailCalled
-		c.maxPDUSize = min(req.LocalDetailCalling, resp.LocalDetailCalled)
+		c.sendLimit = transportPDULimit(c.conn, resp.LocalDetailCalled)
+		c.maxPDUSize = min(req.LocalDetailCalling, c.sendLimit)
 	}
 	c.maxOutCalling = resp.NegotiatedMaxServOutstandingCall
 	c.maxOutCalled = resp.NegotiatedMaxServOutstandingCalled

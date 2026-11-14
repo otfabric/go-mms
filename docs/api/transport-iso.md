@@ -212,7 +212,7 @@ A client sends 00 01 when no calling selector is configured (here or in [mms.Tra
 func WithClientDialOptions(opts mms.DialOptions) Option
 ```
 
-WithClientDialOptions sets the MMS dial options used by the convenience [Dial](#func-dial) function. These options are passed to [mms.NewClient](https://pkg.go.dev/github.com/otfabric/go-mms#NewClient) after the transport is established. Ignored by [DialTCP](#func-dialtcp) and [Listen](#func-listen).
+WithClientDialOptions sets the MMS dial options used by the convenience [Dial](#func-dial) function. These options are passed to [mms.NewClient](https://pkg.go.dev/github.com/otfabric/go-mms#NewClient) after the transport is established. [DialTCP](#func-dialtcp) reads only MMS.MaxPDUSize from them, to bound the TSDUs of the connection to the PDU size the client proposes (65,000 octets when zero, as without this option); [Listen](#func-listen) ignores them.
 
 #### func WithDialer
 

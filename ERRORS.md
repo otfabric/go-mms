@@ -28,6 +28,7 @@ original chain (transport errors, `context` errors, typed errors):
 | Pending request failed because the connection was lost | `ErrClosed` (plus the transport error) |
 | Connection ended by an undecodable PDU | `ErrClosed` and `ErrDecodeFailed` |
 | Connection ended by a PDU larger than the negotiated maximum | `ErrClosed` and `ErrInvalidPDU` |
+| Connection of `transport/iso` ended by a TSDU longer than its bound (see LIMITS.md) | `ErrClosed` and `cotp.ErrTSDUTooLarge` (go-cotp), on the client (`Client.Err`, pending requests) and from `Server.Serve` |
 | Request write failed | `ErrClosed` (the transport is closed; other pending requests fail too) |
 | Request deadline (context or `DialOptions.RequestTimeout`) | `ErrInvokeTimeout` and `context.DeadlineExceeded` |
 | Request context cancelled | `context.Canceled` |
@@ -38,6 +39,9 @@ original chain (transport errors, `context` errors, typed errors):
 | RejectPDU | `*RejectError`, `*ProtocolError` (phase `mms`), `ErrProtocol` |
 | Conclude-ErrorPDU in answer to `Close` | `*ServiceError` (class Conclude), `ErrServiceRejected`; the association is still released |
 | `Server.Serve` association failure | `ErrAssociationFailed` (or `*AuthenticationError`) |
+| `Server.Serve` association refused beyond `ServerOptions.MaxAssociations` | `ErrLimitReached`, `ErrAssociationFailed`; the client gets a `*RejectionError` with `Transient` set and `InitiateError` resource capability-unavailable |
+| Server handler, callback or provider that does not return normally | `ErrCallbackFailed` in the server's `Metrics` request event; the client gets a `*ServiceError` of class vmd-state, code vmd-operational-problem (2) |
+| `Server.Serve` when the `Authenticator` does not return normally | `*AuthenticationError`, `ErrAuthenticationFailed`, `ErrCallbackFailed` |
 | `Server.Serve` association ended abnormally | `ErrClosed` |
 | `Serve` / `ListenAndServe` after `Server.Shutdown` | `ErrServerClosed` |
 
@@ -66,6 +70,8 @@ original chain (transport errors, `context` errors, typed errors):
 | `ErrServerClosed` | `Server.Serve` and `Server.ListenAndServe` after `Server.Shutdown` | `errors.Is(err, mms.ErrServerClosed)` |
 | `ErrInvalidArgument` | A caller-supplied argument or option is invalid (empty names, nil values, mismatched slices, values that cannot be encoded, bad selectors); the request is not sent | `errors.Is(err, mms.ErrInvalidArgument)` |
 | `ErrServiceNotAllowed` | A client request for a confirmed service that `DialOptions.AllowedServices` does not list; the request is not sent and the association stays usable | `errors.Is(err, mms.ErrServiceNotAllowed)` |
+| `ErrLimitReached` | `Server.Serve` for an association beyond `ServerOptions.MaxAssociations` | `errors.Is(err, mms.ErrLimitReached)` |
+| `ErrCallbackFailed` | An application callback did not return normally and the library recovered it: in the server's `Metrics` request event for a handler, callback or provider, and in the error of `Server.Serve` for the `Authenticator`. The value and the stack are logged at Error level (`mms: callback did not return normally`) | `errors.Is(err, mms.ErrCallbackFailed)` |
 | `ErrNotMMS` | `DecodeTSDU` was given a unit that is not a session SPDU (passive decoding of a capture) | `errors.Is(err, mms.ErrNotMMS)` |
 
 Timeouts and cancellation also match the standard `context.DeadlineExceeded`
