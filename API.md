@@ -120,8 +120,9 @@ func (c *Client) GetNameListAll(ctx context.Context, req NameListRequest) ([]str
 func (c *Client) GetVariableAccessAttributes(ctx context.Context, name ObjectName) (*VariableAccessAttributes, error)
 ```
 
-`GetNameListAll` paginates automatically, collecting all results. `GetNameList` exposes
-the low-level continuation cursor.
+`GetNameListAll` paginates automatically, collecting all results, at most 1,000,000
+names; a continuation point the server already sent ends it with an error matching
+`ErrProtocol`. `GetNameList` exposes the low-level continuation cursor.
 
 ### Information reports
 
@@ -131,7 +132,9 @@ func (c *Client) OnInformationReport(handler InformationReportHandler)
 
 Registers a callback invoked for every `UnconfirmedPDU`/`InformationReport` received.
 The callback is called from the client's internal reader goroutine; it must return quickly
-and must not call back into the same `Client`.
+and must not call a confirmed service of the same `Client` (no response is read while it
+runs). It may call `Abort`, which returns at once; `Close` called there returns when its
+context is done, since the Conclude-Response cannot be read.
 
 ### File services
 
@@ -151,7 +154,11 @@ func (c *Client) DownloadFile(ctx context.Context, fileName string) ([]byte, *Fi
 `FileOpen` takes an optional [FileOpenOptions]; the zero value starts at
 position 0. `FileDirectory` pages with `FileDirectoryRequest.ContinueAfter`;
 `FileDirectoryAll` walks the pages. `DownloadFile` is Open → ReadAll → Close
-and returns the bytes plus the FileOpen metadata.
+and returns the bytes plus the FileOpen metadata. The helpers that accumulate stop
+with an error matching `ErrProtocol` when the server sends more than they keep
+(`FileReadAll` and `DownloadFile`: 2^32−1 octets, the largest file size MMS
+describes; `FileDirectoryAll`: 1,000,000 entries), a chunk without data that
+announces more, or a continuation point it already sent ([LIMITS.md](LIMITS.md)).
 
 `ObtainFile` requests the server to copy `sourceFile` to `destinationFile` using its
 own `FileProvider`. The MMS segmented role-reversal protocol (server calling back to
@@ -225,12 +232,19 @@ Per-variable write handling is set via `Variable.Write` at registration time. A
 has that code sent; other errors are sent as temporarily-unavailable. An Identify or
 Status handler that returns a `*ServiceError` has its class and code sent.
 
-`Shutdown` closes the listeners of running `ListenAndServe` calls, lets each
-association finish its in-flight request, then aborts it (ACSE ABRT); when `ctx`
-ends first, remaining associations are aborted at once and `ctx.Err()` is returned.
-Afterwards `Serve` and `ListenAndServe` return `ErrServerClosed`. `Serve` closes its
-transport when `ctx` is cancelled, when the association is not established within
-`ServerOptions.AssociationTimeout`, or when `Shutdown` aborts it.
+`Shutdown` closes the listeners of running `ListenAndServe` calls, ends every
+connection that is not associated yet, lets each association finish its in-flight
+request, then aborts it (ACSE ABRT), and returns when every `Serve` has returned;
+when `ctx` ends first, remaining associations are aborted at once and `ctx.Err()` is
+returned. Afterwards `Serve` and `ListenAndServe` return `ErrServerClosed`.
+`ListenAndServe` returns only after the `Serve` goroutines it started have returned.
+`Serve` closes its transport when `ctx` is cancelled, when the association is not
+established within `ServerOptions.AssociationTimeout`, or when `Shutdown` ends or
+aborts it.
+
+Handlers, callbacks and providers run without a lock of the `Server` held: they may
+call `HandleIdentify`, `HandleStatus` and `SetVariableRead`, also while other
+associations are served.
 
 ### Server file and journal providers
 

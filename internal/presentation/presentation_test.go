@@ -323,3 +323,21 @@ func TestParseUserDataAndPdvList_Edges(t *testing.T) {
 		t.Fatalf("%+v err=%v", parsed, err)
 	}
 }
+
+// A CP proposes at most maxProposedContexts presentation contexts.
+func TestParseContextDefListLimit(t *testing.T) {
+	def := berutil.EncodeTLV(0x30, append(berutil.EncodeTLV(0x02, []byte{1}), berutil.EncodeTLV(0x06, oidMMS)...))
+	for _, n := range []int{0, 1, maxProposedContexts - 1, maxProposedContexts, maxProposedContexts + 1} {
+		list := bytes.Repeat(def, n)
+		defs, err := parseContextDefList(list)
+		if n > maxProposedContexts {
+			if err == nil {
+				t.Errorf("%d contexts: accepted, want an error", n)
+			}
+			continue
+		}
+		if err != nil || len(defs) != n {
+			t.Errorf("%d contexts: %d decoded, %v", n, len(defs), err)
+		}
+	}
+}

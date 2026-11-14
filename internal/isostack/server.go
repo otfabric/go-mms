@@ -138,9 +138,21 @@ func refuseSession(reason byte, msg string) error {
 	return &RefusedError{Reason: msg, Response: mustSPDU(session.EncodeRefuse(reason, nil))}
 }
 
+// refusePresentation builds a REFUSE carrying a CPR with the result list
+// and provider-reason reason-not-specified. A result list that does not
+// fit the REFUSE is left out; an encoding error is returned like the one
+// of refuse.
 func refusePresentation(results []presentation.ContextResult, msg string) error {
 	cpr := presentation.EncodeCPR(nil, results, presentation.ProviderReasonNotSpecified, 0, nil)
-	return &RefusedError{Reason: msg, Response: mustSPDU(session.EncodeRefuse(session.ReasonUserData, cpr))}
+	b, err := session.EncodeRefuse(session.ReasonUserData, cpr)
+	if err != nil && results != nil {
+		cpr = presentation.EncodeCPR(nil, nil, presentation.ProviderReasonNotSpecified, 0, nil)
+		b, err = session.EncodeRefuse(session.ReasonUserData, cpr)
+	}
+	if err != nil {
+		return fmt.Errorf("isostack: %s: encode REFUSE: %w", msg, err)
+	}
+	return &RefusedError{Reason: msg, Response: b}
 }
 
 func (r *AssociateRequest) refuse(rj Reject, msg string) error {

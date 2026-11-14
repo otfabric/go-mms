@@ -3,6 +3,7 @@
 package pdu
 
 import (
+	"encoding/asn1"
 	"math"
 	"testing"
 
@@ -138,5 +139,63 @@ func TestRealExponentDoesNotWrap(t *testing.T) {
 	}
 	if got := decode(realWithExponent(false, 0xff)); got != 0.0625 {
 		t.Errorf("exponent -1: %v, want 0.0625", got)
+	}
+}
+
+// A REAL is M × 2^F × B^E (X.690 §8.5): a zero mantissa is zero for
+// every exponent, and a product that a float64 holds is that product, also
+// when B^E alone is beyond the float64 range.
+func TestRealScaling(t *testing.T) {
+	fullMantissa := []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+	for _, tc := range []struct {
+		name    string
+		content []byte
+		want    float64
+	}{
+		{"zero, one-octet exponent 127", []byte{0x80, 0x7f, 0x00}, 0},
+		{"zero, two-octet exponent 32767", []byte{0x81, 0x7f, 0xff, 0x00}, 0},
+		{"zero, length-prefixed exponent 2^62", append(realWithExponent(false, 0x40, 0, 0, 0, 0, 0, 0, 0)[:10], 0x00), 0},
+		{"negative zero, two-octet exponent 32767", []byte{0xc1, 0x7f, 0xff, 0x00}, math.Copysign(0, -1)},
+		{"zero, exponent -32768", []byte{0x81, 0x80, 0x00, 0x00}, 0},
+		// 8 octets of mantissa, base 2: (2^64-1) × 2^-1137 is about 2^-1073.
+		{"full mantissa, exponent -1137", append([]byte{0x81, 0xfb, 0x8f}, fullMantissa...), math.Ldexp(float64(math.MaxUint64), -1137)},
+		{"full mantissa, exponent -1100", append([]byte{0x81, 0xfb, 0xb4}, fullMantissa...), math.Ldexp(float64(math.MaxUint64), -1100)},
+		// 2^64 × 2^-1086 = 2^-1022, the smallest normal float64.
+		{"full mantissa, exponent -1086", append([]byte{0x81, 0xfb, 0xc2}, fullMantissa...), math.Ldexp(float64(math.MaxUint64), -1086)},
+		{"full mantissa, exponent 960", append([]byte{0x81, 0x03, 0xc0}, fullMantissa...), math.Ldexp(float64(math.MaxUint64), 960)},
+		{"one, exponent 0", []byte{0x80, 0x00, 0x01}, 1},
+		{"-3, base 8, exponent 1, scaling 1", []byte{0xd4, 0x01, 0x03}, -48},
+	} {
+		dv, _, err := UnmarshalDataElement(berutil.EncodeTLV(TagDataReal, tc.content), 0)
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		if dv.Float != tc.want || math.Signbit(dv.Float) != math.Signbit(tc.want) || math.IsNaN(dv.Float) {
+			t.Errorf("%s (% x): %v, want %v", tc.name, tc.content, dv.Float, tc.want)
+		}
+	}
+	if math.Ldexp(float64(math.MaxUint64), -1137) == 0 {
+		t.Fatal("expected value underflows; the vectors need a larger exponent")
+	}
+}
+
+// numberMatched and numberDeleted of a DeleteNamedVariableList response
+// are Unsigned32: the value itself where an int holds it, an error where
+// it does not, never a negative count.
+func TestDeleteNamedVarListResponseCounts(t *testing.T) {
+	for _, v := range []uint32{0, 1, math.MaxInt32, math.MaxInt32 + 1, math.MaxUint32} {
+		u := berutil.EncodeUint32(v)
+		raw := asn1.RawValue{Bytes: append(berutil.EncodeTLV(0x80, u), berutil.EncodeTLV(0x81, u)...)}
+		res, err := UnmarshalDeleteNamedVarListResponse(raw)
+		if wide || v <= math.MaxInt32 {
+			if err != nil || int64(res.NumberMatched) != int64(v) || int64(res.NumberDeleted) != int64(v) {
+				t.Errorf("%d: %+v, %v", v, res, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Errorf("%d: %+v, want an error on a 32-bit platform", v, res)
+		}
 	}
 }

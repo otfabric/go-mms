@@ -38,7 +38,9 @@ Both `Close` and `Abort` are safe to call multiple times, including concurrently
 
 ### Detecting the end of an association
 
-`Client.Done()` returns a channel closed when the association has ended: after `Close` or `Abort`, when the peer concludes, releases or aborts, or when the connection is lost or fails to decode. `Client.Err()` returns nil while the association is up and afterwards the reason it ended (always matching `ErrClosed`). Pending and later requests fail with an error matching `ErrClosed`. When the reader stops on its own (connection lost, undecodable or oversized PDU, peer release) it also closes the transport, so a write stalled on the dead connection fails and `Close` does not wait for its context.
+`Client.Done()` returns a channel closed when the association has ended: after `Close` or `Abort`, when the peer concludes, releases or aborts, or when the connection is lost or fails to decode. `Client.Err()` returns nil while the association is up and afterwards the reason it ended (always matching `ErrClosed`). Pending and later requests fail with an error matching `ErrClosed`. When the reader stops on its own (connection lost, undecodable or oversized PDU, peer release, or a Conclude-Response or Conclude-ErrorPDU that no `Close` asked for, which also matches `ErrProtocol`) it also closes the transport, so a write stalled on the dead connection fails and `Close` does not wait for its context. A request is not written once the reader has stopped, nor once `Close` or `Abort` has started: no request follows the Conclude-Request (ISO 9506-2 clause 8.4).
+
+`Close` and `Abort` wait for the reader goroutine to stop; when their `ctx` is done they close the transport, which ends that wait. Called from the `InformationReport` handler, which runs on the reader, they do not wait for it: `Abort` returns at once, and `Close` when its `ctx` is done (it cannot read the Conclude-Response); the reader stops when the handler returns.
 
 Reconnecting is left to the caller; `mms.Retry` with a `RetryPolicy` (or `iso.WithRetry` on `iso.Dial`) provides backoff with jitter. See the `Retry` doc comment for a reconnect loop.
 
@@ -60,14 +62,17 @@ The client keeps at most the negotiated max-services-outstanding-calling confirm
 
 ### During confirmed request send
 
-Request writes are detached from the request context. Abandoning a PDU half-written would corrupt the stream for every other request on the association, so:
+Request writes are detached from the cancellation of the request context, not from its deadline. Abandoning a PDU half-written would corrupt the stream for every other request on the association, so:
 
 - The write runs on its own goroutine, serialized with other writes; the caller returns as soon as `ctx` is done.
-- A write that has not started when `ctx` ends is skipped.
-- A write in progress completes in the background; its response, if any, is discarded as a late response.
-- A write that **fails** leaves the association unusable: the transport is closed, the reader stops and all pending requests fail with `ErrClosed`.
+- A write that has not started when `ctx` ends is skipped, also when its deadline passes while it waits for an earlier write: nothing of it is on the wire, and the association stays usable.
+- A write in progress continues in the background; its response, if any, is discarded as a late response.
+- The transport's `Send` receives a context with the request's deadline (the earlier of the caller's deadline and `RequestTimeout`) and without its cancellation, so a write to a peer that stopped reading ends at that deadline.
+- A write that **fails**, or that the deadline cuts, leaves the association unusable: the transport is closed, the reader stops, `Done` closes and all pending and queued requests fail with `ErrClosed`.
 
-A request's context ending mid-write therefore no longer tears down the association. In the ISO transport, a write is still bounded by its context's deadline (stalled peer) but not interrupted by cancellation.
+A request's context being cancelled mid-write therefore does not tear down the association; its deadline passing mid-write does. A request without any deadline (no deadline on `ctx` and `RequestTimeout` zero) has an unbounded write: against a peer that stopped reading it stays blocked until `Close`, `Abort` or the connection ends. Set `RequestTimeout` or a deadline to bound it.
+
+`ServerConn.SendInformationReport` and the other unsolicited sends of the server follow the same rule: the deadline of `ctx` bounds the write, and a write that fails or is cut ends the association.
 
 ### While waiting for response
 
@@ -85,7 +90,7 @@ A response to a request whose caller gave up completes the kept invoke ID: the r
 
 ## Full-duplex transport and deadlines
 
-The client reads (reader goroutine) and writes (requests) concurrently on one connection. go-cotp (v1.3.0+) arms read and write deadlines per direction, so one direction's deadline never aborts the other. In `transport/iso`:
+The client reads (reader goroutine) and writes (requests) concurrently on one connection. go-cotp (v1.4.0) arms read and write deadlines per direction, so one direction's deadline never aborts the other. In `transport/iso`:
 
 - **Receive** passes its context to go-cotp. A context that ends before any octet of the next TSDU arrived returns the context error and leaves the connection usable; one that ends mid-TSDU aborts the connection (the error matches the context error, and later I/O fails with `ErrClosed` at the MMS layer).
 - **Send** passes go-cotp a context that keeps the caller's deadline but not its cancellation: a write is bounded by the deadline (a stalled peer) but never abandoned half-written because a request was cancelled. A write cut by the deadline aborts the connection.
@@ -113,19 +118,26 @@ An I/O error caused by the context always matches `context.Canceled` or `context
 
 ### ListenAndServe
 
-`ListenAndServe` owns the listener and closes it on return. Each accepted transport is served in its own goroutine with the `ListenAndServe` context and closed when its `Serve` returns.
+`ListenAndServe` owns the listener and closes it on return. Each accepted transport is served in its own goroutine with the `ListenAndServe` context and closed when its `Serve` returns. `ListenAndServe` returns only after every goroutine it started has returned.
 
 When the context is cancelled:
-1. The accept loop exits and `ListenAndServe` returns `ctx.Err()`
+1. The accept loop exits
 2. Every `Serve` goroutine sees the cancelled context and closes its transport, ending the association without a protocol-level abort
+3. `ListenAndServe` returns `ctx.Err()` once those goroutines have returned
+
+After `Shutdown` it returns `ErrServerClosed` once `Shutdown` has ended its connections. On a fatal accept error it ends its connections as a cancelled context does and returns the error.
+
+`iso.Listener.Close` closes the TCP listener and every connection still handshaking or waiting for `Accept`, and returns when the accept loop and the handshake goroutines have stopped.
 
 ### Graceful shutdown (`Server.Shutdown`)
 
 `Shutdown(ctx)`:
 
 1. Marks the server shut down and closes the listeners of every running `ListenAndServe`, which return `ErrServerClosed`
-2. For each association, waits for the request it is handling (if any) to finish, then aborts it (ACSE ABRT and transport close, 1 s bound). MMS has no server-initiated orderly release, so idle associations are aborted right away
-3. If `ctx` ends first, remaining associations are aborted immediately and `Shutdown` returns `ctx.Err()`
+2. Ends every connection that is not associated yet (its transport is closed; its `Serve` returns an error matching `ErrServerClosed`), whatever `AssociationTimeout` is
+3. For each association, waits for the request it is handling (if any) to finish, then aborts it (ACSE ABRT and transport close, 1 s bound). MMS has no server-initiated orderly release, so idle associations are aborted right away
+4. Returns when every `Serve` has returned
+5. If `ctx` ends first, remaining associations are aborted immediately and `Shutdown` returns `ctx.Err()` without waiting further
 
 After `Shutdown`, `Serve` and `ListenAndServe` return `ErrServerClosed`. `Shutdown` is safe to call more than once.
 
@@ -137,23 +149,34 @@ After `Shutdown`, `Serve` and `ListenAndServe` return `ErrServerClosed`. `Shutdo
 
 | Scenario | Test | Result |
 |----------|------|--------|
-| Close during in-flight request | `TestCloseDuringInFlightRequest` | Caller gets `ErrClosed` or completes |
-| Context cancellation during request | `TestContextCancellationDuringRequest` | Caller gets `context.Canceled` |
-| Abort during in-flight request | `TestAbortDuringInFlightRequest` | Caller gets error or completes |
-| Double Close (concurrent) | `TestDoubleCloseConcurrent` | No deadlock, no panic |
-| Close with timeout | `TestCloseWithTimeout` | Conclude timeout handled gracefully |
+| Close during in-flight request | `TestCloseDuringInFlightRequest` | The request held by the server fails with `ErrClosed`; `Close` returns nil once the server answers; `Serve` returns nil |
+| Context cancellation during request | `TestContextCancellationDuringRequest` | Caller gets `context.Canceled`; the association stays up and serves the next request |
+| Abort during in-flight request | `TestAbortDuringInFlightRequest` | The request fails with `ErrClosed`; `Abort` returns nil; `Serve` returns |
+| Double Close (concurrent) | `TestDoubleCloseConcurrent` | Both return nil; `Done` closed; no goroutine left (goleak) |
+| Close with timeout | `TestCloseWithTimeout` | Returns `context.DeadlineExceeded` at the deadline; `Done` closed; a second `Close` returns nil |
+| Association-scoped objects | `TestAssociationScopeIsolation` | A list defined by one association is not listed or readable by another |
 | Close already closed | `TestCloseAlreadyClosed` | Returns nil |
+| Close with a request queued behind a write | `TestCloseWritesNoQueuedRequest`, `TestCloseWhileConcurrentRequests` | The queued request is not written; every request fails with `ErrClosed`; the release completes |
 | Close while a request write is stalled | `TestCloseBoundedByContextWhileWriteStalled` | Returns `context.DeadlineExceeded` when `ctx` ends; transport closed |
 | Reader stops on an undecodable PDU while a write is stalled | `TestReaderExitClosesTransport` | Transport closed at once; `Err` matches `ErrDecodeFailed`; `Close` returns promptly |
 | Abort already closed | `TestClientAbort` | Returns nil |
+| Conclude PDU without a Conclude-Request | `TestConcludeWithoutRequestEndsAssociation` | `Done` closed, `Err` matches `ErrClosed` and `ErrProtocol`, transport closed, a later request is not written |
+| Report handler calls `Abort` or `Close` | `TestReportHandlerEndsAssociation` | `Abort` returns at once, `Close` at its context's deadline; the reader stops afterwards |
 | Peer goes away | `TestClient_Done_Err_Reconnect`, `TestClient_PeerDisconnect` (interop) | `Done` closed, `Err` matches `ErrClosed`, reconnect succeeds |
 | Request timeout | `TestClient_RequestTimeout`, `TestClient_RequestTimeout_Loopback` | `ErrInvokeTimeout` + `context.DeadlineExceeded`; association stays up |
 | Write failure | `TestClient_SendFailureClosesAssociation` | Association closed, pending requests get `ErrClosed` |
+| Write deadline | `TestRequestWriteCarriesDeadline`, `TestSendUnconfirmedWriteCarriesDeadline` (`internal/serverconn`) | `Send` receives the caller's deadline or the one `RequestTimeout` sets |
+| Expired before the write | `TestExpiredRequestIsNotWritten`, `TestSendUnconfirmedExpiredIsNotWritten` (`internal/serverconn`) | Write not started; association stays up |
+| Write stalled past its deadline | `TestStalledWriteEndsAssociation` | `Done` closes, `Err` matches `ErrClosed`, queued requests fail, no goroutine left (goleak) |
 | Context ends before write starts | `TestClient_SendAbandonedBeforeWrite` | Write skipped |
 | Dial with retry | `TestDial_WithRetry`, `TestDial_RetriesDialFailure` | Retries until the peer is up; permanent errors not retried |
 | Silent peer during association | `TestServer_AssociationTimeout`, `TestServer_AssociationTimeout_Loopback` | Disconnected after `AssociationTimeout` |
 | Silent peer during COTP handshake | `TestListener_SlowHandshake`, `TestListener_HandshakeTimeoutLogged` | Other peers accepted; slow peer closed after the handshake timeout |
 | Graceful shutdown | `TestServer_Shutdown`, `TestServer_Shutdown_InFlight`, `TestServer_Shutdown_StopsListenAndServe`, `TestServer_Shutdown` (interop) | In-flight request completes; `ListenAndServe` returns `ErrServerClosed`; no association left |
+| Shutdown while a connection is associating | `TestShutdownWaitsForAssociatingServe` | `Shutdown` returns after that `Serve` returned `ErrServerClosed`, for every `AssociationTimeout` |
+| Shutdown twice | `TestShutdownTwice` | Both return nil; `Serve` and `ListenAndServe` afterwards return `ErrServerClosed` |
+| `ListenAndServe` return | `TestListenAndServeJoinsConnections` | Returns after its connection goroutines, on cancel, `Shutdown` and a fatal accept error |
+| Pending handshakes and `Listener.Close` | `TestListenerPendingHandshakeBound` (`transport/iso`) | At most 64 handshakes; `Close` returns after the handshake goroutines stopped |
 | Temporary accept errors | `TestListener_TemporaryAcceptErrors` | Retried with backoff |
 | Orderly release | `TestSpec_9506_A12_OrderlyRelease` | CONNECT, DATA, FINISH sent; ACCEPT, DATA, DISCONNECT received; `Serve` returns nil |
 | Release peer closes, silent, aborts, answers junk | `TestSpec_9506_A12_ReleaseTolerance` | `Close` returns nil within `ReleaseTimeout`; junk is aborted; `ctx` ending the release is an error |
@@ -163,5 +186,5 @@ After `Shutdown`, `Serve` and `ListenAndServe` return `ErrServerClosed`. `Shutdo
 
 ## Known limitations
 
-- **Write cancellation**: a request write in progress is not interrupted by cancellation (only by its context deadline in `transport/iso`); the caller returns, but the write completes in the background. Custom `Transport` implementations decide how they honour the context passed to `Send`.
+- **Write cancellation**: a request write in progress is not interrupted by cancellation, only by the request's deadline; the caller returns, and the write continues in the background until it completes or the deadline passes. A request without a deadline has an unbounded write. Custom `Transport` implementations decide how they honour the deadline of the context passed to `Send`.
 - **Cancel PDU**: the client never sends an MMS Cancel; abandoning a request only stops waiting for it.

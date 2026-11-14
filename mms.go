@@ -3,6 +3,7 @@
 package mms
 
 import (
+	"bytes"
 	"context"
 	"encoding/asn1"
 	"errors"
@@ -56,6 +57,9 @@ type Client struct {
 
 	reportMu      sync.RWMutex
 	reportHandler InformationReportHandler
+	// inReportHandler is set while the reader goroutine runs the report
+	// handler: Close and Abort called then do not wait for the reader.
+	inReportHandler atomic.Bool
 
 	// Negotiated parameters from MMS Initiate handshake.
 	maxPDUSize        int
@@ -285,7 +289,13 @@ func isoAPTitle(title APTitle, aeq int, def APTitle) (APTitle, int) {
 // exits) are discarded as unknown invoke IDs.
 //
 // Close is idempotent: the first call performs the conclude handshake;
-// subsequent calls return nil.
+// subsequent calls return nil. When ctx is done the transport is closed,
+// which also ends the wait for the reader goroutine.
+//
+// Called from an [InformationReportHandler], Close cannot receive the
+// Conclude-Response (the reader runs the handler): it returns when ctx
+// is done, with that error, after closing the transport. Use [Client.Abort]
+// there, or call Close on another goroutine.
 func (c *Client) Close(ctx context.Context) error {
 	c.mu.Lock()
 	if c.closed {
@@ -300,7 +310,7 @@ func (c *Client) Close(ctx context.Context) error {
 	err := c.conclude(ctx)
 
 	c.readerCancel()
-	<-c.readerDone
+	c.waitReader(ctx)
 
 	closeErr := c.conn.Close()
 	if err == nil {
@@ -319,7 +329,9 @@ func (c *Client) Close(ctx context.Context) error {
 // are cancelled with [ErrClosed].
 //
 // The ABRT PDU is sent best-effort and bounded by ctx; the transport is
-// closed even when the send fails or ctx expires.
+// closed even when the send fails or ctx expires. Abort may be called
+// from an [InformationReportHandler]; it then does not wait for the
+// reader goroutine, which stops when the handler returns.
 func (c *Client) Abort(ctx context.Context) error {
 	c.mu.Lock()
 	if c.closed {
@@ -343,11 +355,25 @@ func (c *Client) Abort(ctx context.Context) error {
 
 	c.tracker.Close(ErrClosed)
 	c.readerCancel()
-	<-c.readerDone
+	c.waitReader(ctx)
 
 	err := c.conn.Close()
 	c.logger.Info("mms: aborted")
 	return err
+}
+
+// waitReader waits for the reader goroutine to exit after readerCancel.
+// When ctx is done first the transport is closed, which ends a read that
+// does not watch its context. It does not wait while the report handler
+// runs: the handler runs on the reader, which exits when the handler
+// returns.
+func (c *Client) waitReader(ctx context.Context) {
+	if c.inReportHandler.Load() {
+		return
+	}
+	stop := context.AfterFunc(ctx, func() { _ = c.conn.Close() })
+	defer stop()
+	<-c.readerDone
 }
 
 // Done returns a channel that is closed when the association has ended:
@@ -658,11 +684,13 @@ func (c *Client) send(ctx context.Context, data []byte) error {
 	return err
 }
 
-// sendRequest writes one request PDU. The write itself is not bound to ctx:
-// abandoning a PDU half-written would corrupt the stream for every other
-// request on the association. Instead the write runs on its own goroutine
-// and send returns when ctx is done; a write that has not started by then
-// is skipped. A write that fails leaves the association unusable, so the
+// sendRequest writes one request PDU. Cancelling ctx does not interrupt
+// the write: abandoning a PDU half-written would corrupt the stream for
+// every other request on the association. Instead the write runs on its
+// own goroutine and send returns when ctx is done; a write that has not
+// started by then is skipped. The deadline of ctx (RequestTimeout
+// included) does bound the write, as in transport/iso. A write that fails,
+// or that the deadline cuts, leaves the association unusable, so the
 // transport is closed, which stops the reader and fails the other pending
 // requests with ErrClosed. onWire reports whether the PDU was (or may
 // still be) written: false only when the write was skipped.
@@ -677,11 +705,35 @@ func (c *Client) sendRequest(ctx context.Context, data []byte) (onWire bool, err
 	go func() {
 		c.sendMu.Lock()
 		defer c.sendMu.Unlock()
+		// After Close or Abort started, or the reader stopped, nothing
+		// more is written: no request follows a Conclude-Request (ISO
+		// 9506-2 clause 8.4), and an ended association takes none.
+		c.mu.Lock()
+		stopped := c.readerErr
+		if stopped == nil && c.closed {
+			stopped = ErrClosed
+		}
+		c.mu.Unlock()
+		if stopped == nil {
+			// A request whose context ended while it waited for the
+			// writer is skipped: nothing of it is on the wire.
+			stopped = contextEnded(ctx)
+		}
+		if stopped != nil {
+			if state.CompareAndSwap(pending, abandoned) {
+				done <- stopped
+			} else {
+				done <- nil
+			}
+			return
+		}
 		if !state.CompareAndSwap(pending, writing) {
 			done <- nil
 			return
 		}
-		err := c.sendRaw(context.WithoutCancel(ctx), data)
+		wctx, cancel := writeContext(ctx)
+		defer cancel()
+		err := c.sendRaw(wctx, data)
 		if err != nil {
 			_ = c.conn.Close()
 			err = classify(fmt.Errorf("mms: send request: %w", err), ErrClosed)
@@ -694,9 +746,32 @@ func (c *Client) sendRequest(ctx context.Context, data []byte) (onWire bool, err
 	case <-ctx.Done():
 		// Either the write is skipped, or the PDU is on its way and the
 		// response will be discarded.
-		skipped := state.CompareAndSwap(pending, abandoned)
-		return !skipped, ctx.Err()
+		state.CompareAndSwap(pending, abandoned)
+		return state.Load() == writing, ctx.Err()
 	}
+}
+
+// contextEnded returns ctx.Err(), or context.DeadlineExceeded once the
+// deadline of ctx has passed, also before its timer has fired.
+func contextEnded(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if dl, ok := ctx.Deadline(); ok && !time.Now().Before(dl) {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+// writeContext is ctx without its cancellation but with its deadline, if
+// any: a write is not abandoned half-way when the caller gives up, but it
+// does not outlast the caller's deadline.
+func writeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	wctx := context.WithoutCancel(ctx)
+	if dl, ok := ctx.Deadline(); ok {
+		return context.WithDeadline(wctx, dl)
+	}
+	return wctx, func() {}
 }
 
 // contextErr wraps a context error for a request; deadline expiry also
@@ -768,7 +843,7 @@ func serviceErrorFromWire(w pdu.ServiceErrorWire, invokeID InvokeID) *ServiceErr
 	if w.ServiceSpecific != nil {
 		se.ServiceSpecific = &ServiceSpecificInfo{
 			Kind:     w.ServiceSpecific.Kind,
-			Raw:      w.ServiceSpecific.Raw,
+			Raw:      bytes.Clone(w.ServiceSpecific.Raw),
 			HasValue: w.ServiceSpecific.HasValue,
 			Value:    w.ServiceSpecific.Value,
 		}
@@ -910,18 +985,29 @@ func (c *Client) readerLoop(ctx context.Context) {
 		case pdu.PduUnconfirmed:
 			c.dispatchUnconfirmed(ctx, content)
 
-		case pdu.PduConcludeResponse:
-			select {
-			case c.concludeCh <- nil:
-			default:
+		case pdu.PduConcludeResponse, pdu.PduConcludeError:
+			// A Conclude-Response or Conclude-ErrorPDU answers the
+			// Conclude-Request of Close (ISO 9506-2 clause 8.4). Without
+			// a Close in progress it ends the association like a read
+			// error: pending requests fail and the transport is closed.
+			c.mu.Lock()
+			closing := c.closed
+			c.mu.Unlock()
+			if !closing {
+				c.logger.Warn("mms: conclude PDU without a Conclude-Request", "kind", kind)
+				c.stopReader(classify(&ProtocolError{
+					Phase:   PhaseMMS,
+					Message: fmt.Sprintf("%s without a Conclude-Request", kind),
+				}, ErrClosed))
+				return
 			}
-			return
-
-		case pdu.PduConcludeError:
-			// Conclude-ErrorPDU ::= ServiceError (ISO 9506-2 clause
-			// 8.4.3); Close reports it as a *ServiceError.
-			concludeErr := c.concludeError(content)
-			c.logger.Warn("mms: server rejected conclude", "error", concludeErr)
+			var concludeErr error
+			if kind == pdu.PduConcludeError {
+				// Conclude-ErrorPDU ::= ServiceError (ISO 9506-2 clause
+				// 8.4.3); Close reports it as a *ServiceError.
+				concludeErr = c.concludeError(content)
+				c.logger.Warn("mms: server rejected conclude", "error", concludeErr)
+			}
 			select {
 			case c.concludeCh <- concludeErr:
 			default:
@@ -1055,6 +1141,8 @@ func (c *Client) dispatchUnconfirmed(ctx context.Context, content []byte) {
 					c.logger.Error("mms: InformationReport handler panic", "panic", r)
 				}
 			}()
+			c.inReportHandler.Store(true)
+			defer c.inReportHandler.Store(false)
 			handler(indication)
 		}()
 	}
@@ -1996,31 +2084,43 @@ func (c *Client) GetNameList(ctx context.Context, req NameListRequest) (*NameLis
 // MoreFollows is false.
 //
 // As a safety measure, GetNameListAll detects stalled pagination (where
-// the server repeats the same continuation token) and returns an error.
+// the server sends a continuation point it already sent) and returns an
+// error.
 //
-// Note: this method accumulates all names in memory. For servers with
+// Note: this method accumulates all names in memory, at most 1,000,000;
+// more end it with an error matching [ErrProtocol]. For servers with
 // very large name lists, prefer using [Client.GetNameList] directly
 // with explicit pagination control.
 func (c *Client) GetNameListAll(ctx context.Context, req NameListRequest) ([]string, error) {
+	return c.getNameListAll(ctx, req, maxListAll)
+}
+
+func (c *Client) getNameListAll(ctx context.Context, req NameListRequest, limit int) ([]string, error) {
 	var all []string
-	prevToken := req.ContinueAfter
+	seen := map[string]bool{req.ContinueAfter: true}
 	for {
 		result, err := c.GetNameList(ctx, req)
 		if err != nil {
 			return nil, err
+		}
+		if len(result.Names) > limit-len(all) {
+			return nil, &ProtocolError{
+				Phase:   PhaseMMS,
+				Message: fmt.Sprintf("getnamelist: more than %d names", limit),
+			}
 		}
 		all = append(all, result.Names...)
 		if !result.MoreFollows || len(result.Names) == 0 {
 			return all, nil
 		}
 		nextToken := result.Names[len(result.Names)-1]
-		if nextToken == prevToken {
+		if seen[nextToken] {
 			return nil, &ProtocolError{
 				Phase:   PhaseMMS,
-				Message: fmt.Sprintf("getnamelist: pagination stalled (continuation token %q did not advance)", nextToken),
+				Message: fmt.Sprintf("getnamelist: pagination stalled (continuation token %q sent before)", nextToken),
 			}
 		}
-		prevToken = nextToken
+		seen[nextToken] = true
 		req.ContinueAfter = nextToken
 	}
 }

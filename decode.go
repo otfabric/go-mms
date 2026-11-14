@@ -3,6 +3,7 @@
 package mms
 
 import (
+	"bytes"
 	"encoding/asn1"
 	"errors"
 	"fmt"
@@ -95,7 +96,8 @@ type CapturedPDU struct {
 	NamedListMembers []CapturedVariable // GetNamedVariableListAttributes response
 
 	// Raw is the service content of a service this decoder does not
-	// model, and DecodeError why a modelled service did not decode.
+	// model, and DecodeError why a modelled service did not decode. Raw
+	// is a copy: it does not change when the decoded buffer does.
 	Raw         []byte
 	DecodeError string
 }
@@ -327,7 +329,7 @@ func DecodePDU(b []byte) (*CapturedPDU, error) {
 	default:
 		// Initiate and conclude errors, conclude and cancel PDUs: the kind
 		// (and a cancel's invoke ID, its whole content) is what they say.
-		out.Raw = content
+		out.Raw = bytes.Clone(content)
 	}
 	return out, nil
 }
@@ -348,7 +350,7 @@ func (p *CapturedPDU) envelopeFailed(content []byte, what string, err error) (*C
 }
 
 func (p *CapturedPDU) fail(content []byte, err error) {
-	p.Raw, p.DecodeError = content, err.Error()
+	p.Raw, p.DecodeError = bytes.Clone(content), err.Error()
 }
 
 func (p *CapturedPDU) decodeRequest(svc asn1.RawValue) {
@@ -392,7 +394,7 @@ func (p *CapturedPDU) decodeRequest(svc asn1.RawValue) {
 		}
 	case pdu.ServiceIdentify:
 	default:
-		p.Raw = svc.Bytes
+		p.Raw = bytes.Clone(svc.Bytes)
 	}
 	if err != nil {
 		p.fail(svc.Bytes, err)
@@ -446,7 +448,7 @@ func (p *CapturedPDU) decodeResponse(kind pdu.ServiceKind, svc asn1.RawValue) {
 			p.NamedListMembers, err = capturedVariables(r.Variables)
 		}
 	default:
-		p.Raw = svc.Bytes
+		p.Raw = bytes.Clone(svc.Bytes)
 	}
 	if err != nil {
 		p.fail(svc.Bytes, err)

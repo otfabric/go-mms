@@ -53,10 +53,10 @@ imports.
 | `Client.readerLoop` (one per client) | client setup, after association | its context is cancelled or the connection fails; `Client.Done` is then closed |
 | detached request write | `Client.send`, per request | the write ends, or at once if it is abandoned before it starts |
 | detached response write | `serverconn.Conn.sendData`, per send | same as the client write |
-| per-association `Serve` | `Server.ListenAndServe` | its context ends or the association ends; it closes the transport |
+| per-association `Serve` | `Server.ListenAndServe` | its context ends or the association ends; it closes the transport. `ListenAndServe` waits for all of them before it returns, and `Shutdown` for every `Serve` |
 | abort of one connection | `Server.Shutdown` | the abort finishes (bounded to one second); `Shutdown` waits for all of them |
-| accept loop (one per listener) | first `iso.Listener.Accept` | the listener closes |
-| handshake, plus a watcher | accept loop, per TCP connection | the handshake ends or times out |
+| accept loop (one per listener) | first `iso.Listener.Accept` | the listener closes; `Listener.Close` waits for it |
+| handshake, plus a watcher | accept loop, per TCP connection | the handshake ends or times out; `Listener.Close` ends them and waits for them |
 
 `Serve` blocks, so a caller without `ListenAndServe` runs it on its own
 goroutine. Who closes the transport, and in what order, is in

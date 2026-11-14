@@ -311,5 +311,13 @@ func UnmarshalDeleteNamedVarListResponse(serviceData asn1.RawValue) (*DeleteName
 		return nil, fmt.Errorf("pdu: deletenamelist response: %d trailing bytes", len(content)-offset)
 	}
 
-	return &DeleteNamedVarListResult{NumberMatched: int(matched), NumberDeleted: int(deleted)}, nil
+	nMatched, err := indexFromUnsigned32(matched, "deletenamelist response: numberMatched")
+	if err != nil {
+		return nil, fmt.Errorf("pdu: %w", err)
+	}
+	nDeleted, err := indexFromUnsigned32(deleted, "deletenamelist response: numberDeleted")
+	if err != nil {
+		return nil, fmt.Errorf("pdu: %w", err)
+	}
+	return &DeleteNamedVarListResult{NumberMatched: nMatched, NumberDeleted: nDeleted}, nil
 }

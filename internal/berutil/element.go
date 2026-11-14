@@ -68,10 +68,12 @@ func decodeElement(data []byte, offset, depth int) (Element, int, error) {
 			if i == 0 && b == 0x80 {
 				return Element{}, 0, fmt.Errorf("tag 0x%02x: non-minimal multi-octet tag", lead)
 			}
-			n = n<<7 | int(b&0x7f)
-			if n > maxTagNumber {
+			// Compared before the shift, so that the number cannot wrap
+			// in a 32-bit int.
+			if n > maxTagNumber>>7 {
 				return Element{}, 0, fmt.Errorf("tag 0x%02x: tag number too large", lead)
 			}
+			n = n<<7 | int(b&0x7f)
 			if b&0x80 == 0 {
 				break
 			}

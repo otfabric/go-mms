@@ -11,32 +11,44 @@ import (
 
 func BenchmarkUnmarshalDataElementBoolean(b *testing.B) {
 	data := berutil.EncodeTLV(0x83, []byte{0xff})
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	if _, _, err := UnmarshalDataElement(data, 0); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
 		_, _, _ = UnmarshalDataElement(data, 0)
 	}
 }
 
 func BenchmarkUnmarshalDataElementInteger(b *testing.B) {
 	data := berutil.EncodeTLV(0x85, []byte{0x00, 0x01, 0x00, 0x00})
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	if _, _, err := UnmarshalDataElement(data, 0); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
 		_, _, _ = UnmarshalDataElement(data, 0)
 	}
 }
 
 func BenchmarkUnmarshalDataElementFloat32(b *testing.B) {
 	data := berutil.EncodeTLV(0x87, []byte{8, 0x42, 0x28, 0x00, 0x00})
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	if _, _, err := UnmarshalDataElement(data, 0); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
 		_, _, _ = UnmarshalDataElement(data, 0)
 	}
 }
 
 func BenchmarkUnmarshalDataElementVisibleString(b *testing.B) {
 	data := berutil.EncodeTLV(0x8a, []byte("Hello, World!"))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	if _, _, err := UnmarshalDataElement(data, 0); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
 		_, _, _ = UnmarshalDataElement(data, 0)
 	}
 }
@@ -47,8 +59,11 @@ func BenchmarkUnmarshalDataElementStructure(b *testing.B) {
 	str1 := berutil.EncodeTLV(0x8a, []byte("test"))
 	inner := append(append(bool1, int1...), str1...)
 	data := berutil.EncodeTLV(0xa2, inner)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	if _, _, err := UnmarshalDataElement(data, 0); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
 		_, _, _ = UnmarshalDataElement(data, 0)
 	}
 }
@@ -58,16 +73,22 @@ func BenchmarkUnmarshalAccessResults10(b *testing.B) {
 	for i := range 10 {
 		elems = append(elems, berutil.EncodeTLV(0x85, []byte{byte(i)})...)
 	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	if _, err := UnmarshalAccessResults(elems); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
 		_, _ = UnmarshalAccessResults(elems)
 	}
 }
 
 func BenchmarkDecodeTypeSpecInteger(b *testing.B) {
 	data := berutil.EncodeTLV(0x85, []byte{32})
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	if _, err := DecodeTypeSpec(data); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
 		_, _ = DecodeTypeSpec(data)
 	}
 }
@@ -75,46 +96,65 @@ func BenchmarkDecodeTypeSpecInteger(b *testing.B) {
 func BenchmarkDecodeTypeSpecStructure(b *testing.B) {
 	comp1Name := berutil.EncodeTLV(0x80, []byte("enabled"))
 	comp1Type := berutil.EncodeTLV(0x83, []byte{0})
-	comp1 := berutil.EncodeTLV(0x30, append(comp1Name, comp1Type...))
+	// StructComponent ::= SEQUENCE { componentName [0], componentType [1] }
+	comp1 := berutil.EncodeTLV(0x30, append(comp1Name, berutil.EncodeTLV(0xa1, comp1Type)...))
 	comp2Name := berutil.EncodeTLV(0x80, []byte("count"))
 	comp2Type := berutil.EncodeTLV(0x86, []byte{16})
-	comp2 := berutil.EncodeTLV(0x30, append(comp2Name, comp2Type...))
+	comp2 := berutil.EncodeTLV(0x30, append(comp2Name, berutil.EncodeTLV(0xa1, comp2Type)...))
 	components := berutil.EncodeTLV(0xa1, append(comp1, comp2...))
 	data := berutil.EncodeTLV(0xa2, components)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	if _, err := DecodeTypeSpec(data); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
 		_, _ = DecodeTypeSpec(data)
 	}
 }
 
 func BenchmarkDecodeObjectNameDomain(b *testing.B) {
-	name, _ := EncodeObjectName(ObjectNameWire{Scope: ScopeDomain, DomainID: "MyDomain", ItemID: "MyVariable"})
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	name, err := EncodeObjectName(ObjectNameWire{Scope: ScopeDomain, DomainID: "MyDomain", ItemID: "MyVariable"})
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := DecodeObjectName(name); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
 		_, _ = DecodeObjectName(name)
 	}
 }
 
 func BenchmarkEncodeObjectNameDomain(b *testing.B) {
 	wire := ObjectNameWire{Scope: ScopeDomain, DomainID: "MyDomain", ItemID: "MyVariable"}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	if _, err := EncodeObjectName(wire); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
 		_, _ = EncodeObjectName(wire)
 	}
 }
 
 func BenchmarkDecodeTLV(b *testing.B) {
 	data := berutil.EncodeTLV(0x30, make([]byte, 200))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	if _, _, err := berutil.DecodeTLV(data); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
 		_, _, _ = berutil.DecodeTLV(data)
 	}
 }
 
 func BenchmarkMarshalData(b *testing.B) {
 	dv := &DataValue{Tag: TagDataFloat, Float: 3.14, FloatWide: false}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	if _, err := MarshalData(dv); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
 		_, _ = MarshalData(dv)
 	}
 }
@@ -125,8 +165,11 @@ func BenchmarkMarshalReadRequest(b *testing.B) {
 		{Scope: ScopeDomain, DomainID: "D1", ItemID: "V2"},
 		{Scope: ScopeDomain, DomainID: "D1", ItemID: "V3"},
 	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	if _, err := MarshalReadRequest(1, vars); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
 		_, _ = MarshalReadRequest(1, vars)
 	}
 }
@@ -136,10 +179,13 @@ func BenchmarkUnmarshalReadResponse(b *testing.B) {
 	for i := range 5 {
 		list = append(list, berutil.EncodeTLV(0x85, []byte{byte(i)})...)
 	}
-	content := berutil.EncodeTLV(0x30, list)
+	content := berutil.EncodeTLV(0xa1, list) // listOfAccessResult [1]
 	raw := asn1.RawValue{Tag: 4, Class: 2, IsCompound: true, Bytes: content}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	if _, err := UnmarshalReadResponse(raw); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
 		_, _ = UnmarshalReadResponse(raw)
 	}
 }

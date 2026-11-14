@@ -69,7 +69,11 @@ own localDetailCalling as invalid; `Client.Negotiated().MaxPDUSize` is the
 smaller of the two. The server answers min(own, proposed), or its own value
 when the client omits localDetailCalling. Before negotiation (during the
 initial handshake), no size limit is enforced. After negotiation, the server
-logs a warning and skips oversized PDUs.
+answers an oversized PDU with a Reject (confirmed-requestPDU
+value-out-of-range for a confirmed request whose invoke ID can be read,
+otherwise pdu-error invalid-pdu) and the association continues; see
+[LIMITS.md](LIMITS.md). The server refuses a localDetailCalling below 64
+octets with Initiate-ErrorPDU max-segment-insufficient.
 
 ## Transport Limitations
 
@@ -84,7 +88,7 @@ logs a warning and skips oversized PDUs.
 
 | Limitation | Details |
 |-----------|---------|
-| Write cancellation | Request writes are detached from the request context: the caller returns when its context ends, an unstarted write is skipped, and a write in progress completes in the background (a half-written PDU would corrupt the stream). In `transport/iso` the context deadline still bounds the write. See [TIMEOUT_AND_CLOSE.md](TIMEOUT_AND_CLOSE.md). |
+| Write cancellation | Request writes are detached from the cancellation of the request context, not from its deadline: the caller returns when its context ends, an unstarted write is skipped, and a write in progress continues in the background (a half-written PDU would corrupt the stream) until it completes or the request's deadline passes, which ends the association. A request without a deadline (none on the context, `RequestTimeout` zero) has an unbounded write. See [TIMEOUT_AND_CLOSE.md](TIMEOUT_AND_CLOSE.md). |
 | ListenAndServe cancellation | Cancelling the `ListenAndServe` context closes every association's transport without a protocol-level abort. Use `Server.Shutdown` to let in-flight requests finish and send ACSE ABRT. |
 | No automatic reconnect | A lost association is reported through `Client.Done`/`Client.Err`; the caller reconnects (e.g. with `mms.Retry`). Server-side state (association-scoped objects, open files) is not restored. |
 | Client write serialization | Transport writes are serialized via a send mutex so PDUs do not interleave. Concurrent callers may have up to the negotiated max-services-outstanding-calling confirmed requests outstanding (wait for response happens outside the write lock); responses are correlated by invoke ID. Further callers wait for a slot (see [LIMITS.md](LIMITS.md)). |

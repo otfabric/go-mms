@@ -1,5 +1,55 @@
 # go-mms Releases
 
+## v1.9.4
+
+**Date:** 2026-11-14
+**Previous release:** v1.9.3
+
+No API change. Bounds on what a peer sends, writes that keep their deadline, and server and client shutdown that wait for what they started.
+
+### Fixed
+
+- A presentation connect request may propose at most 16 presentation contexts; the server refuses one that proposes more.
+- An AlternateAccess chain has at most 64 levels; a deeper one is rejected. The decoder walks it iteratively, so its cost is linear in the chain.
+- The server accepts an Initiate only with a `localDetailCalling` of at least 64 octets, the room its fixed-size answers need. A FileOpen answer that does not fit the negotiated PDU size closes the file and is answered with ServiceError service pdu-size, and so is a FileRead when the PDU size leaves no room for one octet of data.
+- The counts of a DeleteNamedVariableList response and the arcs of an object identifier are decoded only when they fit an `int`. A multi-octet tag number above 2^28−1 is rejected on 32-bit platforms as on 64-bit ones. The server's range selection compares the count with what remains of the array.
+- The association-scoped lists the server returns to a caller are copies; a GetNameList page is not changed by a later change to the server's objects.
+- The write of a confirmed request keeps the caller's deadline, or `RequestTimeout`, and does not stop when the request's context is cancelled. A write that fails or is cut by the deadline ends the association; a write whose deadline passes while it waits for an earlier one is not started. `SendInformationReport` and `SendUnsolicitedStatus` bound their write by the context's deadline in the same way, and a failed write ends the association.
+- `GetNameListAll` and `FileDirectoryAll` return a `ProtocolError` when the server repeats a continuation point, and after 1,000,000 entries. `FileReadAll` and `DownloadFile` return a `ProtocolError` after 2^32−1 octets, and on an empty chunk that says more follows.
+- A REAL with a zero mantissa decodes as zero, and a REAL whose value is subnormal decodes to that value (X.690 clause 8.5).
+- The server's handlers, callbacks and providers run without the server's lock: `HandleIdentify` and `HandleStatus` may be called from a handler, and a callback that blocks does not hold up the other associations.
+- `SetVariableRead` may be called while the server serves.
+- `Server.Shutdown` ends the connections that are still associating and returns when every `Serve` has returned, or when its context is done. `ListenAndServe` returns after the goroutines it started for its connections. `iso.Listener.Close` returns after the handshakes it started.
+- A Conclude-Response or Conclude-Error that answers no Conclude-Request ends the association with a `ProtocolError`. No request is written once `Close` or `Abort` has started or the association has ended (ISO 9506-2 clause 8.4).
+- `Close` and `Abort` may be called from an `InformationReportHandler`: `Abort` returns at once, `Close` when its context is done. When their context ends while they wait for the reader, they close the transport.
+- The `Raw` octets of a decoded PDU and of a ServiceError's service-specific information are copies of the input.
+- `RetryPolicy`: a `Multiplier` that is NaN, below 1 or +Inf is treated as 2, and `Backoff` caps the product at `MaxBackoff` before it converts it to a `time.Duration`. A `Jitter` that is NaN or ±Inf applies no jitter.
+
+### Documentation
+
+- LIMITS.md lists the new limits: presentation contexts, AlternateAccess depth, minimum `localDetailCalling`, the `*All` helpers' ceilings, DeleteNamedVariableList counts, object identifier arcs, the multi-octet tag number and REAL values.
+- KNOWN_LIMITATIONS.md: a request larger than the negotiated PDU size is answered with a Reject; the write-cancellation row says what the write now keeps.
+- TIMEOUT_AND_CLOSE.md, API.md and ARCHITECTURE.md: write deadlines, `Shutdown` and `ListenAndServe` joining their goroutines, handlers that run without a lock, and closing from a report handler.
+- TESTING.md: the lifecycle contract matrix L1–L16 with the test of each row, and the nightly 32-bit run.
+
+### Testing
+
+- Lifecycle tests are synchronised by events and `testing/synctest` instead of sleeps, and check for leaked goroutines with goleak.
+- `internal/pdu`: an allocation budget per top-level decoder, measured with the largest input that fits the default PDU size; the fuzz targets re-encode what decodes and compare, or check that the decoded value is consistent.
+- The e2e chaos workloads stop between requests at the end of a run, and `TestChaos_OutstandingLimit` abandons requests by cancellation, since a deadline that ends during a write ends the association.
+- Benchmarks report allocations, use `b.Loop` and check their input decodes.
+- The new tests also pass on linux/386.
+
+### Changed
+
+- CI: the nightly workflow runs the tests with `GOARCH=386`.
+
+### Dependencies
+
+- go-cotp v1.4.0 (was v1.3.0) and go-tpkt v1.2.0 (was v1.1.0); the behaviour of go-mms does not change.
+
+---
+
 ## v1.9.3
 
 **Date:** 2026-11-14

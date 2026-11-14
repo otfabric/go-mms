@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"go.uber.org/goleak"
 )
 
 // stallTransport wraps a transport. Once stalled, Send blocks until the
@@ -64,7 +66,8 @@ func connectStallClient(t *testing.T) (*Client, *stallTransport, Transport) {
 // stuck (the peer stopped reading) holds the send lock. Close must still
 // return when its context is done, closing the transport, as Abort does.
 func TestCloseBoundedByContextWhileWriteStalled(t *testing.T) {
-	c, st, _ := connectStallClient(t)
+	ignore := goleak.IgnoreCurrent()
+	c, st, peer := connectStallClient(t)
 	st.stall.Store(true)
 
 	rctx, rcancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
@@ -91,6 +94,10 @@ func TestCloseBoundedByContextWhileWriteStalled(t *testing.T) {
 	default:
 		t.Fatal("transport not closed after Close")
 	}
+	// The stalled write and the server end once the transport is closed
+	// (L4).
+	_ = peer.Close()
+	goleak.VerifyNone(t, ignore)
 }
 
 // TestReaderExitClosesTransport: when the reader stops on an undecodable

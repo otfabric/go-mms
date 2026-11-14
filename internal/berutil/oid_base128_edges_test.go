@@ -5,6 +5,7 @@ package berutil
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"testing"
 )
 
@@ -68,6 +69,33 @@ func TestObjectIdentifier_X690FirstArcs(t *testing.T) {
 	for _, bad := range [][]int{{3, 1}, {0, 40}, {1, 40}, {-1, 0}, {2, -1}, {1, 2, -3}} {
 		if _, err := EncodeObjectIdentifier(bad); err == nil {
 			t.Errorf("Encode %v: expected error", bad)
+		}
+	}
+}
+
+// An OID arc is kept in an int: a value of 2^31 or more is the value
+// itself where an int holds it and an error where it does not, never a
+// wrapped or negative arc.
+func TestDecodeBase128PlatformWidth(t *testing.T) {
+	wide := math.MaxInt == math.MaxInt64
+	for _, tc := range []struct {
+		in   []byte
+		want int64
+	}{
+		{[]byte{0x87, 0xff, 0xff, 0xff, 0x7f}, math.MaxInt32},
+		{[]byte{0x88, 0x80, 0x80, 0x80, 0x00}, math.MaxInt32 + 1},
+		{[]byte{0x8f, 0xff, 0xff, 0xff, 0x7f}, math.MaxUint32},
+		{[]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0x7f}, 1<<42 - 1}, // six octets
+	} {
+		v, n, err := decodeBase128(tc.in, 0)
+		if wide || tc.want <= math.MaxInt32 {
+			if err != nil || int64(v) != tc.want || n != len(tc.in) {
+				t.Errorf("% x: %d (%d octets), %v; want %d", tc.in, v, n, err, tc.want)
+			}
+			continue
+		}
+		if err == nil {
+			t.Errorf("% x: %d, want an error on a 32-bit platform", tc.in, v)
 		}
 	}
 }

@@ -16,10 +16,11 @@ Set-up and the pull request gate are in [CONTRIBUTING.md](CONTRIBUTING.md).
 | Interop | `make interop`, `make interop-all` | Docker and adapter images | `interop.yml`, one job per stack |
 | Benchmarks | `make bench` | Go | no |
 | Build for other platforms | `make cross`, `make test-armv7` | Go | no |
+| 32-bit platform | `GOARCH=386 go test ./...` | Go on linux/amd64 (386 binaries run natively) | `nightly.yml`, job `test-386` |
 | All local gates | `make check` | golangci-lint, govulncheck | no, CI runs its parts |
 
-`make cross` and `make test-armv7` only compile. No test runs on those
-targets here.
+`make cross` and `make test-armv7` only compile. The 32-bit tests run in
+`nightly.yml` on linux/386, where an `int` is 32 bits.
 
 ## When CI runs
 
@@ -83,12 +84,39 @@ and `e2e`) run `goleak.VerifyTestMain` in `leak_main_test.go`: a goroutine left
 running after the tests fails the package. `go.uber.org/goleak` is a test-only
 dependency.
 
+## Lifecycle contract matrix
+
+The rows of the contract test matrix (otfabric/engineering
+standards/lifecycle.md) and the tests that hold them. Tests in the root
+package unless a directory is given. They wait for events through channels or
+`testing/synctest`, not `time.Sleep`.
+
+| Row | Contract | Tests |
+|---|---|---|
+| L1 | Close is idempotent | `TestCloseAlreadyClosed`, `TestDoubleClose`, `TestCloseWithTimeout`, `TestShutdownTwice`, `TestTransportCloseIdempotent` (`transport/iso`) |
+| L2 | Concurrent Close | `TestDoubleCloseConcurrent`: both return nil, `Done` closed, no goroutine left |
+| L3 | Close during receive | `TestCloseDuringInFlightRequest`, `TestReaderExitClosesTransport`, `TestConcludeWithoutRequestEndsAssociation`, `TestConcurrentCloseReceive` (`transport/iso`) |
+| L4 | Close during a stalled write | `TestCloseBoundedByContextWhileWriteStalled` (goleak), `TestStalledWriteEndsAssociation`, `TestCloseWritesNoQueuedRequest`, `TestConcurrentCloseSend` (`transport/iso`) |
+| L5 | Cancel during connect or association | `TestServer_AssociationTimeout`, `TestDialContextCancellation`, `TestShutdownWaitsForAssociatingServe`, `TestListener_SlowHandshake` (`e2e`) |
+| L6 | Cancel during a request | `TestContextCancellationDuringRequest`, `TestClient_RequestTimeout_Loopback`, `OutstandingWaitHonoursContext` (`negotiated_limits_test.go`) |
+| L7 | Late response after cancel | `AbandonedRequestStaysOutstanding` (`negotiated_limits_test.go`), `TestContextCancellationDuringRequest`, `TestLateResponseAfterCancel` (`internal/invoke`) |
+| L8 | Reconnect | not applicable: the library does not reconnect; dial retry is `RetryPolicy` (`TestDial_WithRetry` in `e2e`, `TestBackoffMultiplierValues`) |
+| L9 | A callback re-enters the server | `TestReadCallbackRegistersHandlers`, `TestBlockedCallbackDoesNotStopOtherAssociations`, `TestSetVariableReadWhileReading` |
+| L10 | A callback calls Close | `TestReportHandlerEndsAssociation` |
+| L11 | A slow callback | not covered: the InformationReport handler runs on the reader goroutine ([KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)) |
+| L12 | Bounded queues and outstanding requests | `OutstandingCallingLimit`, `FailFast` (`negotiated_limits_test.go`), `TestCloseWhileConcurrentRequests`, `TestListenerPendingHandshakeBound` (`transport/iso`), `TestChaos_OutstandingLimit` (`e2e`) |
+| L13 | Session isolation | `TestAssociationScopeIsolation`, `TestAssocListResultsAreCopies`, `TestServerConcurrentClients`, `TestStress_Concurrent` (`e2e`) |
+| L14 | A failed constructor releases its resources | `TestDialerConnWithErrorClosed` (`transport/iso`); goleak in every `TestMain` |
+| L15 | Server shutdown | `TestServer_Shutdown`, `TestServer_Shutdown_StopsListenAndServe`, `TestShutdownWaitsForAssociatingServe`, `TestListenAndServeJoinsConnections`, `TestListenerPendingHandshakeBound` (`transport/iso`), `TestServer_Shutdown_InFlight` (`e2e`) |
+| L16 | Reconnect loop | not applicable: no reconnect loop |
+
 ## Extended tier
 
 `.github/workflows/nightly.yml` runs every Fuzz target for 2 minutes, split
-over three jobs (`make fuzz FUZZTIME=2m FUZZ_SHARD=<i>/3`), and the chaos suite
+over three jobs (`make fuzz FUZZTIME=2m FUZZ_SHARD=<i>/3`), the chaos suite
 under the race detector with a random seed, 5 minutes for each of its six timed
-tests (`make chaos CHAOS_DURATION=5m CHAOS_TIMEOUT=45m`).
+tests (`make chaos CHAOS_DURATION=5m CHAOS_TIMEOUT=45m`), and the unit and e2e
+tests on linux/386 (`GOARCH=386 go test ./...`, job `test-386`).
 
 ## Coverage policy
 
@@ -115,6 +143,23 @@ go test -run='^$' -fuzz='^FuzzValueCodec$' -fuzztime=30s .
 
 The script retries once when the fuzz coordinator times out without a failing
 input. A real failure is never retried.
+
+A fuzz target asserts an invariant, not only that the decoder returns. A decoder
+target in `internal/pdu` re-encodes what decodes, decodes that encoding, and
+checks that encoding the result again gives the same octets
+(`internal/pdu/invariant_test.go`). Where the package has no encoder for the
+decoded form, the target checks that the decoded value is consistent, for
+example that a CHOICE has one alternative set.
+
+## Allocation budgets
+
+`TestDecoderAllocationBudget` (`internal/pdu/alloc_budget_test.go`) decodes,
+for each top-level decoder, the input that fits the default PDU size (65,000
+octets) and decodes to the most values per octet, and fails when the heap
+allocation exceeds a fixed number of octets per input octet. A cost that grows
+faster than the input exceeds the budget. `TestUnmarshalReadRequestSelectionBudget`
+does the same for the deepest AlternateAccess chain, and
+`numeric_bounds_test.go` for `TypeSpec.DefaultValue`.
 
 ## Golden data
 
